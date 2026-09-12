@@ -71,7 +71,8 @@ const TRANSITIONS: Readonly<Record<OrderStatus, readonly Transition[]>> = Object
   ],
   // Granting entitlements is the system's act, immediately after PAID.
   PAID: [{ to: 'COMPLETED', allowedFor: ['SYSTEM', 'OWNER'], label: 'إتمام ومنح الوصول' }],
-  // Refund handling arrives with the ledger in phase P6.
+  // The owner alone reverses a completed sale, through src/commerce/refunds.ts,
+  // which reaches this transition only after the ledger reversal has been posted.
   COMPLETED: [{ to: 'REFUNDED', allowedFor: ['OWNER'], label: 'استرجاع' }],
   CANCELLED: [],
   REFUNDED: [],

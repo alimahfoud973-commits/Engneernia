@@ -50,6 +50,12 @@ export const auditActionEnum = pgEnum('audit_action', [
   'PAYMENT_APPROVED',
   'PAYMENT_REJECTED',
   'REFUND_ISSUED',
+  // phase P6 — the refund lifecycle, added by migration 0025
+  'REFUND_REQUESTED',
+  'REFUND_REJECTED',
+  'REFUND_WITHDRAWN',
+  'REFUND_PAID',
+  'LEDGER_ADJUSTMENT_POSTED',
   'SETTLEMENT_GENERATED',
   'SETTLEMENT_APPROVED',
   'SETTLEMENT_PAID',

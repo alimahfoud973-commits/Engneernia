@@ -169,6 +169,55 @@
       "when": 1789211695638,
       "tag": "0023_p5_fixes",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1789212860855,
+      "tag": "0024_p6_ledger_refunds",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1789212861855,
+      "tag": "0025_ledger_integrity",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1789212862855,
+      "tag": "0026_ledger_standalone",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1789212863855,
+      "tag": "0027_ledger_contributor_name",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1789212864855,
+      "tag": "0028_financial_policy_settings",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1789212865855,
+      "tag": "0029_refund_notifications",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1789212866855,
+      "tag": "0030_author_count",
+      "breakpoints": true
     }
   ]
 }

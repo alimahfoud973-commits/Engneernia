@@ -20,6 +20,13 @@ export const notificationTypeEnum = pgEnum('notification_type', [
   'SETTLEMENT_PAID',
   'ORDER_PAID',
   'PAYMENT_REJECTED',
+  // phase P6
+  'REFUND_REQUESTED',
+  'REFUND_APPROVED',
+  'REFUND_REJECTED',
+  'REFUND_PAID',
+  /** Sent to a contributor whose sale was reversed — never to the buyer. */
+  'SALE_REVERSED',
 ]);
 
 /**

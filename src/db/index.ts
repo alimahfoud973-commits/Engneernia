@@ -88,3 +88,17 @@ export function toDate(value: Date | string | number | null | undefined): Date |
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
+
+/**
+ * `toDate` for a column the schema declares NOT NULL.
+ *
+ * Reaching the throw means the query and the schema disagree about whether a
+ * column can be absent, which is a bug to fix rather than a value to default.
+ */
+export function requireDate(value: Date | string | number | null | undefined, field: string): Date {
+  const parsed = toDate(value);
+  if (parsed === null) {
+    throw new TypeError(`Expected a timestamp for "${field}", received ${String(value)}`);
+  }
+  return parsed;
+}

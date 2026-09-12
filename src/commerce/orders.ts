@@ -10,6 +10,8 @@ import { notifyProductContributors, notifyUser } from '@/notifications/notify';
 import { isOwner, type Actor } from '@/authz/actor';
 import { NotFoundError, RuleViolationError, UnauthenticatedError } from '@/lib/errors';
 import { resolveTermsForSale } from '@/finance/commission-resolver';
+import { postLedgerTransaction } from '@/ledger/post';
+import { saleEntry, type ContributorShare } from '@/ledger/entries';
 import { assertOrderTransition, orderActorOf, type OrderStatus } from './order-status';
 import { resolveMethod } from '@/payments/registry';
 import type { InitiationResult, PaymentContext } from '@/payments/port';
@@ -236,15 +238,22 @@ export async function placeOrder(
  *   2. resolves the terms in force and FREEZES them onto each line;
  *   3. freezes how the engineer's side divides between contributors;
  *   4. grants the customer their entitlements;
- *   5. records the audit entry and notifies the people involved.
+ *   5. POSTS THE SALE TO THE DOUBLE-ENTRY LEDGER (phase P6);
+ *   6. records the audit entry and notifies the people involved.
  *
  * If any step fails, none of them happened. There is no path that grants a
- * download without a snapshot, or takes a snapshot without granting access.
+ * download without a snapshot, takes a snapshot without granting access, or
+ * completes a sale the books never hear about.
  */
 export async function approvePayment(
   actor: Actor,
   input: { paymentId: string; providerRef?: string | null; note?: string | null },
-): Promise<{ orderId: string; itemsSettled: number; entitlementsGranted: number }> {
+): Promise<{
+  orderId: string;
+  itemsSettled: number;
+  entitlementsGranted: number;
+  ledgerTransactionId: string;
+}> {
   if (!isOwner(actor)) {
     throw new RuleViolationError('اعتماد الدفع من صلاحية مالك المنصة وحده');
   }
@@ -281,6 +290,12 @@ export async function approvePayment(
     await moveOrder(tx, actor, order, 'PAID', input.note ?? null);
 
     let entitlementsGranted = 0;
+    // Accumulated across every line so ONE order produces one payable line per
+    // contributor, rather than one per product. The per-product detail already
+    // lives in order_item_contributors; the ledger carries the money.
+    const sharesByContributor = new Map<string, bigint>();
+    let platformTotal = 0n;
+    let grossTotal = 0n;
 
     for (const item of items) {
       if (item.snapshotTakenAt !== null) {
@@ -326,6 +341,15 @@ export async function approvePayment(
         })),
       );
 
+      for (const d of terms.distribution) {
+        sharesByContributor.set(
+          d.contributorId,
+          (sharesByContributor.get(d.contributorId) ?? 0n) + d.amountMinor,
+        );
+      }
+      platformTotal += terms.snapshot.platformAmountMinor;
+      grossTotal += item.unitPriceMinor;
+
       // §41: ownership is a row, not a success message.
       await tx
         .insert(entitlements)
@@ -346,6 +370,50 @@ export async function approvePayment(
         productTitle: item.titleSnapshot,
       });
     }
+
+    /*
+     * THE BOOKS (specification §14).
+     *
+     * Posted from the frozen figures collected above — never recomputed. The
+     * ledger function refuses anything that does not sum to zero, so a sale
+     * whose split does not re-add to what the customer paid fails here and
+     * takes the whole approval down with it, snapshot and entitlements
+     * included. A half-booked sale is not a state this system can reach.
+     */
+    if (order.discountMinor !== 0n) {
+      // A discount would have to be apportioned between the parties before it
+      // could be booked, and OPEN-1 has not decided how. Refuse, loudly.
+      throw new RuleViolationError(
+        'الخصومات غير مدعومة بعد — القرار المعلّق OPEN-1 يحدد أساس احتساب العمولة عند وجود خصم',
+        { orderId: order.id, discountMinor: order.discountMinor.toString() },
+      );
+    }
+
+    if (grossTotal !== order.totalMinor) {
+      throw new RuleViolationError('مجموع بنود الطلب لا يساوي إجمالي الطلب', {
+        orderId: order.id,
+        itemsTotalMinor: grossTotal.toString(),
+        orderTotalMinor: order.totalMinor.toString(),
+      });
+    }
+
+    const contributorShares: ContributorShare[] = [...sharesByContributor].map(
+      ([contributorId, amountMinor]) => ({ contributorId, amountMinor }),
+    );
+
+    const ledgerTransactionId = await postLedgerTransaction(
+      tx,
+      saleEntry({
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        currency: order.currency,
+        grossMinor: grossTotal,
+        platformMinor: platformTotal,
+        contributorShares,
+        occurredAt: new Date(),
+        itemCount: items.length,
+      }),
+    );
 
     await tx
       .update(payments)
@@ -381,10 +449,16 @@ export async function approvePayment(
         currency: payment.currency,
         providerRef: input.providerRef ?? null,
         itemsSettled: items.length,
+        ledgerTransactionId,
       },
     });
 
-    return { orderId: order.id, itemsSettled: items.length, entitlementsGranted };
+    return {
+      orderId: order.id,
+      itemsSettled: items.length,
+      entitlementsGranted,
+      ledgerTransactionId,
+    };
   });
 }
 

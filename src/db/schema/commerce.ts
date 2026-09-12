@@ -222,6 +222,16 @@ export const orderItems = pgTable(
     commissionClamped: boolean('commission_clamped').notNull().default(false),
     snapshotTakenAt: utcTimestamp('snapshot_taken_at'),
 
+    /*
+     * Refund marks (specification §17). Deliberately NOT part of the frozen
+     * snapshot: the sale's numbers stay exactly as they were, and the refund
+     * is recorded beside them. The immutability trigger lists the snapshot
+     * columns by name, so these two may be written once a refund is approved
+     * while every financial figure above stays sealed.
+     */
+    refundedAt: utcTimestamp('refunded_at'),
+    refundRequestId: uuid('refund_request_id'),
+
     createdAt: createdAt(),
   },
   (table) => [

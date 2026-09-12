@@ -1,5 +1,6 @@
 import { setRequestLocale } from 'next-intl/server';
 import { SiteHeader, SiteFooter } from '@/components/site-chrome';
+import { AdminNav } from '../admin-nav';
 import { PaymentDecisionForms } from '@/components/commerce-forms';
 import { formatPrice } from '@/components/product-card';
 import { requireOwner } from '@/auth/current';
@@ -33,6 +34,7 @@ export default async function AdminPaymentsPage({
     <>
       <SiteHeader />
       <main className="mx-auto flex w-full max-w-4xl flex-col gap-8 px-5 py-10">
+        <AdminNav current="/admin/payments" />
         <header className="flex flex-col gap-2">
           <p className="technical-term text-xs tracking-[0.14em] text-[var(--color-ink-faint)]">
             ADMIN

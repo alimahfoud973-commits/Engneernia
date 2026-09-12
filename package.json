@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "next dev",
+    "prebuild": "node scripts/check-build-env.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
@@ -18,7 +19,7 @@
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
     "verify": "npm run typecheck && npm run lint && npm run test && npm run build",
-    "db:prove-rls": "psql -v ON_ERROR_STOP=1 -f src/db/security/rls-foundation.test.sql",
+    "db:prove-rls": "node scripts/prove-rls.mjs",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "bootstrap:owner": "node --experimental-strip-types scripts/bootstrap-owner.ts",
     "seed:catalog": "node --experimental-strip-types scripts/seed-catalog.ts",
