@@ -6,7 +6,7 @@ import {
 } from '@/db/schema';
 import { withActor, type Transaction } from '@/db/actor-context';
 import { recordAudit } from '@/audit/log';
-import { notifyProductContributors, notifyUser } from '@/notifications/notify';
+import { notifyContributor, notifyUser } from '@/notifications/notify';
 import { isOwner, type Actor } from '@/authz/actor';
 import { NotFoundError, RuleViolationError, UnauthenticatedError } from '@/lib/errors';
 import { resolveTermsForSale } from '@/finance/commission-resolver';
@@ -366,9 +366,25 @@ export async function approvePayment(
         .set({ salesCount: sql`${products.salesCount} + 1` })
         .where(eq(products.id, item.productId));
 
-      await notifyProductContributors(tx, item.productId, 'ORDER_PAID', {
-        productTitle: item.titleSnapshot,
-      });
+      /*
+       * One message per credited engineer, carrying THEIR OWN frozen share
+       * (owner decision: a notification on every sale, a document once a
+       * month). Sent from `terms.distribution` rather than from the product's
+       * current credits, so each author on a co-authored product is told their
+       * own number and never the others' — decisions §6.
+       *
+       * No buyer identity, per OPEN-4: the date, the product, the price and
+       * their share, and nothing about who bought it.
+       */
+      for (const share of terms.distribution) {
+        await notifyContributor(tx, share.contributorId, 'PRODUCT_SOLD', {
+          productTitle: item.titleSnapshot,
+          currency: item.currency,
+          grossMinor: item.unitPriceMinor.toString(),
+          engineerMinor: share.amountMinor.toString(),
+          soldAt: new Date().toISOString(),
+        });
+      }
     }
 
     /*

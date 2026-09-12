@@ -27,6 +27,11 @@ export const notificationTypeEnum = pgEnum('notification_type', [
   'REFUND_PAID',
   /** Sent to a contributor whose sale was reversed — never to the buyer. */
   'SALE_REVERSED',
+  /**
+   * One per sale, to each credited engineer, carrying THEIR OWN share.
+   * Distinct from ORDER_PAID, which is the buyer's message about their order.
+   */
+  'PRODUCT_SOLD',
 ]);
 
 /**

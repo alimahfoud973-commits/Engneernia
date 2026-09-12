@@ -14,6 +14,8 @@ import { approveRefund, requestRefund } from '@/commerce/refunds';
 import { generateSettlements } from './generate';
 import { approveSettlement, cancelSettlement, markSettlementPaid } from './lifecycle';
 import { contributorStatement } from '@/finance/balances';
+import { statementDocument } from './queries';
+import { renderStatementPdf } from './statement-pdf';
 import { checkLedgerHealth } from '@/ledger/verify';
 import { RuleViolationError } from '@/lib/errors';
 import type { Actor } from '@/authz/actor';
@@ -72,7 +74,17 @@ const engineer: Actor = {
 
 const PRICE = 2000n;            // $20.00
 const ENGINEER_SHARE = 1600n;   // 80%
-const MINIMUM = 5000n;          // $50.00, from settings
+/*
+ * This suite SETS the threshold it tests rather than reading whatever the
+ * database happens to be seeded with. The owner has since removed the minimum
+ * (it is zero in `settings`), but "below the threshold rolls forward" remains
+ * a supported behaviour they can switch back on — and a test of that behaviour
+ * must not depend on a value someone else is free to change.
+ *
+ * Integration files run in sequence (`fileParallelism: false`), so changing a
+ * global setting here cannot race another file. It is restored in afterAll.
+ */
+const MINIMUM = 5000n;          // $50.00, set by this suite for its own run
 
 /** Buy one product and have the owner approve it, at the current fake time. */
 async function sell(productIndex: number): Promise<string> {
@@ -105,10 +117,22 @@ async function settlementRow(periodKey: string) {
   return row;
 }
 
+let seededMinimum: unknown = null;
+
 beforeAll(async () => {
   vi.useFakeTimers({ toFake: ['Date'] });
 
   await withRawActorContext(OWNER_RAW, async (tx) => {
+    const [current] = (await tx.execute(sql`
+      SELECT value FROM settings WHERE key = 'settlement.minimumPayoutMinor'
+    `)) as unknown as Array<{ value: unknown }>;
+    seededMinimum = current?.value ?? null;
+
+    await tx.execute(sql`
+      UPDATE settings SET value = ${String(MINIMUM)}::jsonb
+       WHERE key = 'settlement.minimumPayoutMinor'
+    `);
+
     await tx.insert(users).values([
       { id: ids.owner, email: `p7-owner+${suffix}@test.local`, passwordHash: 'x', role: 'OWNER', status: 'ACTIVE', displayName: 'Owner' },
       { id: ids.customer, email: `p7-cust+${suffix}@test.local`, passwordHash: 'x', role: 'CUSTOMER', status: 'ACTIVE', displayName: 'Customer', countryCode: 'SY' },
@@ -150,6 +174,14 @@ afterAll(async () => {
   vi.useRealTimers();
 
   await withRawActorContext(OWNER_RAW, async (tx) => {
+    // Restore whatever the database had before this suite ran.
+    if (seededMinimum !== null) {
+      await tx.execute(sql`
+        UPDATE settings SET value = ${JSON.stringify(seededMinimum)}::jsonb
+         WHERE key = 'settlement.minimumPayoutMinor'
+      `);
+    }
+
     // Ledger rows stay: they are append-only, which is the behaviour under test.
     await tx.execute(sql`DELETE FROM settlement_lines WHERE settlement_id IN
       (SELECT id FROM settlements WHERE contributor_id = ${ids.contributor})`);
@@ -464,6 +496,53 @@ describe('back-settling a month that was skipped', () => {
     expect(run.generated).toHaveLength(0);
     expect(run.skipped).toHaveLength(1);
   });
+});
+
+// ===========================================================================
+describe('the monthly statement as a PDF (owner decision)', () => {
+  it('renders a real PDF from the frozen statement', async () => {
+    const row = await settlementRow('2026-08');
+    const document = await statementDocument(engineer, row!.id);
+    expect(document).not.toBeNull();
+
+    const pdf = await renderStatementPdf({
+      settlement: document!.settlement,
+      lines: document!.lines,
+      contributorName: document!.contributorName,
+      platformName: 'Engineernia',
+    });
+
+    // A real PDF, not an empty buffer or an error page.
+    expect(pdf.byteLength).toBeGreaterThan(5_000);
+    expect(Buffer.from(pdf.subarray(0, 5)).toString('latin1')).toBe('%PDF-');
+
+    // It is a single page, and mupdf can open what we produced.
+    const mupdf = await import('mupdf');
+    const opened = mupdf.Document.openDocument(Buffer.from(pdf), 'application/pdf');
+    expect(opened.countPages()).toBe(1);
+  });
+
+  it('the document resolves for the engineer it belongs to', async () => {
+    const row = await settlementRow('2026-08');
+    const document = await statementDocument(engineer, row!.id);
+
+    expect(document!.settlement.reference).toBe('AUG-2026-CIVIL');
+    expect(document!.settlement.netDueMinor).toBe(8000n);
+    expect(document!.lines.length).toBeGreaterThan(0);
+  });
+
+  it('and not for a customer, who gets the same answer as for a missing one',
+    async () => {
+      const row = await settlementRow('2026-08');
+
+      // Row-level security decides. The route turns null into 404, so a
+      // customer asking for a real settlement and one asking for a uuid that
+      // never existed cannot tell the two cases apart.
+      expect(await statementDocument(customer, row!.id)).toBeNull();
+      expect(
+        await statementDocument(customer, '00000000-0000-4000-8000-000000000000'),
+      ).toBeNull();
+    });
 });
 
 // ===========================================================================

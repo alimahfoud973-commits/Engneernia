@@ -1,5 +1,7 @@
 import Link from 'next/link';
 import { getPublicSettings } from '@/platform/settings';
+import { currentActor } from '@/auth/current';
+import { unreadNotificationCount } from '@/notifications/queries';
 
 const DISCIPLINE_NAV = [
   { slug: 'electrical', label: 'كهربائية' },
@@ -14,6 +16,13 @@ const DISCIPLINE_NAV = [
  */
 export async function SiteHeader() {
   const settings = await getPublicSettings();
+
+  // A signed-in visitor needs to know a sale happened without hunting for it.
+  // `currentActor` is request-cached, and the count swallows its own failures,
+  // so this costs one query and cannot take the header down.
+  const actor = await currentActor();
+  const unread = await unreadNotificationCount(actor);
+  const signedIn = actor.kind === 'USER';
 
   return (
     <header className="sticky top-0 z-40 border-b border-[var(--color-line)] bg-[var(--color-surface)]/95 backdrop-blur">
@@ -34,6 +43,23 @@ export async function SiteHeader() {
             </Link>
           ))}
         </nav>
+
+        {signedIn ? (
+          <Link
+            href="/account/notifications"
+            className="order-last flex items-center gap-1.5 rounded-sm px-2.5 py-1.5 text-sm text-[var(--color-ink-soft)] transition-colors hover:bg-[var(--color-surface-muted)] hover:text-[var(--color-ink)] sm:order-none"
+          >
+            <span>الإشعارات</span>
+            {unread > 0 ? (
+              <span
+                aria-label={`${unread} إشعاراً غير مقروء`}
+                className="technical-term inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-[var(--color-accent)] px-1.5 py-0.5 text-[11px] font-bold tabular-nums text-white"
+              >
+                {unread}
+              </span>
+            ) : null}
+          </Link>
+        ) : null}
 
         <form action="/search" className="ms-auto flex min-w-[220px] flex-1 items-center gap-2">
           <label htmlFor="site-search" className="sr-only">

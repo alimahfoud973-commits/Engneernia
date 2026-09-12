@@ -160,3 +160,52 @@ export async function settlementRun(
 export function defaultSettlementPeriod(now: Date = new Date()): PeriodKey {
   return previousPeriodKey(periodKeyOf(now));
 }
+
+/**
+ * One settlement with its lines, for the statement document.
+ *
+ * Returns null when the settlement does not resolve FOR THIS ACTOR — which
+ * covers both "no such settlement" and "not yours", deliberately
+ * indistinguishable (CLAUDE.md rule 5). Row-level security does the deciding;
+ * this function never compares ids itself.
+ */
+export async function statementDocument(
+  actor: Actor,
+  settlementId: string,
+): Promise<{
+  settlement: SettlementSummary;
+  lines: readonly StatementLine[];
+  contributorName: string | null;
+} | null> {
+  return withActor(actor, async (tx) => {
+    const rows = (await tx.execute(sql`
+      SELECT ${SUMMARY_COLUMNS}, contributor_name
+        FROM settlements WHERE id = ${settlementId}
+    `)) as unknown as Array<Record<string, unknown>>;
+
+    const row = rows[0];
+    if (!row) return null;
+
+    const lineRows = (await tx.execute(sql`
+      SELECT kind::text AS kind, occurred_at, product_title, currency,
+             gross_minor, engineer_minor, note
+        FROM settlement_lines
+       WHERE settlement_id = ${settlementId}
+       ORDER BY occurred_at, id
+    `)) as unknown as Array<Record<string, unknown>>;
+
+    return {
+      settlement: mapSummary(row),
+      contributorName: (row.contributor_name as string | null) ?? null,
+      lines: lineRows.map((line) => ({
+        kind: line.kind as string,
+        occurredAt: requireDate(line.occurred_at as string, 'occurred_at'),
+        productTitle: line.product_title as string,
+        currency: line.currency as string,
+        grossMinor: BigInt(line.gross_minor as string),
+        engineerMinor: BigInt(line.engineer_minor as string),
+        note: (line.note as string | null) ?? null,
+      })),
+    };
+  });
+}

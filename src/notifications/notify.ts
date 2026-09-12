@@ -74,3 +74,28 @@ export async function markNotificationRead(tx: Transaction, notificationId: stri
     .set({ readAt: new Date() })
     .where(eq(notifications.id, notificationId));
 }
+
+/**
+ * Notify the user behind a contributor profile, if there is still one.
+ *
+ * A contributor whose account has been removed gets no message, and that is
+ * not an error: the financial record naming them survives independently, and
+ * the caller's work must not fail because there is nobody left to tell.
+ */
+export async function notifyContributor(
+  tx: Transaction,
+  contributorId: string,
+  type: NotificationType,
+  payload: Record<string, unknown> = {},
+): Promise<boolean> {
+  const [row] = await tx
+    .select({ userId: contributors.userId })
+    .from(contributors)
+    .where(eq(contributors.id, contributorId))
+    .limit(1);
+
+  if (!row?.userId) return false;
+
+  await notifyUser(tx, { userId: row.userId, type, payload });
+  return true;
+}

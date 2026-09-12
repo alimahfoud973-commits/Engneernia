@@ -3,6 +3,7 @@ import * as mupdf from 'mupdf';
 import { createCanvas, loadImage } from '@napi-rs/canvas';
 import { PDFDocument } from 'pdf-lib';
 import { RuleViolationError, ValidationError } from '@/lib/errors';
+import { ARABIC_FONT_BOLD, registerArabicFonts } from '@/lib/typography/arabic';
 
 /**
  * ===========================================================================
@@ -30,9 +31,14 @@ export interface PreviewOptions {
   /** Resolution of the rasterised pages. Legible, not reusable as a substitute. */
   readonly dpi?: number;
   /**
-   * ASCII by default: the watermark is drawn by a canvas that has no Arabic
-   * font registered, and unrendered glyphs would produce boxes across every
-   * preview. Bundling an Arabic face and switching this is P8 polish.
+   * Arabic by default, now that the platform bundles a face that shapes it
+   * (`src/lib/typography/arabic.ts`). Before that font existed the mark had to
+   * be ASCII, because a canvas with no Arabic glyphs draws boxes across every
+   * page of every preview — which was KI-2.
+   *
+   * If the font is somehow missing at runtime, the ASCII fallback below is
+   * used rather than a page of boxes: a watermark nobody can read still has
+   * to be a watermark.
    */
   readonly watermarkText?: string;
 }
@@ -47,7 +53,8 @@ export interface PreviewResult {
 const DEFAULTS = {
   maxPages: 5,
   dpi: 110,
-  watermarkText: 'PREVIEW - ENGINEERING PLATFORM',
+  watermarkText: 'معاينة — غير مخصصة للاستخدام',
+  watermarkFallback: 'PREVIEW - NOT FOR USE',
 } as const;
 
 /** Reads the page count without rendering anything. */
@@ -86,6 +93,14 @@ async function watermarkPage(pngBytes: Uint8Array, text: string): Promise<Buffer
 
   ctx.drawImage(image, 0, 0);
 
+  // Skia shapes Arabic correctly once a face with the glyphs is registered.
+  // Without one the same call draws a row of empty boxes, so the text falls
+  // back rather than the font silently failing.
+  const hasArabic = registerArabicFonts();
+  const mark = hasArabic ? text : DEFAULTS.watermarkFallback;
+  const family = hasArabic ? ARABIC_FONT_BOLD : 'sans-serif';
+  ctx.direction = 'rtl';
+
   // eslint-disable-next-line no-restricted-properties -- pixel geometry.
   const diagonalSize = Math.max(18, Math.round(image.width / 16));
   ctx.save();
@@ -93,16 +108,16 @@ async function watermarkPage(pngBytes: Uint8Array, text: string): Promise<Buffer
   ctx.rotate(-Math.atan2(image.height, image.width));
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = `bold ${diagonalSize}px sans-serif`;
+  ctx.font = `${hasArabic ? '' : 'bold '}${diagonalSize}px ${family}`;
   ctx.globalAlpha = 0.22;
   ctx.fillStyle = '#12655c';
-  ctx.fillText(text, 0, 0);
+  ctx.fillText(mark, 0, 0);
   // A thin outline keeps the mark legible over dark drawings as well as
   // over white book pages.
   ctx.globalAlpha = 0.3;
   ctx.lineWidth = Math.max(1, diagonalSize / 22);
   ctx.strokeStyle = '#ffffff';
-  ctx.strokeText(text, 0, 0);
+  ctx.strokeText(mark, 0, 0);
   ctx.restore();
 
   // eslint-disable-next-line no-restricted-properties -- pixel geometry.
@@ -110,9 +125,9 @@ async function watermarkPage(pngBytes: Uint8Array, text: string): Promise<Buffer
   ctx.save();
   ctx.globalAlpha = 0.55;
   ctx.fillStyle = '#12655c';
-  ctx.font = `600 ${footerSize}px sans-serif`;
+  ctx.font = `${hasArabic ? '' : '600 '}${footerSize}px ${family}`;
   ctx.textAlign = 'center';
-  ctx.fillText(text, image.width / 2, image.height - footerSize);
+  ctx.fillText(mark, image.width / 2, image.height - footerSize);
   ctx.restore();
 
   return canvas.toBuffer('image/png');

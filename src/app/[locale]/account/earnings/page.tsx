@@ -105,7 +105,9 @@ export default async function EarningsPage({
                     <div className="flex flex-col">
                       <dt className="text-xs text-[var(--color-ink-faint)]">الحد الأدنى للصرف</dt>
                       <dd className="tabular-nums">
-                        {formatMinor(balance.minimumPayoutMinor, balance.currency)}
+                        {balance.minimumPayoutMinor === 0n
+                          ? 'بلا حد أدنى'
+                          : formatMinor(balance.minimumPayoutMinor, balance.currency)}
                       </dd>
                     </div>
                   </dl>
@@ -113,9 +115,11 @@ export default async function EarningsPage({
                   <p className="text-xs text-[var(--color-ink-soft)]">
                     {balance.balanceMinor < 0n
                       ? 'رصيدك سالب لأن استرجاعاً اعتُمد بعد تسوية شهره. يُخصم من مستحقات الشهر القادم.'
-                      : balance.meetsMinimum
-                        ? 'رصيدك بلغ الحد الأدنى وسيُدرج في تسوية الشهر القادم.'
-                        : 'رصيدك دون الحد الأدنى، ويُرحَّل إلى الشهر التالي.'}
+                      : balance.balanceMinor === 0n
+                        ? 'لا رصيد قائم حالياً.'
+                        : balance.meetsMinimum
+                          ? 'سيُدرج رصيدك في تسوية الشهر القادم.'
+                          : `رصيدك دون الحد الأدنى ${formatMinor(balance.minimumPayoutMinor, balance.currency)}، ويُرحَّل إلى الشهر التالي.`}
                   </p>
                 </li>
               ))}
@@ -228,15 +232,30 @@ export default async function EarningsPage({
                     </div>
                   </dl>
 
-                  <p className="text-xs text-[var(--color-ink-soft)]">
-                    {row.status === 'PAID'
-                      ? `حُوِّل${row.payoutReference ? ` — مرجع ${row.payoutReference}` : ''}.`
-                      : row.status === 'CARRIED_FORWARD'
-                        ? row.balanceMinor < 0n
-                          ? 'رصيد سالب بسبب استرجاع اعتُمد بعد تسوية شهره. يُخصم من مستحقات الشهر القادم.'
-                          : `الرصيد دون الحد الأدنى ${formatMinor(row.minimumPayoutMinor, row.currency)}، ويُرحَّل إلى الشهر التالي.`
-                        : 'قيد المراجعة لدى المالك.'}
-                  </p>
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <p className="text-xs text-[var(--color-ink-soft)]">
+                      {row.status === 'PAID'
+                        ? `حُوِّل${row.payoutReference ? ` — مرجع ${row.payoutReference}` : ''}.`
+                        : row.status === 'CARRIED_FORWARD'
+                          ? row.balanceMinor < 0n
+                            ? 'رصيد سالب بسبب استرجاع اعتُمد بعد تسوية شهره. يُخصم من مستحقات الشهر القادم.'
+                            : row.minimumPayoutMinor > 0n
+                              ? `الرصيد دون الحد الأدنى ${formatMinor(row.minimumPayoutMinor, row.currency)}، ويُرحَّل إلى الشهر التالي.`
+                              : 'لا رصيد مستحق في هذا الشهر.'
+                          : 'قيد المراجعة لدى المالك.'}
+                    </p>
+                    {/*
+                      The monthly statement as a PDF (owner decision). Shown on
+                      the statement, never on a sale: a purchase sends a
+                      notification, a month produces a document.
+                    */}
+                    <a
+                      href={`/api/settlements/${row.id}/statement`}
+                      className="shrink-0 rounded-[var(--radius-card)] border border-[var(--color-line-strong)] px-3 py-1.5 text-xs font-semibold transition-colors hover:border-[var(--color-accent)]"
+                    >
+                      تنزيل الكشف PDF
+                    </a>
+                  </div>
                 </li>
               ))}
             </ul>

@@ -248,8 +248,10 @@ export default async function AdminFinancePage({
         {/* --- payables ------------------------------------------------------ */}
         <section className="flex flex-col gap-3">
           <h2 className="text-sm font-semibold text-[var(--color-ink-soft)]">
-            مستحقات المهندسين — الحد الأدنى للصرف{' '}
-            {formatMinor(policy.settlement.minimumPayoutMinor, policy.settlement.currency)}
+            مستحقات المهندسين —{' '}
+            {policy.settlement.minimumPayoutMinor === 0n
+              ? 'بلا حد أدنى للصرف'
+              : `الحد الأدنى للصرف ${formatMinor(policy.settlement.minimumPayoutMinor, policy.settlement.currency)}`}
           </h2>
           {payables.length === 0 ? (
             <p className="rounded-[var(--radius-card)] border border-dashed border-[var(--color-line-strong)] px-4 py-6 text-center text-sm text-[var(--color-ink-faint)]">
@@ -274,7 +276,7 @@ export default async function AdminFinancePage({
                     {row.balanceMinor < 0n
                       ? 'رصيد سالب — استرجاع بعد تسوية'
                       : row.meetsMinimum
-                        ? 'بلغ الحد الأدنى'
+                        ? 'مستحق للصرف'
                         : 'يُرحَّل إلى الشهر التالي'}
                   </span>
                 </li>

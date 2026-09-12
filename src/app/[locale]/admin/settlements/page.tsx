@@ -128,6 +128,12 @@ export default async function AdminSettlementsPage({
                   <div className="flex flex-col gap-2 border-t border-[var(--color-line)] pt-3">
                     <ApproveSettlementForm settlementId={row.id} />
                     <CancelSettlementForm settlementId={row.id} />
+                    <a
+                      href={`/api/settlements/${row.id}/statement`}
+                      className="self-start text-xs font-semibold text-[var(--color-ink-soft)] underline underline-offset-4"
+                    >
+                      معاينة الكشف PDF كما يصل المهندس
+                    </a>
                   </div>
                 </li>
               ))}
@@ -201,8 +207,16 @@ export default async function AdminSettlementsPage({
                       ? row.payoutReference ?? 'مصروف'
                       : row.balanceMinor < 0n
                         ? 'رصيد سالب — استرجاع بعد تسوية، يُخصم الشهر القادم'
-                        : `دون الحد الأدنى ${formatMinor(row.minimumPayoutMinor, row.currency)}`}
+                        : row.minimumPayoutMinor > 0n
+                          ? `دون الحد الأدنى ${formatMinor(row.minimumPayoutMinor, row.currency)}`
+                          : 'لا رصيد مستحق'}
                   </span>
+                  <a
+                    href={`/api/settlements/${row.id}/statement`}
+                    className="text-xs text-[var(--color-ink-soft)] underline underline-offset-4"
+                  >
+                    PDF
+                  </a>
                 </li>
               ))}
             </ul>

@@ -28,6 +28,16 @@ const nextConfig: NextConfig = {
   typescript: { ignoreBuildErrors: false },
   // Original product files are NEVER served through the Next image/static layer.
   images: { remotePatterns: [] },
+  /*
+   * Native addons, left as runtime requires rather than bundled.
+   *
+   * @napi-rs/canvas and mupdf ship platform-specific .node binaries. Turbopack
+   * cannot place a non-ECMAScript asset in an ESM chunk, and the failure only
+   * appears once one of them is reached from a ROUTE HANDLER — which is what
+   * the settlement statement PDF does. Declaring them external tells Next to
+   * require them at runtime instead of trying to bundle the binary.
+   */
+  serverExternalPackages: ['@napi-rs/canvas', 'mupdf'],
   async headers() {
     return [{ source: '/:path*', headers: securityHeaders }];
   },

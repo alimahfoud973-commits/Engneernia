@@ -242,9 +242,24 @@ describe('1. a sale reaches the books', () => {
     expect(usd?.earnedMinor).toBe(1600n);
     expect(usd?.reversedMinor).toBe(0n);
     expect(usd?.balanceMinor).toBe(1600n);
-    // Read from settings (5000 = $50), never a constant in the code.
-    expect(usd?.minimumPayoutMinor).toBe(5000n);
-    expect(usd?.meetsMinimum).toBe(false);
+
+    /*
+     * The threshold comes from SETTINGS, and this asserts that wiring rather
+     * than a particular number. It used to assert 5000 — the value seeded at
+     * the time — and broke the moment the owner exercised the very
+     * configurability the setting exists for. A test that pins a business
+     * value the owner controls is testing the owner's mind, not the code.
+     */
+    const [setting] = await withRawActorContext(OWNER_RAW, (tx) =>
+      tx.execute(sql`
+        SELECT value::text AS value FROM settings
+         WHERE key = 'settlement.minimumPayoutMinor'
+      `),
+    ) as unknown as Array<{ value: string }>;
+
+    const configured = BigInt(setting!.value);
+    expect(usd?.minimumPayoutMinor).toBe(configured);
+    expect(usd?.meetsMinimum).toBe(1600n >= configured);
   });
 });
 
