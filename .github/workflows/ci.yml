@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Typecheck, lint, test, build
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: engineering_marketplace
+          TZ: UTC
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit and property tests
+        run: npm run test
+
+      # The authorization model rests on PostgreSQL role separation and RLS.
+      # This proves both against a real database on every push — if a future
+      # change weakens them, CI fails here rather than in production.
+      - name: Prove database authorization foundation
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 \
+            -f docker/postgres/init/01-roles.sql
+          psql -h localhost -U postgres -d engineering_marketplace -v ON_ERROR_STOP=1 \
+            -f src/db/security/rls-foundation.test.sql
+
+      - name: Production build
+        run: npm run build
+
+      # Fails only on HIGH/CRITICAL. The remaining moderate advisories are
+      # confined to drizzle-kit's bundled esbuild, a build-time CLI that never
+      # runs in production — documented in docs/DECISIONS.md.
+      - name: Dependency audit
+        run: npm audit --audit-level=high

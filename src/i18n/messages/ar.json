@@ -1,0 +1,30 @@
+{
+  "platform": {
+    "name": "منصة الموارد الهندسية",
+    "tagline": "المعرفة الهندسية والموارد الرقمية"
+  },
+  "disciplines": {
+    "electrical": "الهندسة الكهربائية",
+    "mechanical": "الهندسة الميكانيكية",
+    "architecture": "الهندسة المعمارية",
+    "civil": "الهندسة المدنية"
+  },
+  "home": {
+    "searchPlaceholder": "ابحث في الموارد الهندسية",
+    "featured": "موارد مختارة",
+    "bestSellers": "الأكثر مبيعاً",
+    "newReleases": "أحدث الإصدارات",
+    "freeResources": "موارد مجانية",
+    "contributors": "نخبة المهندسين"
+  },
+  "status": {
+    "phase": "المرحلة",
+    "buildFoundation": "الأساس التقني",
+    "underConstruction": "قيد البناء — لم تُنشر أي منتجات بعد"
+  },
+  "common": {
+    "currency": "العملة",
+    "timezone": "المنطقة الزمنية المحاسبية",
+    "locale": "اللغة"
+  }
+}

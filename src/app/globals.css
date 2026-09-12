@@ -1,0 +1,100 @@
+@import 'tailwindcss';
+
+/**
+ * Design tokens.
+ *
+ * This is the phase-1 foundation, not the final brand: the platform name,
+ * logo and visual direction are still open (OPEN-8). Phase P4 replaces the
+ * palette values here; every component reads tokens, so that swap touches
+ * this file alone.
+ *
+ * Direction-agnostic by construction: spacing uses logical properties
+ * (margin-inline, padding-inline) so the same components serve RTL Arabic
+ * today and LTR English when it is added.
+ */
+@theme {
+  /* Neutrals — cool graphite, biased very slightly toward the accent. */
+  --color-ground: #f5f7f7;
+  --color-surface: #ffffff;
+  --color-surface-muted: #eceff0;
+  --color-line: #d7dddd;
+  --color-line-strong: #b9c2c2;
+  --color-ink: #121a1b;
+  --color-ink-soft: #556061;
+  --color-ink-faint: #7f8a8b;
+
+  /* Accent — instrument teal. */
+  --color-accent: #12655c;
+  --color-accent-ink: #0b4a43;
+  --color-accent-soft: #dfeeeb;
+
+  /* Semantic — kept distinct from the accent so state never reads as brand. */
+  --color-ok: #2b6b43;
+  --color-ok-soft: #e2efe7;
+  --color-warn: #8a6612;
+  --color-warn-soft: #f5eedb;
+  --color-danger: #9d3a1f;
+  --color-danger-soft: #f6e6e0;
+
+  --font-sans: var(--font-plex-arabic), 'Segoe UI', system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, monospace;
+
+  --radius-card: 4px;
+}
+
+@media (prefers-color-scheme: dark) {
+  @theme {
+    --color-ground: #0f1414;
+    --color-surface: #171e1e;
+    --color-surface-muted: #1f2727;
+    --color-line: #2a3333;
+    --color-line-strong: #3a4444;
+    --color-ink: #e6ebea;
+    --color-ink-soft: #9aa5a4;
+    --color-ink-faint: #75807f;
+
+    --color-accent: #4fb9a9;
+    --color-accent-ink: #8ed7cb;
+    --color-accent-soft: #13302c;
+
+    --color-ok: #79c092;
+    --color-ok-soft: #17281d;
+    --color-warn: #d5b35c;
+    --color-warn-soft: #2d2616;
+    --color-danger: #df8e6d;
+    --color-danger-soft: #32201a;
+  }
+}
+
+html {
+  color-scheme: light dark;
+}
+
+body {
+  background-color: var(--color-ground);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Latin technical terms inside Arabic copy keep the mono face and LTR run,
+   per decision D-03 ("support English engineering terms within Arabic"). */
+.technical-term {
+  font-family: var(--font-mono);
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

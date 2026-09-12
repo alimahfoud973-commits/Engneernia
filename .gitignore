@@ -1,0 +1,36 @@
+# dependencies
+node_modules/
+.pnp
+.pnp.*
+
+# next
+.next/
+out/
+build/
+next-env.d.ts
+
+# testing
+coverage/
+*.tsbuildinfo
+
+# env — NEVER commit real secrets
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# storage / local data
+.data/
+tmp/
+uploads/
+
+# os / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# logs
+*.log
+npm-debug.log*
