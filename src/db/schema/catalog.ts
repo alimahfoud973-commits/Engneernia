@@ -40,6 +40,7 @@ export const fileTypeEnum = pgEnum('file_type', [
   'EXCEL',
   'CAD',
   'REVIT_BIM',
+  'ARCHIVE',
   'TEMPLATE',
   'PROJECT',
   'OTHER',

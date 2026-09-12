@@ -70,14 +70,44 @@ export default async function ProductPage({
 
             <section className="flex flex-col gap-3">
               <h2 className="text-sm font-semibold text-[var(--color-ink-soft)]">المعاينة</h2>
-              <div className="rounded-[var(--radius-card)] border border-dashed border-[var(--color-line-strong)] px-4 py-10 text-center">
-                <p className="text-sm text-[var(--color-ink-soft)]">
-                  معاينة أول ٥ صفحات تُضاف في المرحلة القادمة
-                </p>
-                <p className="mt-1 text-xs text-[var(--color-ink-faint)]">
-                  الملف الأصلي محفوظ في تخزين خاص ولا يملك رابطاً عاماً
-                </p>
-              </div>
+
+              {product.hasPreview ? (
+                <>
+                  <div className="overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-surface-muted)]">
+                    {/*
+                      The preview served here is a generated document holding
+                      only the first pages, as raster images with the watermark
+                      burned in. The original is not in this file, so nothing
+                      about this viewer is protecting it.
+                    */}
+                    <iframe
+                      src={`/api/files/${product.slug}/preview`}
+                      title={`معاينة ${product.titleAr}`}
+                      className="h-[560px] w-full border-0 bg-white"
+                      loading="lazy"
+                    />
+                  </div>
+                  <p className="text-xs text-[var(--color-ink-faint)]">
+                    {product.previewPageCount && product.totalPageCount
+                      ? `تعرض المعاينة ${product.previewPageCount} صفحات من أصل ${product.totalPageCount}.`
+                      : 'تعرض المعاينة الصفحات الأولى فقط.'}{' '}
+                    يُتاح الملف الكامل بعد إتمام الشراء والتحقق منه.
+                  </p>
+                </>
+              ) : (
+                <div className="rounded-[var(--radius-card)] border border-dashed border-[var(--color-line-strong)] px-4 py-8 text-center">
+                  <p className="text-sm text-[var(--color-ink-soft)]">
+                    لا تتوفر معاينة لهذه الصيغة
+                  </p>
+                  <p className="mt-1 text-xs text-[var(--color-ink-faint)]">
+                    المعاينة متاحة لملفات PDF فقط. تفاصيل المحتوى موضّحة في الوصف أعلاه.
+                  </p>
+                </div>
+              )}
+
+              <p className="text-xs text-[var(--color-ink-faint)]">
+                الملف الأصلي محفوظ في تخزين خاص ولا يملك رابطاً عاماً.
+              </p>
             </section>
 
             {product.softwareTags.length > 0 ? (

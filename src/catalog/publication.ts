@@ -99,20 +99,37 @@ export interface PublishReadiness {
   readonly hasCurrentPrice: boolean;
   readonly hasOriginalFile: boolean;
   readonly hasPreview: boolean;
+  /** Decides whether a preview is required at all — owner decision: PDF only. */
+  readonly requiresPreview: boolean;
+  /** The original's scan state, and whether this deployment enforces scanning. */
+  readonly fileIsServable: boolean;
 }
 
 /**
- * A product must not reach the public half-built: no credited engineer means
- * a sale nobody can be paid for, and no preview means a customer buying blind
- * (§26). Returns the reasons rather than a bare boolean so the admin screen
- * can list exactly what is missing.
+ * A product must not reach the public half-built.
+ *
+ * No credited engineer means a sale nobody can be paid for. No current price
+ * means a checkout with nothing to charge. An unscanned original means
+ * handing a customer a file the platform never looked at.
+ *
+ * A missing preview blocks publication only for PDFs: by the owner's
+ * decision, Excel, DWG, Revit and archives have no preview, so requiring one
+ * would make those products unpublishable.
+ *
+ * Returns every reason rather than the first, so the admin screen can show a
+ * checklist instead of one error at a time.
  */
 export function publishBlockers(readiness: PublishReadiness): readonly string[] {
   const blockers: string[] = [];
   if (!readiness.hasContributor) blockers.push('لا يوجد مهندس منسوب إليه المنتج');
   if (!readiness.hasCurrentPrice) blockers.push('لا يوجد سعر حالي محدد');
   if (!readiness.hasOriginalFile) blockers.push('لم يُرفع الملف الأصلي');
-  if (!readiness.hasPreview) blockers.push('لم تُولَّد المعاينة العامة');
+  if (readiness.requiresPreview && !readiness.hasPreview) {
+    blockers.push('لم تُولَّد معاينة الصفحات الخمس');
+  }
+  if (readiness.hasOriginalFile && !readiness.fileIsServable) {
+    blockers.push('الملف الأصلي لم يجتز فحص البرمجيات الخبيثة');
+  }
   return blockers;
 }
 

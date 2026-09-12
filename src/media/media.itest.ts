@@ -1,0 +1,249 @@
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { eq, sql } from 'drizzle-orm';
+import { randomUUID } from 'node:crypto';
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import { withRawActorContext } from '@/db/actor-context';
+import { closeDb } from '@/db';
+import { contributors, disciplines, downloadEvents, productContributors, productFiles, productPrices, products, users } from '@/db/schema';
+import { ingestProductFile } from './ingest';
+import { deliverProductFile } from './deliver';
+import { changeProductStatus } from '@/catalog/products';
+import { GUEST, type Actor } from '@/authz/actor';
+import { NotFoundError, RuleViolationError } from '@/lib/errors';
+
+/**
+ * ===========================================================================
+ * PHASE P3 EXIT CRITERIA
+ * ===========================================================================
+ *   1. A real PDF ingests, stores privately, and yields a 5-page preview.
+ *   2. DWG, Revit and archive files ingest — with no preview, by decision.
+ *   3. The PUBLIC can fetch the preview and can NEVER fetch the original.
+ *   4. Every delivery of an original is recorded.
+ * ===========================================================================
+ */
+
+const suffix = Date.now();
+const ids = {
+  owner: randomUUID(), engineerUser: randomUUID(), contributor: randomUUID(),
+  discipline: randomUUID(),
+  pdfProduct: randomUUID(), dwgProduct: randomUUID(), zipProduct: randomUUID(),
+};
+const slugs = {
+  pdf: `p3-pdf-${suffix}`, dwg: `p3-dwg-${suffix}`, zip: `p3-zip-${suffix}`,
+};
+
+const OWNER_RAW = { actorId: ids.owner, actorRole: 'OWNER' };
+const base = { kind: 'USER', displayName: 'T', locale: 'ar', sessionId: 's', twoFactorSatisfied: true } as const;
+const owner: Actor = { ...base, userId: ids.owner, role: 'OWNER', contributorId: null, contributorActive: false };
+const engineer: Actor = { ...base, userId: ids.engineerUser, role: 'CONTRIBUTOR', contributorId: ids.contributor, contributorActive: true };
+
+async function buildPdf(pages: number): Promise<Uint8Array> {
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  for (let i = 1; i <= pages; i += 1) {
+    doc.addPage([595, 842]).drawText(`P3 PAGE-${i} TOKEN${i}Z`, {
+      x: 50, y: 700, size: 26, font, color: rgb(0, 0, 0),
+    });
+  }
+  return doc.save();
+}
+
+const pad = (bytes: number[], size = 4096) =>
+  Uint8Array.from([...bytes, ...new Array(size - bytes.length).fill(0x41)]);
+
+const DWG_BYTES = pad([...Buffer.from('AC1032', 'latin1')]);
+const ZIP_BYTES = pad([0x50, 0x4b, 0x03, 0x04]);
+const RVT_BYTES = pad([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+
+beforeAll(async () => {
+  await withRawActorContext(OWNER_RAW, async (tx) => {
+    await tx.insert(users).values([
+      { id: ids.owner, email: `p3-owner+${suffix}@test.local`, passwordHash: 'x', role: 'OWNER', status: 'ACTIVE', displayName: 'Owner' },
+      { id: ids.engineerUser, email: `p3-eng+${suffix}@test.local`, passwordHash: 'x', role: 'CONTRIBUTOR', status: 'ACTIVE', displayName: 'Engineer' },
+    ]);
+    await tx.insert(contributors).values({
+      id: ids.contributor, userId: ids.engineerUser, publicSlug: `p3-eng-${suffix}`,
+      settlementCode: `P3E${suffix}`, displayName: 'Engineer', isActive: true,
+    });
+    await tx.insert(disciplines).values({
+      id: ids.discipline, slug: `p3-disc-${suffix}`, nameAr: 'تخصص', nameEn: 'T', sortOrder: 98,
+    });
+    await tx.insert(products).values([
+      { id: ids.pdfProduct, slug: slugs.pdf, titleAr: 'كتاب PDF', disciplineId: ids.discipline, fileType: 'PDF', status: 'APPROVED', currency: 'USD' },
+      { id: ids.dwgProduct, slug: slugs.dwg, titleAr: 'مخطط أوتوكاد', disciplineId: ids.discipline, fileType: 'CAD', status: 'APPROVED', currency: 'USD' },
+      { id: ids.zipProduct, slug: slugs.zip, titleAr: 'مشروع مضغوط', disciplineId: ids.discipline, fileType: 'ARCHIVE', status: 'APPROVED', currency: 'USD' },
+    ]);
+    for (const productId of [ids.pdfProduct, ids.dwgProduct, ids.zipProduct]) {
+      await tx.insert(productContributors).values({ productId, contributorId: ids.contributor, shareBp: 10000 });
+      await tx.insert(productPrices).values({ productId, amountMinor: 1000n, currency: 'USD' });
+    }
+  });
+}, 60_000);
+
+afterAll(async () => {
+  await withRawActorContext(OWNER_RAW, async (tx) => {
+    await tx.delete(products).where(sql`id IN (${ids.pdfProduct}, ${ids.dwgProduct}, ${ids.zipProduct})`);
+    await tx.delete(disciplines).where(eq(disciplines.id, ids.discipline));
+    await tx.delete(contributors).where(eq(contributors.id, ids.contributor));
+    await tx.delete(users).where(sql`id IN (${ids.owner}, ${ids.engineerUser})`);
+  });
+  await closeDb();
+});
+
+describe('1. PDF ingest produces a private original and a public preview', () => {
+  it('stores the original and derives a 5-page preview', async () => {
+    const result = await ingestProductFile(owner, {
+      productId: ids.pdfProduct,
+      filename: 'handbook.pdf',
+      declaredType: 'PDF',
+      body: await buildPdf(60),
+      contentType: 'application/pdf',
+    });
+
+    expect(result.pageCount).toBe(60);
+    expect(result.previewPageCount).toBe(5);
+    expect(result.previewFileId).not.toBeNull();
+    expect(result.scanStatus).toBe('SKIPPED'); // no scanner configured locally
+  }, 120_000);
+
+  it('records both files with random, unguessable storage keys', async () => {
+    const files = await withRawActorContext(OWNER_RAW, (tx) =>
+      tx.select().from(productFiles).where(eq(productFiles.productId, ids.pdfProduct)),
+    );
+    expect(files.map((f) => f.role).sort()).toEqual(['ORIGINAL', 'PREVIEW']);
+    for (const file of files) {
+      // The key must not contain the title or the uploaded filename.
+      expect(file.storageKey).not.toContain('handbook');
+      expect(file.storageKey).toMatch(/^(original|preview)\/[0-9a-f]{2}\/[0-9a-f-]{36}$/);
+    }
+  });
+});
+
+describe('2. the formats the owner asked for', () => {
+  it('accepts a DWG drawing, and derives no preview for it', async () => {
+    const result = await ingestProductFile(owner, {
+      productId: ids.dwgProduct, filename: 'floorplan.dwg', declaredType: 'CAD',
+      body: DWG_BYTES, contentType: 'image/vnd.dwg',
+    });
+    expect(result.previewFileId).toBeNull();
+    expect(result.pageCount).toBeNull();
+  });
+
+  it('accepts a compressed archive', async () => {
+    const result = await ingestProductFile(owner, {
+      productId: ids.zipProduct, filename: 'project.zip', declaredType: 'ARCHIVE',
+      body: ZIP_BYTES, contentType: 'application/zip',
+    });
+    expect(result.previewFileId).toBeNull();
+  });
+
+  it('accepts a Revit model declared as such', async () => {
+    const result = await ingestProductFile(owner, {
+      productId: ids.dwgProduct, filename: 'tower.rvt', declaredType: 'REVIT_BIM',
+      body: RVT_BYTES, contentType: 'application/octet-stream',
+    });
+    expect(result.previewFileId).toBeNull();
+  });
+
+  it('refuses an executable wearing a Revit extension', async () => {
+    await expect(
+      ingestProductFile(owner, {
+        productId: ids.dwgProduct, filename: 'evil.rvt', declaredType: 'REVIT_BIM',
+        body: pad([0x7f, 0x45, 0x4c, 0x46]), contentType: 'application/octet-stream',
+      }),
+    ).rejects.toThrow();
+  });
+
+  it('refuses an upload from anyone but the owner', async () => {
+    await expect(
+      ingestProductFile(engineer, {
+        productId: ids.pdfProduct, filename: 'x.pdf', declaredType: 'PDF',
+        body: await buildPdf(2), contentType: 'application/pdf',
+      }),
+    ).rejects.toThrow(RuleViolationError);
+  }, 30_000);
+});
+
+/**
+ * THE RULE THE WHOLE PHASE EXISTS FOR.
+ */
+describe('3. the public reaches the preview and never the original', () => {
+  beforeAll(async () => {
+    await changeProductStatus(owner, { productId: ids.pdfProduct, to: 'PUBLISHED' });
+  }, 30_000);
+
+  it('lets an anonymous visitor fetch the preview', async () => {
+    const result = await deliverProductFile(GUEST, { productSlug: slugs.pdf, role: 'PREVIEW' });
+    expect(result.grant.kind).toBe('stream');
+    if (result.grant.kind !== 'stream') return;
+    expect(Buffer.from(result.grant.body.subarray(0, 5)).toString()).toBe('%PDF-');
+  });
+
+  it('REFUSES an anonymous visitor the original', async () => {
+    await expect(
+      deliverProductFile(GUEST, { productSlug: slugs.pdf, role: 'ORIGINAL' }),
+    ).rejects.toThrow(NotFoundError);
+  });
+
+  it('refuses a signed-in contributor another product they are not credited on', async () => {
+    const stranger: Actor = { ...base, userId: randomUUID(), role: 'CONTRIBUTOR', contributorId: randomUUID(), contributorActive: true };
+    await expect(
+      deliverProductFile(stranger, { productSlug: slugs.pdf, role: 'ORIGINAL' }),
+    ).rejects.toThrow(NotFoundError);
+  });
+
+  it('allows the credited contributor and the owner', async () => {
+    await expect(
+      deliverProductFile(engineer, { productSlug: slugs.pdf, role: 'ORIGINAL' }),
+    ).resolves.toBeDefined();
+    await expect(
+      deliverProductFile(owner, { productSlug: slugs.pdf, role: 'ORIGINAL' }),
+    ).resolves.toBeDefined();
+  });
+
+  it('hides even the preview once the product is unpublished', async () => {
+    await changeProductStatus(owner, { productId: ids.pdfProduct, to: 'UNPUBLISHED' });
+    await expect(
+      deliverProductFile(GUEST, { productSlug: slugs.pdf, role: 'PREVIEW' }),
+    ).rejects.toThrow(NotFoundError);
+    await changeProductStatus(owner, { productId: ids.pdfProduct, to: 'PUBLISHED' });
+  }, 30_000);
+
+  it('the delivered preview carries no text from any withheld page', async () => {
+    const result = await deliverProductFile(GUEST, { productSlug: slugs.pdf, role: 'PREVIEW' });
+    if (result.grant.kind !== 'stream') throw new Error('expected a stream');
+    const raw = Buffer.from(result.grant.body).toString('latin1');
+    for (let page = 6; page <= 60; page += 1) {
+      expect(raw.includes(`PAGE-${page}`), `page ${page} leaked`).toBe(false);
+    }
+  });
+});
+
+describe('4. every delivery of an original leaves a trail', () => {
+  it('records who took it and why it was permitted', async () => {
+    await deliverProductFile(owner, {
+      productSlug: slugs.pdf, role: 'ORIGINAL', ip: '203.0.113.9', userAgent: 'test-agent',
+    });
+
+    const events = await withRawActorContext(OWNER_RAW, (tx) =>
+      tx.select().from(downloadEvents).orderBy(sql`created_at DESC`).limit(5),
+    );
+    const mine = events.filter((e) => e.userId === ids.owner);
+    expect(mine.length).toBeGreaterThan(0);
+    expect(mine[0]?.grantReason).toBe('OWNER');
+    // The address is hashed, never stored raw.
+    expect(mine[0]?.ipHash).not.toBe('203.0.113.9');
+    expect(mine[0]?.ipHash).toMatch(/^[0-9a-f]{32}$/);
+  });
+
+  it('records nothing for a preview fetch — previews are public', async () => {
+    const before = await withRawActorContext(OWNER_RAW, (tx) =>
+      tx.select({ c: sql<number>`count(*)::int` }).from(downloadEvents),
+    );
+    await deliverProductFile(GUEST, { productSlug: slugs.pdf, role: 'PREVIEW' });
+    const after = await withRawActorContext(OWNER_RAW, (tx) =>
+      tx.select({ c: sql<number>`count(*)::int` }).from(downloadEvents),
+    );
+    expect(Number(after[0]?.c)).toBe(Number(before[0]?.c));
+  });
+});

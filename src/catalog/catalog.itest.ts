@@ -5,7 +5,7 @@ import { withRawActorContext } from '@/db/actor-context';
 import { closeDb } from '@/db';
 import {
   auditLogs, contributors, disciplines, notifications,
-  productContributors, productPrices, products, users,
+  productContributors, productFiles, productPrices, products, users,
 } from '@/db/schema';
 import { changeProductPrice, changeProductStatus, setProductContributors } from './products';
 import { productBySlug } from './public-queries';
@@ -70,6 +70,29 @@ beforeAll(async () => {
       { productId: ids.productA, amountMinor: 1000n, currency: 'USD' },
       { productId: ids.productB, amountMinor: 2000n, currency: 'USD' },
     ]);
+
+    // Since phase P3 the publication gate requires a scanned original, and a
+    // preview for PDF products. Attaching them here keeps this suite focused
+    // on the workflow rather than on the media pipeline, which has its own.
+    const now = new Date();
+    for (const [index, productId] of [ids.productA, ids.productB].entries()) {
+      await tx.insert(productFiles).values([
+        {
+          productId, role: 'ORIGINAL',
+          storageKey: `original/${String(index).padStart(2, '0')}/${randomUUID()}`,
+          bucket: 'originals', originalFilename: 'doc.pdf', contentType: 'application/pdf',
+          container: 'PDF', byteSize: 1024n, sha256: 'x'.repeat(64), pageCount: 40,
+          scanStatus: 'CLEAN', scannedAt: now,
+        },
+        {
+          productId, role: 'PREVIEW',
+          storageKey: `preview/${String(index).padStart(2, '0')}/${randomUUID()}`,
+          bucket: 'derivatives', originalFilename: 'preview-doc.pdf',
+          contentType: 'application/pdf', container: 'PDF', byteSize: 512n,
+          sha256: 'y'.repeat(64), pageCount: 5, scanStatus: 'CLEAN', scannedAt: now,
+        },
+      ]);
+    }
   });
 });
 

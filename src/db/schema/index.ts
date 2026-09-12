@@ -9,3 +9,4 @@ export * from './identity';
 export * from './audit';
 export * from './catalog';
 export * from './notifications';
+export * from './media';

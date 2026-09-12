@@ -41,6 +41,8 @@ const schema = z.object({
   SESSION_SECRET: base64Key('SESSION_SECRET'),
   CONFIG_ENCRYPTION_KEY: base64Key('CONFIG_ENCRYPTION_KEY'),
 
+  // Either an S3-compatible https endpoint, or file://<path> to select the
+  // filesystem adapter for local development (refused in production).
   STORAGE_ENDPOINT: urlLike('STORAGE_ENDPOINT'),
   STORAGE_REGION: nonEmpty('STORAGE_REGION'),
   STORAGE_ACCESS_KEY_ID: nonEmpty('STORAGE_ACCESS_KEY_ID'),
@@ -55,6 +57,13 @@ const schema = z.object({
   PLATFORM_TIMEZONE: nonEmpty('PLATFORM_TIMEZONE').default('Asia/Damascus'),
   PLATFORM_BASE_CURRENCY: z.string().regex(/^[A-Z]{3}$/).default('USD'),
   DEFAULT_LOCALE: z.enum(['ar', 'en']).default('ar'),
+
+  // Specification §26: five pages. Held as configuration because §26 calls it
+  // a policy the owner may revisit, not a constant.
+  PREVIEW_PAGE_COUNT: z.coerce.number().int().min(1).max(50).default(5),
+
+  // Explicit: running without a scanner must be a recorded decision.
+  MALWARE_SCANNER: z.enum(['none', 'clamav']).default('none'),
 });
 
 export type ServerEnv = z.infer<typeof schema>;

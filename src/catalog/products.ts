@@ -1,6 +1,9 @@
 import 'server-only';
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
-import { products, productPrices, productContributors } from '@/db/schema';
+import { products, productPrices, productContributors, productFiles } from '@/db/schema';
+import { serverEnv } from '@/lib/config/env';
+import { supportsPreview } from '@/media/file-types';
+import { isServable } from '@/media/scanner';
 import { withActor, type Transaction } from '@/db/actor-context';
 import { recordAudit } from '@/audit/log';
 import { authorize } from '@/authz/policy';
@@ -208,12 +211,28 @@ async function publishReadiness(tx: Transaction, productId: string): Promise<Pub
 
   const price = await currentPrice(tx, productId);
 
+  const [product] = await tx
+    .select({ fileType: products.fileType })
+    .from(products)
+    .where(eq(products.id, productId))
+    .limit(1);
+
+  const files = await tx
+    .select({ role: productFiles.role, scanStatus: productFiles.scanStatus })
+    .from(productFiles)
+    .where(eq(productFiles.productId, productId));
+
+  const original = files.find((f) => f.role === 'ORIGINAL');
+  const isProduction = serverEnv().NODE_ENV === 'production';
+
   return {
     hasContributor: (credits?.count ?? 0) > 0,
     hasCurrentPrice: price !== null,
-    // Media arrives in phase P3; until then these are not yet gating.
-    hasOriginalFile: true,
-    hasPreview: true,
+    hasOriginalFile: original !== undefined,
+    hasPreview: files.some((f) => f.role === 'PREVIEW'),
+    // Owner decision: a preview exists for PDF and for nothing else.
+    requiresPreview: product ? supportsPreview(product.fileType) : false,
+    fileIsServable: original ? isServable(original.scanStatus, isProduction) : false,
   };
 }
 

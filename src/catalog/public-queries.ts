@@ -2,7 +2,7 @@ import 'server-only';
 import { and, desc, eq, isNull, or, ilike, sql } from 'drizzle-orm';
 import { withActor } from '@/db/actor-context';
 import { GUEST } from '@/authz/actor';
-import { categories, disciplines, productPrices, products } from '@/db/schema';
+import { categories, disciplines, productFiles, productPrices, products } from '@/db/schema';
 
 /**
  * ===========================================================================
@@ -44,6 +44,11 @@ export interface PublicProductDetail extends PublicProductCard {
   readonly language: string;
   readonly softwareTags: readonly string[];
   readonly authors: readonly PublicAuthor[];
+  /** Whether a public preview exists. PDF only, by the owner's decision. */
+  readonly hasPreview: boolean;
+  /** Pages in the preview, and in the source — both public facts. */
+  readonly previewPageCount: number | null;
+  readonly totalPageCount: number | null;
 }
 
 export interface PublicDiscipline {
@@ -220,6 +225,16 @@ export async function productBySlug(slug: string): Promise<PublicProductDetail |
       specialization: string | null;
     }>;
 
+    // RLS decides what resolves here: a PREVIEW row of a published product is
+    // public, an ORIGINAL row is not, so this query cannot see one.
+    const files = await tx
+      .select({ role: productFiles.role, pageCount: productFiles.pageCount })
+      .from(productFiles)
+      .where(eq(productFiles.productId, row.id));
+
+    const preview = files.find((f) => f.role === 'PREVIEW');
+    const original = files.find((f) => f.role === 'ORIGINAL');
+
     return {
       ...toCard(row),
       descriptionAr: row.descriptionAr,
@@ -230,6 +245,9 @@ export async function productBySlug(slug: string): Promise<PublicProductDetail |
         displayName: a.display_name,
         specialization: a.specialization,
       })),
+      hasPreview: preview !== undefined,
+      previewPageCount: preview?.pageCount ?? null,
+      totalPageCount: original?.pageCount ?? null,
     };
   });
 }
