@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation';
 import { SiteHeader, SiteFooter } from '@/components/site-chrome';
 import { LoginForm } from '@/components/login-form';
 import { currentActor } from '@/auth/current';
+import { safeReturnPath } from '@/auth/return-path';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,7 +19,7 @@ export default async function LoginPage({
   const { next } = await searchParams;
 
   const actor = await currentActor();
-  if (actor.kind === 'USER') redirect(next?.startsWith('/') ? next : '/account');
+  if (actor.kind === 'USER') redirect(safeReturnPath(next));
 
   return (
     <>

@@ -5,9 +5,15 @@ const withNextIntl = createNextIntlPlugin('./src/i18n/request.ts');
 
 /**
  * Security headers applied to every response.
- * CSP is intentionally strict: no `unsafe-eval`, no wildcard sources.
- * `unsafe-inline` for styles is required by Next's streaming style injection;
- * scripts use nonces in production (see middleware, phase P1).
+ *
+ * The Content-Security-Policy is NOT here: it carries a per-response nonce, so
+ * it can only be built where the response is — `src/proxy.ts`, from
+ * `src/lib/security/csp.ts`. These are the headers whose value is the same for
+ * every response and therefore safe to declare statically.
+ *
+ * X-Frame-Options duplicates the CSP's `frame-ancestors 'none'` on purpose:
+ * the two are read by different browser generations, and API responses (which
+ * the proxy's matcher skips) are covered by this list alone.
  */
 const securityHeaders = [
   { key: 'X-Content-Type-Options', value: 'nosniff' },

@@ -6,6 +6,7 @@ import { currentActor } from '@/auth/current';
 import { getStorage } from '@/media/storage';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
+import { isUuid } from '@/lib/uuid';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,6 +26,12 @@ export async function GET(
   context: { params: Promise<{ proofId: string }> },
 ) {
   const { proofId } = await context.params;
+
+  // A path segment that is not a uuid cannot name a proof. Refused here, so it
+  // never reaches a query that would raise rather than return nothing.
+  if (!isUuid(proofId)) {
+    return NextResponse.json({ error: 'NOT_FOUND' }, { status: 404 });
+  }
 
   try {
     const actor = await currentActor();

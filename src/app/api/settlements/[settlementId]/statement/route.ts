@@ -5,10 +5,9 @@ import { statementDocument } from '@/settlements/queries';
 import { renderStatementPdf } from '@/settlements/statement-pdf';
 import { getPublicSettings } from '@/platform/settings';
 import { logger } from '@/lib/logger';
+import { isUuid } from '@/lib/uuid';
 
 export const dynamic = 'force-dynamic';
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * The monthly settlement statement, as a PDF (owner decision).
@@ -29,7 +28,7 @@ export async function GET(
 ) {
   const { settlementId } = await context.params;
 
-  if (!UUID.test(settlementId)) {
+  if (!isUuid(settlementId)) {
     return NextResponse.json({ error: 'NOT_FOUND' }, { status: 404 });
   }
 

@@ -6,6 +6,7 @@ import { PaymentMethodPicker, ProofUploadForm } from '@/components/commerce-form
 import { formatPrice } from '@/components/product-card';
 import { requireActor } from '@/auth/current';
 import { checkoutView } from '@/commerce/queries';
+import { isUuid } from '@/lib/uuid';
 
 export const dynamic = 'force-dynamic';
 
@@ -35,6 +36,11 @@ export default async function CheckoutPage({
 }) {
   const { locale, orderId } = await params;
   setRequestLocale(locale);
+
+  // Before anything else, and before the sign-in redirect: a path segment that
+  // is not a uuid names no order, and must not be carried into a query (where
+  // PostgreSQL would raise) nor into the `next` parameter of a login link.
+  if (!isUuid(orderId)) notFound();
 
   const actor = await requireActor(`/checkout/${orderId}`);
   const view = await checkoutView(actor, orderId);

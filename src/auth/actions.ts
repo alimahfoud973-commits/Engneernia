@@ -2,6 +2,7 @@
 
 import { cookies, headers } from 'next/headers';
 import { redirect } from 'next/navigation';
+import { safeReturnPath } from './return-path';
 import { z } from 'zod';
 import { attemptLogin } from './login';
 import {
@@ -10,6 +11,7 @@ import {
 import { RateLimitedError } from '@/lib/rate-limit';
 import { serverEnv } from '@/lib/config/env';
 import { logger } from '@/lib/logger';
+import { waitLabelAr } from '@/lib/duration-ar';
 
 /**
  * Authentication server actions.
@@ -54,7 +56,16 @@ export async function loginAction(
     });
   } catch (error) {
     if (error instanceof RateLimitedError) {
-      return { error: 'محاولات كثيرة. انتظر قليلاً ثم أعد المحاولة.' };
+      /**
+       * Say how long, not just "later".
+       *
+       * A refusal with no remedy in it reads as a broken site, and the person
+       * most likely to see this message is the legitimate owner of the account
+       * who mistyped a password a few times — not the attacker the limit is
+       * for. The number costs nothing: an attacker already learns the window
+       * by measuring it.
+       */
+      return { error: `محاولات كثيرة. أعد المحاولة بعد ${waitLabelAr(error.retryAfterSeconds)}.` };
     }
     logger.error({ err: error }, 'Login failed unexpectedly');
     return { error: 'تعذّر إتمام تسجيل الدخول' };
@@ -80,7 +91,9 @@ export async function loginAction(
     }
   }
 
-  const destination = parsed.data.next?.startsWith('/') ? parsed.data.next : '/account';
+  // Validated, never merely prefix-checked: `//evil.com` starts with a slash
+  // and is a protocol-relative URL. See src/auth/return-path.ts.
+  const destination = safeReturnPath(parsed.data.next);
   redirect(destination);
 }
 

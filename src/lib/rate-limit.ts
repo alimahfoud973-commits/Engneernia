@@ -54,7 +54,24 @@ export async function consumeRateLimit(
   const key = bucketKey(scope, value);
   const client = getSql();
 
-  const rows = await client<Array<{ hits: number; window_started_at: Date }>>`
+  /**
+   * THE RETRY TIME IS COMPUTED BY POSTGRESQL, NOT BY JAVASCRIPT.
+   *
+   * This used to return `window_started_at` and subtract it from `Date.now()`.
+   * It threw at runtime — `window_started_at.getTime is not a function` —
+   * because building the Drizzle client installs type parsers on this same
+   * postgres.js connection that hand timestamps back as STRINGS (see the note
+   * in `src/db/index.ts`). The generic on this call said `Date`; TypeScript
+   * believed it; nothing checked. The limit therefore worked and REFUSING an
+   * attempt crashed, which turned "try again in 4 minutes" into a generic
+   * failure and a stack trace in the operator's log.
+   *
+   * Asking the database for the number removes the parsing question entirely,
+   * and along with it a second, quieter bug: the window is stamped by the
+   * database clock, so measuring the elapsed time with the APPLICATION's clock
+   * was wrong by whatever the two machines disagree by.
+   */
+  const rows = await client<Array<{ hits: number; retry_after_seconds: number }>>`
     INSERT INTO rate_limit_buckets (key, window_started_at, hits)
     VALUES (${key}, now(), 1)
     ON CONFLICT (key) DO UPDATE SET
@@ -70,16 +87,27 @@ export async function consumeRateLimit(
         THEN now()
         ELSE rate_limit_buckets.window_started_at
       END
-    RETURNING hits, window_started_at
+    RETURNING
+      hits,
+      GREATEST(
+        1,
+        CEIL(
+          EXTRACT(
+            EPOCH FROM (
+              rate_limit_buckets.window_started_at
+                + make_interval(secs => ${rule.windowSeconds})
+                - now()
+            )
+          )
+        )
+      )::int AS retry_after_seconds
   `;
 
   const row = rows[0];
   if (!row) return;
 
   if (row.hits > rule.limit) {
-    const elapsed = (Date.now() - row.window_started_at.getTime()) / 1000;
-    const retryAfter = Math.max(1, Math.ceil(rule.windowSeconds - elapsed));
-    throw new RateLimitedError(retryAfter);
+    throw new RateLimitedError(row.retry_after_seconds);
   }
 }
 
