@@ -79,6 +79,17 @@ export function renderNotification(
     }
 
     /** Historical: no sale is reversed any more. */
+    case 'BALANCE_ADJUSTED': {
+      const amount = money(payload, 'amountMinor');
+      const increase = payload.direction === 'INCREASE';
+      return {
+        title: increase ? 'أُضيف مبلغ إلى رصيدك' : 'خُصم مبلغ من رصيدك',
+        detail: [amount, text(payload, 'note')].filter(Boolean).join(' — ') || null,
+        href: '/account/earnings',
+        tone: increase ? 'good' : 'warn',
+      };
+    }
+
     case 'SALE_REVERSED':
       return {
         title: product ? `استُرجعت عملية بيع «${product}»` : 'استُرجعت إحدى عمليات البيع',

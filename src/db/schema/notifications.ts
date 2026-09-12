@@ -32,6 +32,8 @@ export const notificationTypeEnum = pgEnum('notification_type', [
    * Distinct from ORDER_PAID, which is the buyer's message about their order.
    */
   'PRODUCT_SOLD',
+  /** An owner correction moved this engineer's balance (OPEN-21). */
+  'BALANCE_ADJUSTED',
 ]);
 
 /**

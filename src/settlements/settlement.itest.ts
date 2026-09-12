@@ -418,7 +418,7 @@ describe('SEPTEMBER — a debit lands after its month was settled', () => {
     expect(row!.carriedForwardMinor).toBe(0n);
   });
 
-  it('the statement shows the sale, and the detail adds up', async () => {
+  it('the statement itemises the sale AND the correction', async () => {
     const row = await settlementRow('2026-09');
     const lines = await withRawActorContext(OWNER_RAW, (tx) =>
       tx.select().from(settlementLines)
@@ -428,9 +428,15 @@ describe('SEPTEMBER — a debit lands after its month was settled', () => {
     expect(lines.filter((line) => line.kind === 'SALE')).toHaveLength(1);
     // No refund lines can exist any more: the platform issues none.
     expect(lines.filter((line) => line.kind === 'REFUND')).toHaveLength(0);
-    // The sale detail matches the period's SALES, and the adjustment is
-    // reported separately rather than as a statement line.
-    expect(lines.reduce((total, line) => total + line.engineerMinor, 0n)).toBe(1600n);
+
+    // The correction appears as its own line rather than only as a total, so
+    // the engineer can see WHY the month is short (OPEN-21).
+    const corrections = lines.filter((line) => line.kind === 'ADJUSTMENT');
+    expect(corrections).toHaveLength(1);
+    expect(corrections[0]!.engineerMinor).toBe(-3200n);
+
+    // And the detail adds up to the month's movement: +16.00 − 32.00.
+    expect(lines.reduce((total, line) => total + line.engineerMinor, 0n)).toBe(-1600n);
   });
 
   it('AUGUST\'s paid statement is untouched by the later correction', async () => {

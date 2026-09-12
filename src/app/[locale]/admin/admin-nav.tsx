@@ -11,6 +11,7 @@ const LINKS = [
   { href: '/admin/payments', label: 'المدفوعات' },
   { href: '/admin/settlements', label: 'التسوية الشهرية' },
   { href: '/admin/finance', label: 'التقرير المالي' },
+  { href: '/admin/adjustments', label: 'قيود التصحيح' },
 ] as const;
 
 export function AdminNav({ current }: { current: string }) {

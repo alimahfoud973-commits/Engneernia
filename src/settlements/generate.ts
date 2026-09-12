@@ -163,7 +163,7 @@ async function readLedgerTotals(
   }));
 }
 
-/** The sales behind the statement, for the engineer to read (§18). */
+/** The sales and corrections behind the statement, for the engineer (§18). */
 async function readStatementDetail(
   tx: Transaction,
   contributorId: string,
@@ -182,16 +182,35 @@ async function readStatementDetail(
    * the totals cannot disagree about which month something belongs to.
    */
   const rows = (await tx.execute(sql`
-    SELECT o.paid_at AS occurred_at, oi.title_snapshot AS title,
+    SELECT 'SALE'::text AS kind, o.paid_at AS occurred_at, oi.title_snapshot AS title,
            oi.currency, oi.unit_price_minor::text AS gross,
-           oic.amount_minor::text AS engineer
+           oic.amount_minor::text AS engineer, NULL::text AS note
       FROM order_item_contributors oic
       JOIN order_items oi ON oi.id = oic.order_item_id
       JOIN orders o       ON o.id = oi.order_id
      WHERE oic.contributor_id = ${contributorId}
        AND o.paid_at IS NOT NULL
        AND to_char(timezone(app_accounting_timezone(), o.paid_at), 'YYYY-MM') = ${periodKey}
-     ORDER BY o.paid_at
+
+     UNION ALL
+
+    /*
+     * Owner corrections (OPEN-21). Read from the LEDGER LINE, not from the
+     * financial_adjustments table — that table is owner-only, and a statement
+     * is generated for the engineer. The line carries the reference and the
+     * public reason in its memo, which is exactly what the engineer should
+     * see: a balance that moves with no visible entry is the thing the
+     * adjustment feature exists to avoid.
+     */
+    SELECT 'ADJUSTMENT'::text, l.occurred_at, 'تصحيح مالي',
+           l.currency, '0'::text, (-l.amount_minor)::text, l.memo
+      FROM ledger_lines l
+     WHERE l.account_code = ${LEDGER_ACCOUNTS.ENGINEER_PAYABLE}
+       AND l.contributor_id = ${contributorId}
+       AND l.kind = 'ADJUSTMENT'
+       AND l.period_key = ${periodKey}
+
+     ORDER BY 2
   `)) as unknown as Array<Record<string, string>>;
 
   const lines: Array<typeof settlementLines.$inferInsert> = [];
@@ -200,20 +219,24 @@ async function readStatementDetail(
 
   for (const row of rows) {
     const gross = BigInt(row.gross!);
-    grossSalesMinor += gross;
-    unitsSold += 1;
+    const isSale = row.kind === 'SALE';
+
+    if (isSale) {
+      grossSalesMinor += gross;
+      unitsSold += 1;
+    }
 
     lines.push({
       settlementId: '',
-      // Sales only. The platform issues no refunds (owner decision), so a
-      // statement line can only ever be a sale or the balancing ADJUSTMENT
-      // below.
-      kind: 'SALE',
+      // Sales and owner corrections. There are no refund lines: the platform
+      // issues none.
+      kind: isSale ? 'SALE' : 'ADJUSTMENT',
       occurredAt: requireDate(row.occurred_at!, 'occurred_at'),
       productTitle: row.title!,
       currency: row.currency!,
       grossMinor: gross,
       engineerMinor: BigInt(row.engineer!),
+      note: row.note ?? null,
     });
   }
 
@@ -319,7 +342,9 @@ export async function generateSettlements(
        * line the engineer can see and ask about.
        */
       const detailSum = detail.lines.reduce((total, line) => total + line.engineerMinor, 0n);
-      const expectedDetail = periodMovement - row.periodAdjustmentsMinor;
+      // The detail now itemises corrections as well as sales, so it is
+      // compared against the whole period movement rather than sales alone.
+      const expectedDetail = periodMovement;
       const unexplainedMinor = expectedDetail - detailSum;
 
       if (unexplainedMinor !== 0n) {
