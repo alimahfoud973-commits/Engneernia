@@ -206,3 +206,30 @@ describe('5. performance at scale', () => {
     expect(results.tookMs).toBeLessThan(2000);
   });
 });
+
+/**
+ * Page weight is a correctness property once a catalogue reaches scale.
+ *
+ * The discipline portal and the contributor profile used to render EVERY
+ * published product. At 1,253 products a discipline page was 3.2 MB of HTML
+ * and a profile 12.8 MB — unusable on a phone, and entirely invisible until
+ * the catalogue was seeded to the size §30 describes.
+ */
+describe('6. portal and profile pages stay bounded', () => {
+  it('a discipline portal renders a capped preview, not the whole discipline', async () => {
+    const { disciplineBySlug, PORTAL_PREVIEW_LIMIT } = await import('./public-queries');
+    const discipline = await disciplineBySlug('civil');
+    expect(discipline).not.toBeNull();
+    expect(discipline!.products.length).toBeLessThanOrEqual(PORTAL_PREVIEW_LIMIT);
+    // ...while still reporting the true size, and offering the way to it.
+    expect(discipline!.totalProducts).toBeGreaterThan(PORTAL_PREVIEW_LIMIT);
+    expect(discipline!.hasMore).toBe(true);
+  });
+
+  it('a contributor profile renders a capped preview', async () => {
+    const { contributorBySlug, PROFILE_PREVIEW_LIMIT } = await import('./public-queries');
+    const contributor = await contributorBySlug('demo-engineer');
+    if (!contributor) return; // demo data not seeded in this environment
+    expect(contributor.products.length).toBeLessThanOrEqual(PROFILE_PREVIEW_LIMIT);
+  });
+})

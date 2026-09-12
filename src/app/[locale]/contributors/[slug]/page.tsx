@@ -39,13 +39,18 @@ export default async function ContributorPage({
             </p>
           ) : null}
           <p className="text-sm tabular-nums text-[var(--color-ink-faint)]">
-            {contributor.products.length} مورد منشور
+            {contributor.totalProducts} مورد منشور
           </p>
         </header>
 
         <section className="flex flex-col gap-4">
           <h2 className="text-sm font-semibold text-[var(--color-ink-soft)]">الموارد المنشورة</h2>
           <ProductGrid products={contributor.products} />
+          {contributor.hasMore ? (
+            <p className="text-center text-sm text-[var(--color-ink-soft)]">
+              يُعرض {contributor.products.length} من {contributor.totalProducts} مورد.
+            </p>
+          ) : null}
         </section>
       </main>
       <SiteFooter />

@@ -165,6 +165,18 @@ export async function freeProducts(limit = 4): Promise<readonly PublicProductCar
   });
 }
 
+/**
+ * How many products a portal or profile page renders before deferring to
+ * search.
+ *
+ * These pages used to render EVERY published product. At 1,253 products a
+ * discipline page was 3.2 MB of HTML and a contributor profile 12.8 MB —
+ * unusable on a phone, and invisible until the catalogue was seeded to scale.
+ * The rest is one click away in search, which is paginated and indexed.
+ */
+export const PORTAL_PREVIEW_LIMIT = 12;
+export const PROFILE_PREVIEW_LIMIT = 24;
+
 export async function disciplineBySlug(slug: string) {
   return withActor(GUEST, async (tx) => {
     const [discipline] = await tx
@@ -201,12 +213,23 @@ export async function disciplineBySlug(slug: string) {
       .leftJoin(categories, eq(categories.id, products.categoryId))
       .leftJoin(productPrices, withCurrentPrice())
       .where(and(eq(products.disciplineId, discipline.id), eq(products.status, 'PUBLISHED')))
-      .orderBy(desc(products.publishedAt));
+      // Same tiebreaker rule as search: published_at alone is not unique.
+      .orderBy(desc(products.publishedAt), desc(products.id))
+      .limit(PORTAL_PREVIEW_LIMIT);
+
+    const [counted] = await tx
+      .select({ total: sql<number>`count(*)::int` })
+      .from(products)
+      .where(and(eq(products.disciplineId, discipline.id), eq(products.status, 'PUBLISHED')));
+
+    const totalProducts = Number(counted?.total ?? 0);
 
     return {
       ...discipline,
       categories: categoryRows.map((c) => ({ ...c, productCount: Number(c.productCount) })),
       products: productRows.map(toCard),
+      totalProducts,
+      hasMore: totalProducts > productRows.length,
     };
   });
 }
@@ -319,7 +342,10 @@ export interface PublicContributorProfile {
   readonly displayName: string;
   readonly specialization: string | null;
   readonly bio: string | null;
+  /** Capped at PROFILE_PREVIEW_LIMIT; see the note on that constant. */
   readonly products: readonly PublicProductCard[];
+  readonly totalProducts: number;
+  readonly hasMore: boolean;
 }
 
 export async function contributorBySlug(
@@ -344,9 +370,12 @@ export async function contributorBySlug(
     );
     const rows = result as unknown as Array<Record<string, unknown>>;
 
+    const total = rows.length;
     return {
       ...profile,
-      products: rows.map((row) =>
+      totalProducts: total,
+      hasMore: total > PROFILE_PREVIEW_LIMIT,
+      products: rows.slice(0, PROFILE_PREVIEW_LIMIT).map((row) =>
         toCard({
           slug: row.slug,
           titleAr: row.title_ar,

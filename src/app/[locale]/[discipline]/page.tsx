@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { setRequestLocale } from 'next-intl/server';
 import { SiteHeader, SiteFooter } from '@/components/site-chrome';
@@ -68,10 +69,30 @@ export default async function DisciplinePage({
         </section>
 
         <section className="flex flex-col gap-4">
-          <h2 className="text-sm font-semibold text-[var(--color-ink-soft)]">
-            الموارد المنشورة ({discipline.products.length})
-          </h2>
+          <div className="flex flex-wrap items-baseline justify-between gap-3">
+            <h2 className="text-sm font-semibold text-[var(--color-ink-soft)]">
+              الموارد المنشورة (<span className="tabular-nums">{discipline.totalProducts}</span>)
+            </h2>
+            {discipline.hasMore ? (
+              <Link
+                href={`/search?discipline=${discipline.slug}`}
+                className="text-xs text-[var(--color-accent-ink)]"
+              >
+                عرض الكل مع الفلاتر
+              </Link>
+            ) : null}
+          </div>
+
           <ProductGrid products={discipline.products} />
+
+          {discipline.hasMore ? (
+            <Link
+              href={`/search?discipline=${discipline.slug}`}
+              className="self-center rounded-[var(--radius-card)] border border-[var(--color-line-strong)] px-5 py-2.5 text-sm font-semibold transition-colors hover:border-[var(--color-accent)] hover:text-[var(--color-accent-ink)]"
+            >
+              تصفّح جميع موارد {discipline.nameAr}
+            </Link>
+          ) : null}
         </section>
       </main>
       <SiteFooter />
