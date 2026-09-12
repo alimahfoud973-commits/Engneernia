@@ -34,3 +34,7 @@ Thumbs.db
 # logs
 *.log
 npm-debug.log*
+
+# Database backups are never committed: they hold real customer and
+# financial data, and a repository is the wrong place for either.
+/backups/

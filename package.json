@@ -20,6 +20,8 @@
     "db:studio": "drizzle-kit studio",
     "verify": "npm run typecheck && npm run lint && npm run test && npm run build",
     "db:prove-rls": "node scripts/prove-rls.mjs",
+    "backup": "bash scripts/backup.sh",
+    "restore-drill": "bash scripts/restore-drill.sh",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "bootstrap:owner": "node --experimental-strip-types scripts/bootstrap-owner.ts",
     "seed:catalog": "node --experimental-strip-types scripts/seed-catalog.ts",
