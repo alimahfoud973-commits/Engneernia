@@ -53,7 +53,7 @@ export async function SiteHeader() {
             {unread > 0 ? (
               <span
                 aria-label={`${unread} إشعاراً غير مقروء`}
-                className="technical-term inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-[var(--color-accent)] px-1.5 py-0.5 text-[11px] font-bold tabular-nums text-white"
+                className="technical-term inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-[var(--color-accent)] px-1.5 py-0.5 text-[11px] font-bold tabular-nums text-[var(--color-accent-contrast)]"
               >
                 {unread}
               </span>

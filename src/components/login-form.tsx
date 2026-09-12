@@ -60,7 +60,7 @@ export function LoginForm({ next }: { next: string | null }) {
       <button
         type="submit"
         disabled={pending}
-        className="rounded-[var(--radius-card)] bg-[var(--color-accent)] px-5 py-2.5 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-60"
+        className="rounded-[var(--radius-card)] bg-[var(--color-accent)] px-5 py-2.5 text-sm font-semibold text-[var(--color-accent-contrast)] transition-opacity hover:opacity-90 disabled:opacity-60"
       >
         {pending ? 'جارٍ الدخول…' : 'دخول'}
       </button>

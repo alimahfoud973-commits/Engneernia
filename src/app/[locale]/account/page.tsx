@@ -99,7 +99,7 @@ export default async function AccountPage({ params }: { params: Promise<{ locale
                   ) : (
                     <a
                       href={`/api/files/${item.productSlug}/original`}
-                      className="rounded-[var(--radius-card)] bg-[var(--color-accent)] px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90"
+                      className="rounded-[var(--radius-card)] bg-[var(--color-accent)] px-4 py-2 text-sm font-semibold text-[var(--color-accent-contrast)] transition-opacity hover:opacity-90"
                     >
                       تنزيل الملف
                     </a>

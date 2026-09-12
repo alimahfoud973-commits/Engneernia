@@ -68,7 +68,7 @@ export function GenerateSettlementsForm({ defaultPeriod }: { defaultPeriod: stri
         <button
           type="submit"
           disabled={pending}
-          className="rounded-[var(--radius-card)] bg-[var(--color-accent)] px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-60"
+          className="rounded-[var(--radius-card)] bg-[var(--color-accent)] px-4 py-2 text-sm font-semibold text-[var(--color-accent-contrast)] transition-opacity hover:opacity-90 disabled:opacity-60"
         >
           {pending ? 'جارٍ التوليد…' : 'توليد كشوف الفترة'}
         </button>
@@ -97,7 +97,7 @@ export function ApproveSettlementForm({ settlementId }: { settlementId: string }
       <button
         type="submit"
         disabled={pending}
-        className="rounded-[var(--radius-card)] bg-[var(--color-accent)] px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-60"
+        className="rounded-[var(--radius-card)] bg-[var(--color-accent)] px-4 py-2 text-sm font-semibold text-[var(--color-accent-contrast)] transition-opacity hover:opacity-90 disabled:opacity-60"
       >
         {pending ? 'جارٍ الاعتماد…' : 'اعتماد'}
       </button>
@@ -134,7 +134,7 @@ export function PaySettlementForm({
       <button
         type="submit"
         disabled={pending}
-        className="rounded-[var(--radius-card)] bg-[var(--color-accent)] px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-60"
+        className="rounded-[var(--radius-card)] bg-[var(--color-accent)] px-4 py-2 text-sm font-semibold text-[var(--color-accent-contrast)] transition-opacity hover:opacity-90 disabled:opacity-60"
       >
         {pending ? 'جارٍ التسجيل…' : `تسجيل صرف ${amountLabel}`}
       </button>

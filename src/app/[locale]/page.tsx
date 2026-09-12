@@ -57,7 +57,7 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
             />
             <button
               type="submit"
-              className="rounded-[var(--radius-card)] bg-[var(--color-accent)] px-5 py-2.5 text-sm font-semibold text-white transition-opacity hover:opacity-90"
+              className="rounded-[var(--radius-card)] bg-[var(--color-accent)] px-5 py-2.5 text-sm font-semibold text-[var(--color-accent-contrast)] transition-opacity hover:opacity-90"
             >
               بحث
             </button>

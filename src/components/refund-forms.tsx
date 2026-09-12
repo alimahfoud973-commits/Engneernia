@@ -161,7 +161,7 @@ export function RefundDecisionForms({
         <button
           type="submit"
           disabled={approving || rejecting}
-          className="rounded-[var(--radius-card)] bg-[var(--color-accent)] px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-60"
+          className="rounded-[var(--radius-card)] bg-[var(--color-accent)] px-4 py-2 text-sm font-semibold text-[var(--color-accent-contrast)] transition-opacity hover:opacity-90 disabled:opacity-60"
         >
           {approving ? 'جارٍ الاعتماد…' : `اعتماد الاسترجاع ${amountLabel}`}
         </button>

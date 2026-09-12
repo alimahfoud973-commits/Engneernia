@@ -1,40 +1,70 @@
 @import 'tailwindcss';
 
 /**
- * Design tokens.
+ * Design tokens — black, gold and white (owner decision).
  *
- * This is the phase-1 foundation, not the final brand: the platform name,
- * logo and visual direction are still open (OPEN-8). Phase P4 replaces the
- * palette values here; every component reads tokens, so that swap touches
- * this file alone.
+ * Every component reads tokens and never a literal colour, so changing the
+ * brand is this file and nothing else. That is deliberate: the owner asked for
+ * this palette "with the possibility of changing it later" in mind, and the
+ * only way to honour that is to make sure no colour is written anywhere else.
+ *
+ * HOW THE THREE COLOURS DIVIDE THE WORK
+ *   WHITE  carries the page in light mode and the text in dark mode.
+ *   BLACK  carries the text in light mode and the page in dark mode.
+ *   GOLD   is the accent in both, and never the page or the body text — gold
+ *          is unreadable at length and stops meaning anything if it is
+ *          everywhere.
+ *
+ * WHY TWO GOLDS. A gold light enough to read as gold on black is far too light
+ * to sit under white text on a button. So light mode uses a deep gold that
+ * white text can sit on (5.0:1), dark mode uses a bright gold that near-black
+ * text sits on (9.0:1), and `--color-accent-contrast` tells a button which to
+ * use. Nothing hardcodes `text-white` any more; that was a latent bug that
+ * this palette would have made visible.
+ *
+ * Neutrals are warm rather than cool, so white and near-black sit with gold
+ * instead of fighting it.
  *
  * Direction-agnostic by construction: spacing uses logical properties
  * (margin-inline, padding-inline) so the same components serve RTL Arabic
  * today and LTR English when it is added.
  */
 @theme {
-  /* Neutrals — cool graphite, biased very slightly toward the accent. */
-  --color-ground: #f5f7f7;
+  /* Neutrals — warm, so white reads as ivory beside gold rather than blue. */
+  --color-ground: #faf9f6;
   --color-surface: #ffffff;
-  --color-surface-muted: #eceff0;
-  --color-line: #d7dddd;
-  --color-line-strong: #b9c2c2;
-  --color-ink: #121a1b;
-  --color-ink-soft: #556061;
-  --color-ink-faint: #7f8a8b;
+  --color-surface-muted: #f1efe9;
+  --color-line: #e0dbd0;
+  --color-line-strong: #c4bcab;
+  --color-ink: #131210;
+  --color-ink-soft: #57534a;
+  --color-ink-faint: #837d71;
 
-  /* Accent — instrument teal. */
-  --color-accent: #12655c;
-  --color-accent-ink: #0b4a43;
-  --color-accent-soft: #dfeeeb;
+  /*
+   * Accent — gold, and the one colour that differs in KIND between the two
+   * schemes rather than just in lightness.
+   *
+   * A gold light enough to read as gold on black is far too light to sit
+   * under white text. So light mode uses a deep gold under white text
+   * (5.0:1), dark mode a bright gold under near-black text (9.0:1), and
+   * `--color-accent-contrast` carries whichever is correct. Nothing hardcodes
+   * `text-white` any more; that was a latent bug this palette exposed.
+   */
+  --color-accent: #8a6b12;
+  --color-accent-ink: #6b5209;
+  --color-accent-soft: #f6efdc;
+  --color-accent-contrast: #ffffff;
 
-  /* Semantic — kept distinct from the accent so state never reads as brand. */
-  --color-ok: #2b6b43;
-  --color-ok-soft: #e2efe7;
-  --color-warn: #8a6612;
-  --color-warn-soft: #f5eedb;
-  --color-danger: #9d3a1f;
-  --color-danger-soft: #f6e6e0;
+  /*
+   * Semantic — deliberately pushed away from gold's hue. A warning that looks
+   * like the brand colour is a warning nobody notices.
+   */
+  --color-ok: #2f6b41;
+  --color-ok-soft: #e4efe7;
+  --color-warn: #a14a10;
+  --color-warn-soft: #f8e9dd;
+  --color-danger: #a32320;
+  --color-danger-soft: #f8e3e2;
 
   --font-sans: var(--font-plex-arabic), 'Segoe UI', system-ui, sans-serif;
   --font-mono: var(--font-plex-mono), ui-monospace, monospace;
@@ -42,27 +72,45 @@
   --radius-card: 4px;
 }
 
+/*
+ * DARK MODE — black ground, bright gold, warm white text.
+ *
+ * THE SELECTOR IS `:root:root` ON PURPOSE, and three wrong versions preceded
+ * it. The compiled output is what settles this, not the source:
+ *
+ *   `@theme` nested inside the media query — HOISTED OUT by Tailwind, so the
+ *     dark values applied unconditionally and light mode never rendered.
+ *   `:root` inside the media query — same (0,1,0) specificity as the `:root`
+ *     Tailwind emits for `@theme`, which lands LATER in the file and wins.
+ *     The media query matched and changed nothing.
+ *   `light-dark()` inside `@theme` — resolved statically to the light branch
+ *     at build time; the dark value never reached the browser at all.
+ *
+ * `:root:root` is the same element written twice: specificity (0,2,0), which
+ * beats (0,1,0) regardless of source order. `src/app/theme.test.ts` asserts
+ * this structure, because every one of the failures above looked correct in
+ * the source file and was only visible in a browser.
+ */
 @media (prefers-color-scheme: dark) {
-  @theme {
-    --color-ground: #0f1414;
-    --color-surface: #171e1e;
-    --color-surface-muted: #1f2727;
-    --color-line: #2a3333;
-    --color-line-strong: #3a4444;
-    --color-ink: #e6ebea;
-    --color-ink-soft: #9aa5a4;
-    --color-ink-faint: #75807f;
-
-    --color-accent: #4fb9a9;
-    --color-accent-ink: #8ed7cb;
-    --color-accent-soft: #13302c;
-
-    --color-ok: #79c092;
+  :root:root {
+    --color-ground: #0b0b0a;
+    --color-surface: #151412;
+    --color-surface-muted: #1e1c19;
+    --color-line: #2b2823;
+    --color-line-strong: #3d3931;
+    --color-ink: #f2efe8;
+    --color-ink-soft: #a8a296;
+    --color-ink-faint: #7d776c;
+    --color-accent: #d4af37;
+    --color-accent-ink: #e3c665;
+    --color-accent-soft: #2a2314;
+    --color-accent-contrast: #14120d;
+    --color-ok: #7fc496;
     --color-ok-soft: #17281d;
-    --color-warn: #d5b35c;
-    --color-warn-soft: #2d2616;
-    --color-danger: #df8e6d;
-    --color-danger-soft: #32201a;
+    --color-warn: #e0975c;
+    --color-warn-soft: #2e1f14;
+    --color-danger: #e58a86;
+    --color-danger-soft: #2f1918;
   }
 }
 

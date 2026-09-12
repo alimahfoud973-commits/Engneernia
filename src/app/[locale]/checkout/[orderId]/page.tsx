@@ -94,7 +94,7 @@ export default async function CheckoutPage({
             <p className="text-sm">الملفات متاحة الآن في حسابك.</p>
             <Link
               href="/account"
-              className="w-fit rounded-[var(--radius-card)] bg-[var(--color-accent)] px-4 py-2 text-sm font-semibold text-white"
+              className="w-fit rounded-[var(--radius-card)] bg-[var(--color-accent)] px-4 py-2 text-sm font-semibold text-[var(--color-accent-contrast)]"
             >
               الذهاب إلى مشترياتي
             </Link>

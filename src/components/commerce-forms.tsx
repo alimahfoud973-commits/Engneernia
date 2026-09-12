@@ -28,7 +28,7 @@ export function BuyButton({ slug, label }: { slug: string; label: string }) {
       <button
         type="submit"
         disabled={pending}
-        className="rounded-[var(--radius-card)] bg-[var(--color-accent)] px-4 py-2.5 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-60"
+        className="rounded-[var(--radius-card)] bg-[var(--color-accent)] px-4 py-2.5 text-sm font-semibold text-[var(--color-accent-contrast)] transition-opacity hover:opacity-90 disabled:opacity-60"
       >
         {pending ? 'جارٍ التجهيز…' : label}
       </button>
@@ -89,7 +89,7 @@ export function PaymentMethodPicker({
       <button
         type="submit"
         disabled={pending}
-        className="self-start rounded-[var(--radius-card)] bg-[var(--color-accent)] px-5 py-2.5 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-60"
+        className="self-start rounded-[var(--radius-card)] bg-[var(--color-accent)] px-5 py-2.5 text-sm font-semibold text-[var(--color-accent-contrast)] transition-opacity hover:opacity-90 disabled:opacity-60"
       >
         {pending ? 'جارٍ المتابعة…' : 'متابعة'}
       </button>
@@ -149,7 +149,7 @@ export function ProofUploadForm({
       <button
         type="submit"
         disabled={pending}
-        className="self-start rounded-[var(--radius-card)] bg-[var(--color-accent)] px-5 py-2.5 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-60"
+        className="self-start rounded-[var(--radius-card)] bg-[var(--color-accent)] px-5 py-2.5 text-sm font-semibold text-[var(--color-accent-contrast)] transition-opacity hover:opacity-90 disabled:opacity-60"
       >
         {pending ? 'جارٍ الرفع…' : 'إرسال الإيصال'}
       </button>
@@ -179,7 +179,7 @@ export function PaymentDecisionForms({ paymentId }: { paymentId: string }) {
         <button
           type="submit"
           disabled={approving}
-          className="rounded-[var(--radius-card)] bg-[var(--color-ok)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+          className="rounded-[var(--radius-card)] bg-[var(--color-ok)] px-4 py-2 text-sm font-semibold text-[var(--color-accent-contrast)] disabled:opacity-60"
         >
           {approving ? 'جارٍ الاعتماد…' : 'اعتماد الدفع ومنح الوصول'}
         </button>
