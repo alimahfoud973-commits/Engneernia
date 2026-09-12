@@ -230,3 +230,74 @@ export async function outstandingPayables(
     });
   });
 }
+
+export interface ContributorRevenue {
+  readonly contributorId: string;
+  readonly contributorName: string | null;
+  readonly currency: string;
+  readonly unitsSold: number;
+  readonly unitsRefunded: number;
+  readonly grossMinor: bigint;
+  readonly engineerMinor: bigint;
+  readonly platformMinor: bigint;
+}
+
+/**
+ * Sales by contributor (specification §19: "The owner should see all
+ * engineers"), for one accounting month or for all time.
+ *
+ * OWNER-ONLY, and the one report in this file with no contributor-facing
+ * counterpart: seeing every engineer's figures side by side is precisely the
+ * comparison §12 exists to keep away from the engineers themselves.
+ *
+ * Read from the frozen order lines, with refunded lines counted separately
+ * rather than silently dropped — a discipline or an engineer whose sales are
+ * being reversed is exactly what this screen should make visible.
+ */
+export async function revenueByContributor(
+  actor: Actor,
+  options: { periodKey?: string } = {},
+): Promise<readonly ContributorRevenue[]> {
+  requireOwner(actor);
+
+  return withActor(actor, async (tx) => {
+    const rows = (await tx.execute(sql`
+      SELECT oic.contributor_id,
+             MAX(c.display_name)                                      AS display_name,
+             oi.currency,
+             COUNT(*) FILTER (WHERE oi.refunded_at IS NULL)::int       AS units_sold,
+             COUNT(*) FILTER (WHERE oi.refunded_at IS NOT NULL)::int   AS units_refunded,
+             COALESCE(SUM(oi.unit_price_minor)
+               FILTER (WHERE oi.refunded_at IS NULL), 0)::text         AS gross,
+             COALESCE(SUM(oic.amount_minor)
+               FILTER (WHERE oi.refunded_at IS NULL), 0)::text         AS engineer,
+             COALESCE(SUM(oi.platform_amount_minor)
+               FILTER (WHERE oi.refunded_at IS NULL), 0)::text         AS platform
+        FROM order_item_contributors oic
+        JOIN order_items oi ON oi.id = oic.order_item_id
+        JOIN orders o       ON o.id = oi.order_id
+        LEFT JOIN contributors c ON c.id = oic.contributor_id
+       WHERE oi.snapshot_taken_at IS NOT NULL
+         AND o.paid_at IS NOT NULL
+         AND ${
+           options.periodKey
+             ? sql`to_char(timezone(app_accounting_timezone(), o.paid_at), 'YYYY-MM') = ${options.periodKey}`
+             : sql`true`
+         }
+       GROUP BY oic.contributor_id, oi.currency
+       ORDER BY 6 DESC
+       LIMIT 200
+    `)) as unknown as Array<Record<string, string | number | null>>;
+
+    return rows.map((row) => ({
+      contributorId: row.contributor_id as string,
+      contributorName: (row.display_name as string | null) ?? null,
+      currency: row.currency as string,
+      unitsSold: Number(row.units_sold),
+      unitsRefunded: Number(row.units_refunded),
+      grossMinor: BigInt(row.gross as string),
+      engineerMinor: BigInt(row.engineer as string),
+      platformMinor: BigInt(row.platform as string),
+    }));
+  });
+}

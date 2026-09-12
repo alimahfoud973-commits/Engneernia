@@ -3,7 +3,9 @@ import { SiteHeader, SiteFooter } from '@/components/site-chrome';
 import { AdminNav } from '../admin-nav';
 import { formatMinor } from '@/components/money-display';
 import { requireOwner } from '@/auth/current';
-import { outstandingPayables, revenueByDiscipline, revenueByPeriod } from '@/finance/reports';
+import {
+  outstandingPayables, revenueByContributor, revenueByDiscipline, revenueByPeriod,
+} from '@/finance/reports';
 import { checkLedgerHealth } from '@/ledger/verify';
 import { readFinancialPolicy } from '@/finance/policy';
 import { withActor } from '@/db/actor-context';
@@ -34,10 +36,11 @@ export default async function AdminFinancePage({
   const actor = await requireOwner('/admin/finance');
 
   const policy = await withActor(actor, readFinancialPolicy);
-  const [health, periods, disciplines, payables] = await Promise.all([
+  const [health, periods, disciplines, contributors, payables] = await Promise.all([
     checkLedgerHealth(actor),
     revenueByPeriod(actor, { periods: 12 }),
     revenueByDiscipline(actor),
+    revenueByContributor(actor),
     outstandingPayables(actor, { minimumPayoutMinor: policy.settlement.minimumPayoutMinor }),
   ]);
 
@@ -186,6 +189,59 @@ export default async function AdminFinancePage({
                 </li>
               ))}
             </ul>
+          )}
+        </section>
+
+        {/* --- by contributor (§19) ------------------------------------------ */}
+        <section className="flex flex-col gap-3">
+          <h2 className="text-sm font-semibold text-[var(--color-ink-soft)]">
+            حسب المهندس
+          </h2>
+          {contributors.length === 0 ? (
+            <p className="rounded-[var(--radius-card)] border border-dashed border-[var(--color-line-strong)] px-4 py-6 text-center text-sm text-[var(--color-ink-faint)]">
+              لا توجد بيانات بعد.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[40rem] border-collapse text-sm">
+                <thead>
+                  <tr className="border-b border-[var(--color-line-strong)] text-right text-xs text-[var(--color-ink-soft)]">
+                    <th className="py-2 font-semibold">المهندس</th>
+                    <th className="py-2 font-semibold">المبيعات</th>
+                    <th className="py-2 font-semibold">حصته</th>
+                    <th className="py-2 font-semibold">عمولة المنصة</th>
+                    <th className="py-2 font-semibold">العدد</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {contributors.map((row) => (
+                    <tr
+                      key={`${row.contributorId}-${row.currency}`}
+                      className="border-b border-[var(--color-line)]"
+                    >
+                      <td className="py-2.5">{row.contributorName ?? '—'}</td>
+                      <td className="py-2.5 tabular-nums">
+                        {formatMinor(row.grossMinor, row.currency)}
+                      </td>
+                      <td className="py-2.5 tabular-nums">
+                        {formatMinor(row.engineerMinor, row.currency)}
+                      </td>
+                      <td className="py-2.5 tabular-nums">
+                        {formatMinor(row.platformMinor, row.currency)}
+                      </td>
+                      <td className="py-2.5 tabular-nums">
+                        {row.unitsSold}
+                        {row.unitsRefunded > 0 ? (
+                          <span className="text-xs text-[var(--color-danger)]">
+                            {' '}(−{row.unitsRefunded})
+                          </span>
+                        ) : null}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </section>
 

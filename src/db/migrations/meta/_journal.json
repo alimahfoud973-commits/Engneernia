@@ -218,6 +218,20 @@
       "when": 1789212866855,
       "tag": "0030_author_count",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1789230176659,
+      "tag": "0031_p7_settlements",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1789230177659,
+      "tag": "0032_settlement_rules",
+      "breakpoints": true
     }
   ]
 }

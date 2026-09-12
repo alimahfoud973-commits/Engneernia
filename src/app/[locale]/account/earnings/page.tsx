@@ -5,6 +5,8 @@ import { formatMinor } from '@/components/money-display';
 import { requireActor } from '@/auth/current';
 import { activeContributorId } from '@/authz/actor';
 import { contributorSales, contributorStatement } from '@/finance/balances';
+import { myStatements } from '@/settlements/queries';
+import { SETTLEMENT_STATUS_LABELS } from '@/components/settlement-forms';
 
 export const dynamic = 'force-dynamic';
 
@@ -35,9 +37,10 @@ export default async function EarningsPage({
   // that a contributor console exists is itself a hint (CLAUDE.md rule 5).
   if (activeContributorId(actor) === null) redirect('/account');
 
-  const [statement, sales] = await Promise.all([
+  const [statement, sales, statements] = await Promise.all([
     contributorStatement(actor),
     contributorSales(actor),
+    myStatements(actor),
   ]);
 
   return (
@@ -159,6 +162,84 @@ export default async function EarningsPage({
             <p className="text-xs text-[var(--color-ink-faint)]">
               يُحسب الاسترجاع في شهر اعتماده، لا في شهر البيع الأصلي: الشهر المُسوّى لا يُعاد فتحه.
             </p>
+          </section>
+        ) : null}
+
+        {/*
+          THE MONTHLY STATEMENTS (specification §18 — decisions §9).
+
+          Every statement appears, including the ones that paid nothing:
+          decisions §8 says a balance under the threshold rolls forward "ويظهر
+          ذلك في كشفه" — it must be visible, not silently skipped. A negative
+          balance appears too, because an engineer whose sale was refunded
+          after payment needs to know why next month is short.
+        */}
+        {statements.length > 0 ? (
+          <section className="flex flex-col gap-3">
+            <h2 className="text-sm font-semibold text-[var(--color-ink-soft)]">
+              الكشوف الشهرية
+            </h2>
+            <ul className="flex flex-col gap-3">
+              {statements.map((row) => (
+                <li
+                  key={row.id}
+                  className="flex flex-col gap-2 rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-surface)] p-4"
+                >
+                  <div className="flex flex-wrap items-baseline justify-between gap-3">
+                    <span className="technical-term text-sm font-semibold">
+                      {row.reference}
+                    </span>
+                    <span className="text-xs text-[var(--color-ink-soft)]">
+                      {SETTLEMENT_STATUS_LABELS[row.status] ?? row.status}
+                    </span>
+                    <span
+                      className={`technical-term tabular-nums font-bold ${
+                        row.status === 'PAID' ? 'text-[var(--color-accent-ink)]' : ''
+                      } ${row.balanceMinor < 0n ? 'text-[var(--color-danger)]' : ''}`}
+                    >
+                      {row.status === 'PAID'
+                        ? formatMinor(row.netDueMinor, row.currency)
+                        : formatMinor(row.balanceMinor, row.currency)}
+                    </span>
+                  </div>
+
+                  <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-4">
+                    <div className="flex flex-col">
+                      <dt className="text-[var(--color-ink-faint)]">مبيعات الشهر</dt>
+                      <dd className="tabular-nums">
+                        {formatMinor(row.periodSalesMinor, row.currency)}
+                      </dd>
+                    </div>
+                    <div className="flex flex-col">
+                      <dt className="text-[var(--color-ink-faint)]">استرجاعات</dt>
+                      <dd className="tabular-nums">
+                        {formatMinor(row.periodRefundsMinor, row.currency)}
+                      </dd>
+                    </div>
+                    <div className="flex flex-col">
+                      <dt className="text-[var(--color-ink-faint)]">مُرحَّل سابقاً</dt>
+                      <dd className="tabular-nums">
+                        {formatMinor(row.carriedForwardMinor, row.currency)}
+                      </dd>
+                    </div>
+                    <div className="flex flex-col">
+                      <dt className="text-[var(--color-ink-faint)]">عدد المبيعات</dt>
+                      <dd className="tabular-nums">{row.periodUnitsSold}</dd>
+                    </div>
+                  </dl>
+
+                  <p className="text-xs text-[var(--color-ink-soft)]">
+                    {row.status === 'PAID'
+                      ? `حُوِّل${row.payoutReference ? ` — مرجع ${row.payoutReference}` : ''}.`
+                      : row.status === 'CARRIED_FORWARD'
+                        ? row.balanceMinor < 0n
+                          ? 'رصيد سالب بسبب استرجاع اعتُمد بعد تسوية شهره. يُخصم من مستحقات الشهر القادم.'
+                          : `الرصيد دون الحد الأدنى ${formatMinor(row.minimumPayoutMinor, row.currency)}، ويُرحَّل إلى الشهر التالي.`
+                        : 'قيد المراجعة لدى المالك.'}
+                  </p>
+                </li>
+              ))}
+            </ul>
           </section>
         ) : null}
 
