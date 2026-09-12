@@ -11,9 +11,14 @@ import { MoneyInvariantError, RuleViolationError } from '@/lib/errors';
  * rounding — every number here was computed once, at the moment of sale, and
  * is only ever copied afterwards.
  *
- * That is what makes a refund exact. `refundEntry` receives the same figures
- * `saleEntry` received and negates them, so the reversal cannot disagree with
- * the original by a cent, however the original was rounded.
+ * THERE IS NO REFUND BUILDER. The owner's decision is that a sale is final:
+ * "الكتاب الذي يباع لا يسترد أمواله لأي سبب". Nothing in this file can
+ * construct a reversal, and `app_post_ledger_transaction` refuses a REFUND
+ * entry outright (migration 0035), so the absence is enforced by the database
+ * and not merely by this file being short.
+ *
+ * An owner CORRECTION is a different thing and still exists: `ADJUSTMENT` is
+ * the kind for it, it is the owner's own act, and it names a reason.
  * ===========================================================================
  */
 
@@ -121,122 +126,5 @@ export function saleEntry(sale: SettledSale): LedgerEntryInput {
     referenceId: sale.orderId,
     memo: `بيع ${sale.itemCount === 1 ? 'منتج' : `${sale.itemCount} منتجات`} — طلب ${sale.orderNumber}`,
     lines,
-  };
-}
-
-export interface ApprovedRefund {
-  readonly refundRequestId: string;
-  readonly reference: string;
-  readonly orderNumber: string;
-  readonly currency: string;
-  readonly grossMinor: bigint;
-  readonly platformMinor: bigint;
-  readonly contributorShares: readonly ContributorShare[];
-  readonly occurredAt: Date;
-}
-
-/**
- * A refund the owner approved (specification §17).
- *
- *   DR  ENGINEER_PAYABLE             the share is clawed back
- *   DR  PLATFORM_REVERSED            the commission is given back
- *   CR  CUSTOMER_REFUNDS_PAYABLE     the customer is now owed the money
- *
- * Exactly the sale's entry with every sign flipped, except that the credit
- * goes to a liability rather than out of cash: approving a refund creates an
- * obligation, and the cash leaves later, when someone actually makes the
- * transfer. Booking it against cash immediately would report money as gone
- * while it is still in the account.
- *
- * The engineer's payable may go NEGATIVE here, and that is correct: a refund
- * arriving after its month was settled means the engineer has been paid for a
- * sale that was undone, and the books must say so rather than quietly
- * rounding the debt up to zero.
- */
-export function refundEntry(refund: ApprovedRefund): LedgerEntryInput {
-  const engineers = sumShares(refund.contributorShares);
-
-  if (engineers + refund.platformMinor !== refund.grossMinor) {
-    throw new MoneyInvariantError(
-      'A refund must reverse exactly what the sale recorded',
-      {
-        refundRequestId: refund.refundRequestId,
-        grossMinor: refund.grossMinor.toString(),
-        platformMinor: refund.platformMinor.toString(),
-        engineersMinor: engineers.toString(),
-      },
-    );
-  }
-
-  const lines: LedgerLineInput[] = [];
-
-  for (const share of refund.contributorShares) {
-    if (share.amountMinor === 0n) continue;
-    lines.push({
-      account: LEDGER_ACCOUNTS.ENGINEER_PAYABLE,
-      contributorId: share.contributorId,
-      amountMinor: share.amountMinor,
-      memo: `استرجاع ${refund.reference}`,
-    });
-  }
-
-  if (refund.platformMinor !== 0n) {
-    lines.push({
-      account: LEDGER_ACCOUNTS.PLATFORM_REVENUE_REVERSED,
-      amountMinor: refund.platformMinor,
-      memo: `عمولة معادة — ${refund.reference}`,
-    });
-  }
-
-  lines.push({
-    account: LEDGER_ACCOUNTS.CUSTOMER_REFUNDS_PAYABLE,
-    amountMinor: -refund.grossMinor,
-    memo: `مستحق للعميل — ${refund.reference}`,
-  });
-
-  return {
-    kind: LEDGER_KINDS.REFUND,
-    currency: refund.currency,
-    occurredAt: refund.occurredAt,
-    referenceType: 'refund_request',
-    referenceId: refund.refundRequestId,
-    memo: `استرجاع ${refund.reference} — طلب ${refund.orderNumber}`,
-    lines,
-  };
-}
-
-/**
- * The money actually went back to the customer.
- *
- *   DR  CUSTOMER_REFUNDS_PAYABLE   the obligation is discharged
- *   CR  PLATFORM_CASH              and the cash has left
- */
-export function refundPayoutEntry(input: {
-  readonly refundRequestId: string;
-  readonly reference: string;
-  readonly currency: string;
-  readonly grossMinor: bigint;
-  readonly occurredAt: Date;
-  readonly payoutReference?: string | null;
-}): LedgerEntryInput {
-  if (input.grossMinor <= 0n) {
-    throw new RuleViolationError('A refund payout must be a positive amount', {
-      refundRequestId: input.refundRequestId,
-    });
-  }
-
-  return {
-    kind: LEDGER_KINDS.REFUND_PAYOUT,
-    currency: input.currency,
-    occurredAt: input.occurredAt,
-    referenceType: 'refund_request',
-    referenceId: input.refundRequestId,
-    memo: input.payoutReference
-      ? `تحويل استرجاع ${input.reference} — مرجع ${input.payoutReference}`
-      : `تحويل استرجاع ${input.reference}`,
-    lines: [
-      { account: LEDGER_ACCOUNTS.CUSTOMER_REFUNDS_PAYABLE, amountMinor: input.grossMinor },
-      { account: LEDGER_ACCOUNTS.PLATFORM_CASH, amountMinor: -input.grossMinor },
-    ],
   };
 }

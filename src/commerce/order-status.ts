@@ -11,7 +11,10 @@ import { isOwner, type Actor } from '@/authz/actor';
  *                   │                        ┌─────────────┴────────────┐
  *              PAYMENT_ISSUE ←───────────────┤                          │
  *                                            ↓                          ↓
- *                                          PAID ──→ COMPLETED       (rejected)
+ *                                          PAID ──→ COMPLETED ▪     (rejected)
+ *
+ * ▪ TERMINAL. A completed sale is final and is never refunded (owner
+ *   decision); nothing leads out of COMPLETED.
  *
  * Encoded as an explicit table because "who may mark an order paid" is a
  * financial control, not a UI concern. Only the owner can reach PAID, and
@@ -71,9 +74,17 @@ const TRANSITIONS: Readonly<Record<OrderStatus, readonly Transition[]>> = Object
   ],
   // Granting entitlements is the system's act, immediately after PAID.
   PAID: [{ to: 'COMPLETED', allowedFor: ['SYSTEM', 'OWNER'], label: 'إتمام ومنح الوصول' }],
-  // The owner alone reverses a completed sale, through src/commerce/refunds.ts,
-  // which reaches this transition only after the ledger reversal has been posted.
-  COMPLETED: [{ to: 'REFUNDED', allowedFor: ['OWNER'], label: 'استرجاع' }],
+  /*
+   * COMPLETED IS TERMINAL. The owner's decision is that a completed sale is
+   * final and is never refunded for any reason, so there is no transition out
+   * of it — not for the customer, and not for the owner either.
+   *
+   * `REFUNDED` remains in the type because the PostgreSQL enum still contains
+   * it (values cannot be removed from an enum that historical rows may
+   * reference), but no transition reaches it and nothing can put an order
+   * there.
+   */
+  COMPLETED: [],
   CANCELLED: [],
   REFUNDED: [],
 });

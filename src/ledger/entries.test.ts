@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import fc from 'fast-check';
-import { refundEntry, refundPayoutEntry, saleEntry } from './entries';
+import { saleEntry } from './entries';
 import { assertEntryBalances } from './post';
 import { LEDGER_ACCOUNTS } from './accounts';
 import { MoneyInvariantError, RuleViolationError, ValidationError } from '@/lib/errors';
@@ -86,75 +86,8 @@ describe('the sale entry', () => {
   });
 });
 
-describe('the refund entry', () => {
-  it('is the sale with every sign flipped, against a liability not cash', () => {
-    const refund = refundEntry({
-      refundRequestId: '44444444-4444-4444-4444-444444444444',
-      reference: 'RF-000001',
-      orderNumber: 'EN-2026-000001',
-      currency: 'USD',
-      grossMinor: 2000n,
-      platformMinor: 400n,
-      contributorShares: [{ contributorId: CONTRIBUTOR_A, amountMinor: 1600n }],
-      occurredAt: new Date('2026-10-02T10:00:00Z'),
-    });
-
-    const engineer = refund.lines.find((l) => l.account === LEDGER_ACCOUNTS.ENGINEER_PAYABLE);
-    const reversed = refund.lines.find(
-      (l) => l.account === LEDGER_ACCOUNTS.PLATFORM_REVENUE_REVERSED,
-    );
-    const owedBack = refund.lines.find(
-      (l) => l.account === LEDGER_ACCOUNTS.CUSTOMER_REFUNDS_PAYABLE,
-    );
-
-    // Clawed back from the engineer, taken off revenue, owed to the customer.
-    expect(engineer?.amountMinor).toBe(1600n);
-    expect(reversed?.amountMinor).toBe(400n);
-    expect(owedBack?.amountMinor).toBe(-2000n);
-
-    // Approving a refund must NOT move cash: the transfer is a separate act.
-    expect(refund.lines.some((l) => l.account === LEDGER_ACCOUNTS.PLATFORM_CASH)).toBe(false);
-
-    expect(() => assertEntryBalances(refund)).not.toThrow();
-  });
-
-  it('refuses to reverse figures that do not match the sale', () => {
-    expect(() =>
-      refundEntry({
-        refundRequestId: '44444444-4444-4444-4444-444444444444',
-        reference: 'RF-000002',
-        orderNumber: 'EN-2026-000001',
-        currency: 'USD',
-        grossMinor: 2000n,
-        platformMinor: 400n,
-        contributorShares: [{ contributorId: CONTRIBUTOR_A, amountMinor: 1599n }],
-        occurredAt: new Date(),
-      }),
-    ).toThrow(MoneyInvariantError);
-  });
-
-  it('the payout moves the cash and discharges the obligation', () => {
-    const payout = refundPayoutEntry({
-      refundRequestId: '44444444-4444-4444-4444-444444444444',
-      reference: 'RF-000001',
-      currency: 'USD',
-      grossMinor: 2000n,
-      occurredAt: new Date(),
-    });
-
-    const owedBack = payout.lines.find(
-      (l) => l.account === LEDGER_ACCOUNTS.CUSTOMER_REFUNDS_PAYABLE,
-    );
-    const cash = payout.lines.find((l) => l.account === LEDGER_ACCOUNTS.PLATFORM_CASH);
-
-    expect(owedBack?.amountMinor).toBe(2000n);
-    expect(cash?.amountMinor).toBe(-2000n);
-    expect(() => assertEntryBalances(payout)).not.toThrow();
-  });
-});
-
-describe('a sale and its full reversal cancel out exactly', () => {
-  it('for any split the money rules can produce', () => {
+describe('a sale entry balances for any split the money rules can produce', () => {
+  it('holds across prices, rates and author counts', () => {
     fc.assert(
       fc.property(
         fc.bigInt({ min: 1n, max: 10_000_000n }),
@@ -175,30 +108,19 @@ describe('a sale and its full reversal cancel out exactly', () => {
           }
           shares.push({ contributorId: `c-${authorCount - 1}`, amountMinor: remaining });
 
-          const saleLines = saleEntry({
+          const entry = saleEntry({
             orderId: 'o', orderNumber: 'EN-1', currency: 'USD',
             grossMinor: gross, platformMinor: platform,
             contributorShares: shares, occurredAt: new Date(), itemCount: 1,
           });
 
-          const refundLines = refundEntry({
-            refundRequestId: 'r', reference: 'RF-1', orderNumber: 'EN-1', currency: 'USD',
-            grossMinor: gross, platformMinor: platform,
-            contributorShares: shares, occurredAt: new Date(),
-          });
-
-          // Both balance, and the engineer's side nets to zero across the two:
-          // whatever rounding produced at sale time is reversed identically,
-          // because no division happens the second time.
-          const engineerNet = [...saleLines.lines, ...refundLines.lines]
-            .filter((l) => l.account === LEDGER_ACCOUNTS.ENGINEER_PAYABLE)
+          // The books balance, and the cash line equals what the customer paid
+          // however the split rounded.
+          const cash = entry.lines
+            .filter((line) => line.account === LEDGER_ACCOUNTS.PLATFORM_CASH)
             .reduce((total, line) => total + line.amountMinor, 0n);
 
-          return (
-            saleLines.lines.reduce((t, l) => t + l.amountMinor, 0n) === 0n &&
-            refundLines.lines.reduce((t, l) => t + l.amountMinor, 0n) === 0n &&
-            engineerNet === 0n
-          );
+          return entry.lines.reduce((t, l) => t + l.amountMinor, 0n) === 0n && cash === gross;
         },
       ),
       { numRuns: 400 },

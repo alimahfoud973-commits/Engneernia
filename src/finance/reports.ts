@@ -32,8 +32,18 @@ export interface PeriodRevenue {
   readonly currency: string;
   /** What customers paid in this period. */
   readonly grossSalesMinor: bigint;
-  /** The platform's commission earned. */
+  /** The platform's commission earned ON SALES. */
   readonly platformRevenueMinor: bigint;
+  /**
+   * Owner corrections posted in this period, on the platform's side.
+   *
+   * Reported separately rather than folded into revenue: the test that
+   * revealed the need for this was asserting that engineer share plus platform
+   * revenue equals what customers paid, which is only true of SALES. An
+   * adjustment has no customer and no gross, so adding it to revenue made the
+   * report contradict itself.
+   */
+  readonly platformAdjustmentsMinor: bigint;
   /** Commission handed back on approved refunds. */
   readonly revenueReversedMinor: bigint;
   /** Owed to engineers from this period's sales. */
@@ -69,8 +79,11 @@ export async function revenueByPeriod(
                WHERE account_code = ${LEDGER_ACCOUNTS.PLATFORM_CASH} AND kind = 'SALE'
              ), 0)::text AS gross_sales,
              COALESCE(SUM(-amount_minor) FILTER (
-               WHERE account_code = ${LEDGER_ACCOUNTS.PLATFORM_REVENUE}
+               WHERE account_code = ${LEDGER_ACCOUNTS.PLATFORM_REVENUE} AND kind = 'SALE'
              ), 0)::text AS platform_revenue,
+             COALESCE(SUM(-amount_minor) FILTER (
+               WHERE account_code = ${LEDGER_ACCOUNTS.PLATFORM_REVENUE} AND kind = 'ADJUSTMENT'
+             ), 0)::text AS platform_adjustments,
              COALESCE(SUM(amount_minor) FILTER (
                WHERE account_code = ${LEDGER_ACCOUNTS.PLATFORM_REVENUE_REVERSED}
              ), 0)::text AS revenue_reversed,
@@ -99,11 +112,15 @@ export async function revenueByPeriod(
         currency: row.currency as string,
         grossSalesMinor: BigInt(row.gross_sales as string),
         platformRevenueMinor,
+        platformAdjustmentsMinor: BigInt(row.platform_adjustments as string),
         revenueReversedMinor,
         engineerShareMinor: BigInt(row.engineer_share as string),
         engineerReversedMinor: BigInt(row.engineer_reversed as string),
         refundsMinor: BigInt(row.refunds as string),
-        netPlatformMinor: platformRevenueMinor - revenueReversedMinor,
+        netPlatformMinor:
+          platformRevenueMinor
+          + BigInt(row.platform_adjustments as string)
+          - revenueReversedMinor,
         salesCount: Number(row.sales_count),
         refundCount: Number(row.refund_count),
       };
@@ -116,7 +133,6 @@ export interface DisciplineRevenue {
   readonly disciplineNameAr: string;
   readonly currency: string;
   readonly unitsSold: number;
-  readonly unitsRefunded: number;
   readonly grossMinor: bigint;
   readonly platformMinor: bigint;
   readonly engineerMinor: bigint;
@@ -130,8 +146,8 @@ export interface DisciplineRevenue {
  * back to its product is the honest way to get a per-discipline figure, and
  * the numbers used are still the FROZEN ones from the snapshot.
  *
- * Refunded lines are excluded from the totals and counted separately, so a
- * refunded sale cannot keep inflating a discipline's performance (§17).
+ * Every completed sale counts, and stays counted: the platform issues no
+ * refunds, so there is no category of sale that later stops being one.
  */
 export async function revenueByDiscipline(
   actor: Actor,
@@ -142,14 +158,10 @@ export async function revenueByDiscipline(
   return withActor(actor, async (tx) => {
     const rows = (await tx.execute(sql`
       SELECT d.slug, d.name_ar, oi.currency,
-             COUNT(*) FILTER (WHERE oi.refunded_at IS NULL)::int     AS units_sold,
-             COUNT(*) FILTER (WHERE oi.refunded_at IS NOT NULL)::int AS units_refunded,
-             COALESCE(SUM(oi.unit_price_minor)
-               FILTER (WHERE oi.refunded_at IS NULL), 0)::text       AS gross,
-             COALESCE(SUM(oi.platform_amount_minor)
-               FILTER (WHERE oi.refunded_at IS NULL), 0)::text       AS platform,
-             COALESCE(SUM(oi.engineer_amount_minor)
-               FILTER (WHERE oi.refunded_at IS NULL), 0)::text       AS engineer
+             COUNT(*)::int                                          AS units_sold,
+             COALESCE(SUM(oi.unit_price_minor), 0)::text       AS gross,
+             COALESCE(SUM(oi.platform_amount_minor), 0)::text       AS platform,
+             COALESCE(SUM(oi.engineer_amount_minor), 0)::text       AS engineer
         FROM order_items oi
         JOIN orders o      ON o.id = oi.order_id
         JOIN products p    ON p.id = oi.product_id
@@ -169,7 +181,6 @@ export async function revenueByDiscipline(
       disciplineNameAr: row.name_ar as string,
       currency: row.currency as string,
       unitsSold: Number(row.units_sold),
-      unitsRefunded: Number(row.units_refunded),
       grossMinor: BigInt(row.gross as string),
       platformMinor: BigInt(row.platform as string),
       engineerMinor: BigInt(row.engineer as string),
@@ -236,7 +247,6 @@ export interface ContributorRevenue {
   readonly contributorName: string | null;
   readonly currency: string;
   readonly unitsSold: number;
-  readonly unitsRefunded: number;
   readonly grossMinor: bigint;
   readonly engineerMinor: bigint;
   readonly platformMinor: bigint;
@@ -265,14 +275,10 @@ export async function revenueByContributor(
       SELECT oic.contributor_id,
              MAX(c.display_name)                                      AS display_name,
              oi.currency,
-             COUNT(*) FILTER (WHERE oi.refunded_at IS NULL)::int       AS units_sold,
-             COUNT(*) FILTER (WHERE oi.refunded_at IS NOT NULL)::int   AS units_refunded,
-             COALESCE(SUM(oi.unit_price_minor)
-               FILTER (WHERE oi.refunded_at IS NULL), 0)::text         AS gross,
-             COALESCE(SUM(oic.amount_minor)
-               FILTER (WHERE oi.refunded_at IS NULL), 0)::text         AS engineer,
-             COALESCE(SUM(oi.platform_amount_minor)
-               FILTER (WHERE oi.refunded_at IS NULL), 0)::text         AS platform
+             COUNT(*)::int                                            AS units_sold,
+             COALESCE(SUM(oi.unit_price_minor), 0)::text         AS gross,
+             COALESCE(SUM(oic.amount_minor), 0)::text         AS engineer,
+             COALESCE(SUM(oi.platform_amount_minor), 0)::text         AS platform
         FROM order_item_contributors oic
         JOIN order_items oi ON oi.id = oic.order_item_id
         JOIN orders o       ON o.id = oi.order_id
@@ -294,7 +300,6 @@ export async function revenueByContributor(
       contributorName: (row.display_name as string | null) ?? null,
       currency: row.currency as string,
       unitsSold: Number(row.units_sold),
-      unitsRefunded: Number(row.units_refunded),
       grossMinor: BigInt(row.gross as string),
       engineerMinor: BigInt(row.engineer as string),
       platformMinor: BigInt(row.platform as string),

@@ -32,7 +32,12 @@ export interface ContributorBalance {
   readonly currency: string;
   /** Credited by completed sales. */
   readonly earnedMinor: bigint;
-  /** Clawed back by approved refunds. */
+  /**
+   * Historical only. The platform issues no refunds, so this is zero for
+   * everything sold after that decision — it stays in the shape because the
+   * figure is a SUM over the ledger, and the ledger may still contain entries
+   * written before it.
+   */
   readonly reversedMinor: bigint;
   /** Already paid out in monthly settlements. */
   readonly settledMinor: bigint;
@@ -195,7 +200,6 @@ export interface ContributorSalesSummary {
   readonly platformMinor: bigint;
   /** How many of `unitsSold` are excluded from `platformMinor`. */
   readonly coAuthoredUnits: number;
-  readonly refundedUnits: number;
 }
 
 /**
@@ -226,7 +230,7 @@ export async function contributorSales(
     const rows = (await tx.execute(sql`
       WITH mine AS (
         SELECT oi.id, oi.currency, oi.unit_price_minor, oi.platform_amount_minor,
-               oi.refunded_at, o.paid_at, oic.amount_minor AS my_share,
+               o.paid_at, oic.amount_minor AS my_share,
                -- Counted with the owner's reach, not the contributor's: the
                -- contributor's own policy hides the other authors' rows, which
                -- would make every co-authored sale look sole-authored.
@@ -244,8 +248,7 @@ export async function contributorSales(
              COALESCE(SUM(my_share), 0)::text                        AS engineer,
              COALESCE(SUM(platform_amount_minor)
                         FILTER (WHERE author_count = 1), 0)::text    AS platform,
-             COUNT(*) FILTER (WHERE author_count > 1)::int           AS co_authored_units,
-             COUNT(*) FILTER (WHERE refunded_at IS NOT NULL)::int    AS refunded_units
+             COUNT(*) FILTER (WHERE author_count > 1)::int           AS co_authored_units
         FROM mine
        GROUP BY 1, 2
        ORDER BY 1 DESC, 2
@@ -259,7 +262,6 @@ export async function contributorSales(
       engineerMinor: BigInt(row.engineer as string),
       platformMinor: BigInt(row.platform as string),
       coAuthoredUnits: Number(row.co_authored_units),
-      refundedUnits: Number(row.refunded_units),
     }));
   });
 }

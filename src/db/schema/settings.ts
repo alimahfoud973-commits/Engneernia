@@ -6,8 +6,8 @@ import { updatedAt } from './columns';
  *
  * Anything the owner should be able to change without a deploy lives here:
  * the platform name, the WhatsApp contact and message template, the preview
- * page count, the refund policy, the minimum payout threshold, and from
- * phase P5 the payment-method configuration.
+ * page count, the payout threshold, and from phase P5 the payment-method
+ * configuration.
  *
  * Values are JSON so a setting can grow from a string into a structure
  * without a migration. `isPublic` decides whether a value may be read without

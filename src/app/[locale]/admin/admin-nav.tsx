@@ -9,7 +9,6 @@ import Link from 'next/link';
  */
 const LINKS = [
   { href: '/admin/payments', label: 'المدفوعات' },
-  { href: '/admin/refunds', label: 'الاسترجاعات' },
   { href: '/admin/settlements', label: 'التسوية الشهرية' },
   { href: '/admin/finance', label: 'التقرير المالي' },
 ] as const;

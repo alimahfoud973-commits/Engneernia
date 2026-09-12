@@ -114,7 +114,6 @@ export default async function AdminFinancePage({
                     <th className="py-2 font-semibold">المبيعات</th>
                     <th className="py-2 font-semibold">عمولة المنصة</th>
                     <th className="py-2 font-semibold">حصة المهندسين</th>
-                    <th className="py-2 font-semibold">الاسترجاعات</th>
                     <th className="py-2 font-semibold">صافي المنصة</th>
                   </tr>
                 </thead>
@@ -141,14 +140,6 @@ export default async function AdminFinancePage({
                       </td>
                       <td className="py-2.5 tabular-nums">
                         {formatMinor(row.engineerShareMinor, row.currency)}
-                      </td>
-                      <td className="py-2.5 tabular-nums">
-                        {formatMinor(row.refundsMinor, row.currency)}
-                        {row.refundCount > 0 ? (
-                          <span className="block text-xs text-[var(--color-ink-faint)]">
-                            {row.refundCount} استرجاع
-                          </span>
-                        ) : null}
                       </td>
                       <td className="py-2.5 font-semibold tabular-nums text-[var(--color-accent-ink)]">
                         {formatMinor(row.netPlatformMinor, row.currency)}
@@ -182,9 +173,6 @@ export default async function AdminFinancePage({
                   <span className="text-xs text-[var(--color-ink-soft)]">
                     <span className="tabular-nums">{row.unitsSold}</span> عملية بيع · عمولة{' '}
                     {formatMinor(row.platformMinor, row.currency)}
-                    {row.unitsRefunded > 0
-                      ? ` · ${row.unitsRefunded} مسترجَعة (مستبعدة من المجموع)`
-                      : ''}
                   </span>
                 </li>
               ))}
@@ -231,11 +219,6 @@ export default async function AdminFinancePage({
                       </td>
                       <td className="py-2.5 tabular-nums">
                         {row.unitsSold}
-                        {row.unitsRefunded > 0 ? (
-                          <span className="text-xs text-[var(--color-danger)]">
-                            {' '}(−{row.unitsRefunded})
-                          </span>
-                        ) : null}
                       </td>
                     </tr>
                   ))}
@@ -274,7 +257,7 @@ export default async function AdminFinancePage({
                   </span>
                   <span className="text-xs text-[var(--color-ink-faint)]">
                     {row.balanceMinor < 0n
-                      ? 'رصيد سالب — استرجاع بعد تسوية'
+                      ? 'رصيد سالب — قيد تسوية بعد صرف'
                       : row.meetsMinimum
                         ? 'مستحق للصرف'
                         : 'يُرحَّل إلى الشهر التالي'}

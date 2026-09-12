@@ -163,7 +163,7 @@ async function readLedgerTotals(
   }));
 }
 
-/** The sales and refunds behind the statement, for the engineer to read (§18). */
+/** The sales behind the statement, for the engineer to read (§18). */
 async function readStatementDetail(
   tx: Transaction,
   contributorId: string,
@@ -182,28 +182,16 @@ async function readStatementDetail(
    * the totals cannot disagree about which month something belongs to.
    */
   const rows = (await tx.execute(sql`
-    SELECT 'SALE'::text AS kind, o.paid_at AS occurred_at, oi.title_snapshot AS title,
-           oi.currency, oi.unit_price_minor::text AS gross, oic.amount_minor::text AS engineer
+    SELECT o.paid_at AS occurred_at, oi.title_snapshot AS title,
+           oi.currency, oi.unit_price_minor::text AS gross,
+           oic.amount_minor::text AS engineer
       FROM order_item_contributors oic
       JOIN order_items oi ON oi.id = oic.order_item_id
       JOIN orders o       ON o.id = oi.order_id
      WHERE oic.contributor_id = ${contributorId}
        AND o.paid_at IS NOT NULL
        AND to_char(timezone(app_accounting_timezone(), o.paid_at), 'YYYY-MM') = ${periodKey}
-
-     UNION ALL
-
-    SELECT 'REFUND'::text, r.decided_at, ri.title_snapshot,
-           ri.currency, (-ri.gross_minor)::text, (-oic.amount_minor)::text
-      FROM refund_request_items ri
-      JOIN refund_requests r     ON r.id = ri.refund_request_id
-      JOIN order_item_contributors oic ON oic.order_item_id = ri.order_item_id
-     WHERE oic.contributor_id = ${contributorId}
-       AND r.status IN ('APPROVED', 'PAID')
-       AND r.decided_at IS NOT NULL
-       AND to_char(timezone(app_accounting_timezone(), r.decided_at), 'YYYY-MM') = ${periodKey}
-
-     ORDER BY 2
+     ORDER BY o.paid_at
   `)) as unknown as Array<Record<string, string>>;
 
   const lines: Array<typeof settlementLines.$inferInsert> = [];
@@ -212,21 +200,20 @@ async function readStatementDetail(
 
   for (const row of rows) {
     const gross = BigInt(row.gross!);
-    const engineer = BigInt(row.engineer!);
-
-    if (row.kind === 'SALE') {
-      grossSalesMinor += gross;
-      unitsSold += 1;
-    }
+    grossSalesMinor += gross;
+    unitsSold += 1;
 
     lines.push({
       settlementId: '',
-      kind: row.kind as 'SALE' | 'REFUND',
+      // Sales only. The platform issues no refunds (owner decision), so a
+      // statement line can only ever be a sale or the balancing ADJUSTMENT
+      // below.
+      kind: 'SALE',
       occurredAt: requireDate(row.occurred_at!, 'occurred_at'),
       productTitle: row.title!,
       currency: row.currency!,
       grossMinor: gross,
-      engineerMinor: engineer,
+      engineerMinor: BigInt(row.engineer!),
     });
   }
 

@@ -9,9 +9,9 @@ import { minorDigitsOf, type CurrencyCode } from '@/lib/money/currency';
  * goes and whether a minus sign is shown.
  *
  * Separate from `formatPrice` in product-card because a catalogue price is
- * always positive and a ledger figure is not: a contributor whose refund
- * arrived after their settlement has a negative balance, and rendering that
- * as a positive number would be a lie on the one screen where it matters.
+ * always positive and a ledger figure is not: an adjustment posted after a
+ * settlement leaves a negative balance, and rendering that as a positive
+ * number would be a lie on the one screen where it matters.
  */
 export function formatMinor(amountMinor: bigint, currency: string): string {
   const digits = minorDigitsOf(currency as CurrencyCode);

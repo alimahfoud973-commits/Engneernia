@@ -78,6 +78,7 @@ export function renderNotification(
       };
     }
 
+    /** Historical: no sale is reversed any more. */
     case 'SALE_REVERSED':
       return {
         title: product ? `استُرجعت عملية بيع «${product}»` : 'استُرجعت إحدى عمليات البيع',
@@ -131,6 +132,12 @@ export function renderNotification(
         tone: 'warn',
       };
 
+    /*
+     * The four refund messages below are HISTORICAL. The platform issues no
+     * refunds, so nothing produces them any more — but rows written before
+     * that decision still exist and must still render as sentences rather
+     * than as raw enum values.
+     */
     case 'REFUND_APPROVED':
       return {
         title: 'وُوفق على طلب الاسترجاع',

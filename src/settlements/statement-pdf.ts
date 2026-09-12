@@ -104,6 +104,7 @@ const STATUS_LABELS: Readonly<Record<string, string>> = {
 
 const LINE_KIND_LABELS: Readonly<Record<string, string>> = {
   SALE: 'بيع',
+  /** Only on statements issued before refunds were removed from the platform. */
   REFUND: 'استرجاع',
   ADJUSTMENT: 'تسوية',
 };
@@ -196,7 +197,15 @@ export async function renderStatementPdf(doc: StatementDocument): Promise<Uint8A
 
   const rows: Array<[string, string, boolean?]> = [
     ['مبيعات الشهر (حصتي)', money(s.periodSalesMinor, currency)],
-    ['استرجاعات الشهر', money(-s.periodRefundsMinor, currency)],
+    /*
+     * The refund row appears only if there IS one. The platform issues no
+     * refunds, so on every statement from now on this is zero — and a line
+     * reading "refunds: 0.00" on every statement implies a process that does
+     * not exist. Statements issued before that decision still print it.
+     */
+    ...(s.periodRefundsMinor !== 0n
+      ? ([['استرجاعات الشهر', money(-s.periodRefundsMinor, currency)]] as Array<[string, string]>)
+      : []),
     ['رصيد مُرحَّل من قبل', money(s.carriedForwardMinor, currency)],
     ['الرصيد عند إقفال الشهر', money(s.balanceMinor, currency), true],
   ];

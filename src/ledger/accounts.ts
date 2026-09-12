@@ -13,9 +13,14 @@ export const LEDGER_ACCOUNTS = {
   ENGINEER_PAYABLE: 'ENGINEER_PAYABLE',
   /** Commission earned. */
   PLATFORM_REVENUE: 'PLATFORM_REVENUE',
-  /** Commission given back; kept apart so gross and reversed stay separable. */
+  /**
+   * HISTORICAL. The platform issues no refunds (owner decision), and the
+   * posting function refuses a REFUND entry. These two accounts remain in the
+   * chart because ledger lines written before that decision reference them,
+   * and the ledger is append-only — a chart of accounts cannot forget an
+   * account its own history names.
+   */
   PLATFORM_REVENUE_REVERSED: 'PLATFORM_REVENUE_REVERSED',
-  /** Approved refunds not yet transferred out. */
   CUSTOMER_REFUNDS_PAYABLE: 'CUSTOMER_REFUNDS_PAYABLE',
   /** Transfer costs. Who bears them is OPEN-2. */
   PAYMENT_FEES: 'PAYMENT_FEES',
@@ -30,9 +35,12 @@ export const CONTRIBUTOR_SCOPED_ACCOUNTS: ReadonlySet<LedgerAccount> = new Set([
 
 export const LEDGER_KINDS = {
   SALE: 'SALE',
+  /** Historical only — refused by the posting function (migration 0035). */
   REFUND: 'REFUND',
+  /** Historical only — refused by the posting function (migration 0035). */
   REFUND_PAYOUT: 'REFUND_PAYOUT',
   SETTLEMENT_PAYOUT: 'SETTLEMENT_PAYOUT',
+  /** The owner's correction. Not a refund: no customer, and it names a reason. */
   ADJUSTMENT: 'ADJUSTMENT',
 } as const;
 

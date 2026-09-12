@@ -5,11 +5,10 @@ import { withRawActorContext } from '@/db/actor-context';
 import { closeDb } from '@/db';
 import {
   commissionAgreements, contributors, disciplines, entitlements,
-  orderItems, orders, paymentMethods, payments, productContributors,
-  productPrices, products, refundRequestItems, refundRequests, users,
+  orders, paymentMethods, payments, productContributors,
+  productPrices, products, users,
 } from '@/db/schema';
 import { approvePayment, createOrder, placeOrder } from '@/commerce/orders';
-import { approveRefund, markRefundPaid, rejectRefund, requestRefund } from '@/commerce/refunds';
 import { checkLedgerHealth } from '@/ledger/verify';
 import { contributorStatement } from './balances';
 import { outstandingPayables, revenueByPeriod } from './reports';
@@ -45,7 +44,8 @@ async function rejectionText(work: Promise<unknown>): Promise<string> {
  * PHASE P6 EXIT CRITERIA
  * ===========================================================================
  *   1. The ledger sums to zero in every currency, always.
- *   2. A refund reverses the sale exactly, without touching it.
+ *   2. The books refuse a refund outright — the owner's decision that a
+ *      completed sale is final, enforced where it cannot be bypassed.
  *   3. The hash chain detects tampering performed with DIRECT DATABASE
  *      ACCESS — not through the application, which cannot tamper at all.
  *   4. A contributor reads their own ledger lines and nobody else's, with
@@ -143,18 +143,6 @@ afterAll(async () => {
      * this cleanup delete them. The books keep this run's entries forever,
      * which is the behaviour under test.
      */
-    const requestIds = await tx
-      .select({ id: refundRequests.id })
-      .from(refundRequests)
-      .where(eq(refundRequests.customerId, ids.customer));
-
-    if (requestIds.length > 0) {
-      await tx.delete(refundRequestItems).where(
-        sql`refund_request_id IN (${sql.join(requestIds.map((r) => sql`${r.id}`), sql`, `)})`,
-      );
-      await tx.delete(refundRequests).where(eq(refundRequests.customerId, ids.customer));
-    }
-
     await tx.delete(entitlements).where(eq(entitlements.customerId, ids.customer));
     await tx.delete(orders).where(eq(orders.customerId, ids.customer));
     await tx.delete(paymentMethods).where(eq(paymentMethods.id, ids.method));
@@ -320,170 +308,77 @@ describe('2. the application cannot write the books by hand', () => {
 });
 
 // ===========================================================================
-describe('3. a refund reverses the sale exactly, without touching it', () => {
-  let orderId: string;
-  let refundRequestId: string;
+describe('3. the books refuse a refund (owner decision)', () => {
+  /*
+   * "الكتاب الذي يباع لا يسترد أمواله لأي سبب" — a completed sale is final.
+   *
+   * The application code that used to issue refunds is deleted, but deletion
+   * alone only means the current code does not do it. These tests assert the
+   * stronger property: the DATABASE refuses, so no future caller, no console
+   * session and no forgotten path can book one either.
+   */
+  it('refuses a REFUND entry through the posting function', async () => {
+    const message = await rejectionText(
+      withRawActorContext(OWNER_RAW, (tx) =>
+        tx.execute(sql`
+          SELECT app_post_ledger_transaction(
+            'REFUND', 'USD', now(), 'order', NULL, 'should not be possible',
+            ${JSON.stringify([
+              { account: 'CUSTOMER_REFUNDS_PAYABLE', amountMinor: '-2000' },
+              { account: 'PLATFORM_CASH', amountMinor: '2000' },
+            ])}::jsonb)
+        `),
+      ),
+    );
+    expect(message).toMatch(/issues no refunds/i);
+  });
 
-  it('the customer asks and the owner has not yet decided', async () => {
-    orderId = await completeAPurchase();
+  it('refuses a REFUND_PAYOUT entry too', async () => {
+    const message = await rejectionText(
+      withRawActorContext(OWNER_RAW, (tx) =>
+        tx.execute(sql`
+          SELECT app_post_ledger_transaction(
+            'REFUND_PAYOUT', 'USD', now(), 'order', NULL, NULL,
+            ${JSON.stringify([
+              { account: 'CUSTOMER_REFUNDS_PAYABLE', amountMinor: '2000' },
+              { account: 'PLATFORM_CASH', amountMinor: '-2000' },
+            ])}::jsonb)
+        `),
+      ),
+    );
+    expect(message).toMatch(/issues no refunds/i);
+  });
 
-    const request = await requestRefund(customer, {
-      orderId,
-      reason: 'CORRUPT_FILE',
-      customerNote: 'الملف لا يفتح في أي برنامج جربته.',
-    });
-    refundRequestId = request.refundRequestId;
+  it('still allows an owner ADJUSTMENT, which is a correction and not a refund', async () => {
+    // The distinction matters: an adjustment has no customer, moves nothing
+    // back to a buyer, and names a reason the owner wrote.
+    const rows = (await withRawActorContext(OWNER_RAW, (tx) =>
+      tx.execute(sql`
+        SELECT app_post_ledger_transaction(
+          'ADJUSTMENT', 'USD', now(), 'correction', NULL, 'تصحيح يدوي للاختبار',
+          ${JSON.stringify([
+            { account: 'ENGINEER_PAYABLE', contributorId: ids.contributor, amountMinor: '100' },
+            { account: 'PLATFORM_REVENUE', amountMinor: '-100' },
+          ])}::jsonb) AS id
+      `),
+    )) as unknown as Array<{ id: string }>;
 
-    expect(request.amountMinor).toBe(PRICE);
-    expect(request.reference).toMatch(/^RF-\d{6}$/);
+    expect(rows[0]!.id).toBeTruthy();
 
-    // Nothing financial has happened yet.
     const health = await checkLedgerHealth(owner);
     expect(health.isHealthy).toBe(true);
   });
 
-  it('a second open request for the same order is refused', async () => {
-    await expect(
-      requestRefund(customer, {
-        orderId, reason: 'DUPLICATE_PAYMENT', customerNote: 'طلب مكرر للاختبار فقط.',
-      }),
-    ).rejects.toThrow(RuleViolationError);
-  });
-
-  it('approval posts the reversal and leaves the sale untouched', async () => {
-    const before = await withRawActorContext(OWNER_RAW, (tx) =>
-      tx.select().from(orderItems).where(eq(orderItems.orderId, orderId)),
-    );
-    expect(before[0]!.engineerAmountMinor).toBe(1600n);
-
-    const result = await approveRefund(owner, { refundRequestId });
-    expect(result.amountMinor).toBe(PRICE);
-
-    const after = await withRawActorContext(OWNER_RAW, (tx) =>
-      tx.select().from(orderItems).where(eq(orderItems.orderId, orderId)),
-    );
-
-    // THE SALE IS UNCHANGED. Only the refund marks were written.
-    expect(after[0]!.engineerAmountMinor).toBe(1600n);
-    expect(after[0]!.platformAmountMinor).toBe(400n);
-    expect(after[0]!.unitPriceMinor).toBe(PRICE);
-    expect(after[0]!.snapshotTakenAt).toEqual(before[0]!.snapshotTakenAt);
-    expect(after[0]!.refundedAt).not.toBeNull();
-
-    const lines = await withRawActorContext(OWNER_RAW, (tx) =>
-      tx.execute(sql`
-        SELECT account_code, amount_minor::text AS amount
-          FROM ledger_lines
-         WHERE transaction_id = ${result.ledgerTransactionId}
-         ORDER BY line_no
-      `),
-    ) as unknown as Array<Record<string, string>>;
-
-    // Exactly the sale's numbers with the sign flipped — and against the
-    // liability, not cash, because the transfer has not happened yet.
-    expect(lines.map((l) => [l.account_code, l.amount])).toEqual([
-      [LEDGER_ACCOUNTS.ENGINEER_PAYABLE, '1600'],
-      [LEDGER_ACCOUNTS.PLATFORM_REVENUE_REVERSED, '400'],
-      [LEDGER_ACCOUNTS.CUSTOMER_REFUNDS_PAYABLE, '-2000'],
-    ]);
-  });
-
-  it('closes the file and stops counting the sale', async () => {
-    // Scoped to THIS order: the customer has bought several times in this run,
-    // and an unscoped query would answer about whichever row came back first.
-    const rows = await withRawActorContext(OWNER_RAW, (tx) =>
-      tx.execute(sql`
-        SELECT e.revoked_at, e.revoked_reason
-          FROM entitlements e
-          JOIN order_items oi ON oi.id = e.order_item_id
-         WHERE oi.order_id = ${orderId}
-      `),
-    ) as unknown as Array<Record<string, string | null>>;
-
-    expect(rows).toHaveLength(1);
-    // Revoked, never deleted (§37).
-    expect(rows[0]!.revoked_at).not.toBeNull();
-    expect(rows[0]!.revoked_reason).toMatch(/^استرجاع RF-/);
-
+  it('a completed order has no transition out of it', async () => {
+    const completed = await completeAPurchase();
     const [order] = await withRawActorContext(OWNER_RAW, (tx) =>
-      tx.select().from(orders).where(eq(orders.id, orderId)),
-    );
-    expect(order!.status).toBe('REFUNDED');
-  });
-
-  it('the books still balance after the reversal', async () => {
-    const health = await checkLedgerHealth(owner);
-    for (const balance of health.balances) expect(balance.totalMinor).toBe(0n);
-    expect(health.isHealthy).toBe(true);
-  });
-
-  it('recording the transfer moves the cash and balances again', async () => {
-    const payout = await markRefundPaid(owner, {
-      refundRequestId, payoutReference: 'TRX-123',
-    });
-
-    const lines = await withRawActorContext(OWNER_RAW, (tx) =>
-      tx.execute(sql`
-        SELECT account_code, amount_minor::text AS amount
-          FROM ledger_lines WHERE transaction_id = ${payout.ledgerTransactionId}
-         ORDER BY line_no
-      `),
-    ) as unknown as Array<Record<string, string>>;
-
-    expect(lines.map((l) => [l.account_code, l.amount])).toEqual([
-      [LEDGER_ACCOUNTS.CUSTOMER_REFUNDS_PAYABLE, '2000'],
-      [LEDGER_ACCOUNTS.PLATFORM_CASH, '-2000'],
-    ]);
-
-    const health = await checkLedgerHealth(owner);
-    expect(health.isHealthy).toBe(true);
-  });
-
-  it('refusing to approve twice', async () => {
-    await expect(approveRefund(owner, { refundRequestId })).rejects.toThrow(RuleViolationError);
-  });
-
-  it('the engineer sees the claw-back in their own balance', async () => {
-    const statement = await contributorStatement(engineer);
-    const usd = statement.balances.find((b) => b.currency === 'USD');
-
-    // Two sales earned, one reversed.
-    expect(usd?.earnedMinor).toBe(3200n);
-    expect(usd?.reversedMinor).toBe(1600n);
-    expect(usd?.balanceMinor).toBe(1600n);
-  });
-});
-
-// ===========================================================================
-describe('4. a rejected refund changes nothing financial', () => {
-  it('records the refusal and leaves the books alone', async () => {
-    const orderId = await completeAPurchase();
-    const before = await checkLedgerHealth(owner);
-
-    const request = await requestRefund(customer, {
-      orderId, reason: 'NOT_AS_DESCRIBED', customerNote: 'ليس ما توقعته من الوصف.',
-    });
-
-    await rejectRefund(owner, {
-      refundRequestId: request.refundRequestId,
-      decisionNote: 'المحتوى مطابق للوصف المنشور.',
-    });
-
-    const after = await checkLedgerHealth(owner);
-    expect(after.balances.map((b) => b.lineCount)).toEqual(
-      before.balances.map((b) => b.lineCount),
-    );
-
-    const [order] = await withRawActorContext(OWNER_RAW, (tx) =>
-      tx.select().from(orders).where(eq(orders.id, orderId)),
+      tx.select().from(orders).where(eq(orders.id, completed)),
     );
     expect(order!.status).toBe('COMPLETED');
 
-    const [entitlement] = await withRawActorContext(OWNER_RAW, (tx) =>
-      tx.select().from(entitlements).where(eq(entitlements.orderItemId,
-        sql`(SELECT id FROM order_items WHERE order_id = ${orderId} LIMIT 1)` as never)),
-    );
-    expect(entitlement?.revokedAt ?? null).toBeNull();
+    const { transitionsFrom } = await import('@/commerce/order-status');
+    expect(transitionsFrom('COMPLETED', 'OWNER')).toEqual([]);
+    expect(transitionsFrom('COMPLETED', 'CUSTOMER')).toEqual([]);
   });
 });
 
@@ -606,7 +501,8 @@ describe('6. what each party may read (§12, §49)', () => {
     const mine = payables.find((p) => p.contributorId === ids.contributor);
     const theirs = payables.find((p) => p.contributorId === ids.otherContributor);
 
-    expect(mine?.balanceMinor).toBe(3200n); // three sales, one reversed
+    // Three sales at 16.00, less the 1.00 correction posted above.
+    expect(mine?.balanceMinor).toBe(3100n);
     expect(theirs?.balanceMinor).toBe(1600n);
     expect(mine?.meetsMinimum).toBe(false);
   });
@@ -618,11 +514,15 @@ describe('6. what each party may read (§12, §49)', () => {
 
     for (const period of usd) {
       // Internal consistency of every reported month: what customers paid is
-      // what the two sides of the split add up to.
+      // what the two sides of the SALE split add up to. Adjustments are
+      // excluded from both sides, which is why they are reported on their own.
       expect(period.engineerShareMinor + period.platformRevenueMinor)
         .toBe(period.grossSalesMinor);
-      expect(period.netPlatformMinor)
-        .toBe(period.platformRevenueMinor - period.revenueReversedMinor);
+      expect(period.netPlatformMinor).toBe(
+        period.platformRevenueMinor
+        + period.platformAdjustmentsMinor
+        - period.revenueReversedMinor,
+      );
     }
   });
 });
@@ -653,11 +553,11 @@ describe('7. the code and the database agree about the chart of accounts', () =>
 });
 
 // ===========================================================================
-describe('8. a refund landing after a payout leaves a negative balance', () => {
+describe('8. a correction landing after a payout leaves a negative balance', () => {
   it('reports the debt rather than rounding it away', async () => {
-    const orderId = await completeAPurchase();
+    await completeAPurchase();
 
-    // Simulate the settlement that P7 will perform: pay out everything owed.
+    // Pay out everything owed, as a monthly settlement does.
     const statement = await contributorStatement(engineer);
     const owed = statement.balances.find((b) => b.currency === 'USD')!.balanceMinor;
     expect(owed).toBeGreaterThan(0n);
@@ -676,16 +576,23 @@ describe('8. a refund landing after a payout leaves a negative balance', () => {
     const settled = await contributorStatement(engineer);
     expect(settled.balances.find((b) => b.currency === 'USD')?.balanceMinor).toBe(0n);
 
-    // NOW the refund arrives, for a sale in an already-settled month.
-    const request = await requestRefund(customer, {
-      orderId, reason: 'PLATFORM_ERROR', customerNote: 'خطأ تقني عند التنزيل تكرر مراراً.',
-    });
-    await approveRefund(owner, { refundRequestId: request.refundRequestId });
+    // NOW an owner correction lands, against a month already paid out.
+    await withRawActorContext(OWNER_RAW, (tx) =>
+      tx.execute(sql`
+        SELECT app_post_ledger_transaction(
+          'ADJUSTMENT', 'USD', now(), 'correction', NULL, 'تصحيح بعد التسوية',
+          ${JSON.stringify([
+            { account: 'ENGINEER_PAYABLE', contributorId: ids.contributor, amountMinor: '1600' },
+            { account: 'PLATFORM_REVENUE', amountMinor: '-1600' },
+          ])}::jsonb)
+      `),
+    );
 
     const after = await contributorStatement(engineer);
     const usd = after.balances.find((b) => b.currency === 'USD');
 
-    // The engineer was paid for a sale that was undone. The books say so.
+    // The engineer was paid, then corrected against. The books say so rather
+    // than rounding the debt up to zero.
     expect(usd?.balanceMinor).toBe(-1600n);
     expect(usd?.meetsMinimum).toBe(false);
 

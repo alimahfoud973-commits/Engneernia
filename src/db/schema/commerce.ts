@@ -223,14 +223,11 @@ export const orderItems = pgTable(
     snapshotTakenAt: utcTimestamp('snapshot_taken_at'),
 
     /*
-     * Refund marks (specification §17). Deliberately NOT part of the frozen
-     * snapshot: the sale's numbers stay exactly as they were, and the refund
-     * is recorded beside them. The immutability trigger lists the snapshot
-     * columns by name, so these two may be written once a refund is approved
-     * while every financial figure above stays sealed.
+     * There are no refund marks here. The owner's decision is that a completed
+     * sale is final — "الكتاب الذي يباع لا يسترد أمواله لأي سبب" — so the two
+     * columns P6 added for it were dropped in migration 0035, along with the
+     * feature itself.
      */
-    refundedAt: utcTimestamp('refunded_at'),
-    refundRequestId: uuid('refund_request_id'),
 
     createdAt: createdAt(),
   },

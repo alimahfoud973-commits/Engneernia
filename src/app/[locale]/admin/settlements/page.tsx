@@ -20,8 +20,8 @@ export const dynamic = 'force-dynamic';
  *
  * Statements that pay nothing are shown, not hidden. Decisions §8 requires a
  * carried-forward balance to be visible, and the owner needs to see a NEGATIVE
- * balance — an engineer who was paid for a sale later refunded — because that
- * is the one that will quietly net off next month.
+ * balance — which an ADJUSTMENT can still produce — because that is the one
+ * that quietly nets off next month.
  */
 export default async function AdminSettlementsPage({
   params,
@@ -107,12 +107,16 @@ export default async function AdminSettlementsPage({
                         {formatMinor(row.periodSalesMinor, row.currency)}
                       </dd>
                     </div>
-                    <div className="flex flex-col">
-                      <dt className="text-xs text-[var(--color-ink-faint)]">استرجاعات</dt>
-                      <dd className="tabular-nums">
-                        {formatMinor(row.periodRefundsMinor, row.currency)}
-                      </dd>
-                    </div>
+                    {row.periodRefundsMinor !== 0n ? (
+                      <div className="flex flex-col">
+                        <dt className="text-xs text-[var(--color-ink-faint)]">
+                          استرجاعات (سجل قديم)
+                        </dt>
+                        <dd className="tabular-nums">
+                          {formatMinor(row.periodRefundsMinor, row.currency)}
+                        </dd>
+                      </div>
+                    ) : null}
                     <div className="flex flex-col">
                       <dt className="text-xs text-[var(--color-ink-faint)]">مُرحَّل سابقاً</dt>
                       <dd className="tabular-nums">
@@ -206,7 +210,7 @@ export default async function AdminSettlementsPage({
                     {row.status === 'PAID'
                       ? row.payoutReference ?? 'مصروف'
                       : row.balanceMinor < 0n
-                        ? 'رصيد سالب — استرجاع بعد تسوية، يُخصم الشهر القادم'
+                        ? 'رصيد سالب — قيد تسوية بعد صرف، يُخصم الشهر القادم'
                         : row.minimumPayoutMinor > 0n
                           ? `دون الحد الأدنى ${formatMinor(row.minimumPayoutMinor, row.currency)}`
                           : 'لا رصيد مستحق'}

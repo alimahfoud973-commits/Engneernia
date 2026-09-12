@@ -6,11 +6,9 @@ import { closeDb } from '@/db';
 import {
   commissionAgreements, contributors, disciplines, entitlements,
   orders, paymentMethods, payments, productContributors,
-  productPrices, products, refundRequestItems, refundRequests,
-  settlementLines, settlements, users,
+  productPrices, products, settlementLines, settlements, users,
 } from '@/db/schema';
 import { approvePayment, createOrder, placeOrder } from '@/commerce/orders';
-import { approveRefund, requestRefund } from '@/commerce/refunds';
 import { generateSettlements } from './generate';
 import { approveSettlement, cancelSettlement, markSettlementPaid } from './lifecycle';
 import { contributorStatement } from '@/finance/balances';
@@ -35,9 +33,16 @@ import type { Actor } from '@/authz/actor';
  *   AUGUST    — earns 32.00 more. The balance is now 80.00, which includes
  *               July's carry-forward, so the payment is for both months.
  *               Approved and paid.
- *   SEPTEMBER — earns 16.00, and two AUGUST sales are refunded — after August
- *               was settled and paid. The balance goes NEGATIVE, nothing is
- *               paid, and the debt rolls into October.
+ *   SEPTEMBER — earns 16.00, and the owner posts a 32.00 ADJUSTMENT against
+ *               an engineer who was already paid for August. The balance goes
+ *               NEGATIVE, nothing is paid, and the debt rolls into October.
+ *
+ *               This used to be a refund. The owner has since removed refunds
+ *               from the platform entirely, so the scenario is reproduced with
+ *               the mechanism that remains — an owner correction. The property
+ *               under test is unchanged and still matters: a debit landing
+ *               after its month was settled must not reopen that month, and
+ *               must not be rounded away.
  *
  * Time is simulated by faking `Date` only. Every timestamp that decides an
  * accounting month — the order's paid_at and the ledger entry's occurred_at —
@@ -97,11 +102,25 @@ async function sell(productIndex: number): Promise<string> {
   return order.orderId;
 }
 
-async function refund(orderId: string, note: string): Promise<void> {
-  const request = await requestRefund(customer, {
-    orderId, reason: 'PLATFORM_ERROR', customerNote: note,
-  });
-  await approveRefund(owner, { refundRequestId: request.refundRequestId });
+/**
+ * An owner correction against the engineer's balance.
+ *
+ * Posted through the trusted path as the owner, which is exactly how a
+ * correction reaches the books today — there is no screen for it yet.
+ */
+async function adjust(amountMinor: bigint, memo: string): Promise<void> {
+  await withRawActorContext(OWNER_RAW, (tx) =>
+    tx.execute(sql`
+      SELECT app_post_ledger_transaction(
+        'ADJUSTMENT', 'USD', ${new Date().toISOString()}::timestamptz,
+        'correction', NULL, ${memo},
+        ${JSON.stringify([
+          { account: 'ENGINEER_PAYABLE', contributorId: ids.contributor,
+            amountMinor: amountMinor.toString() },
+          { account: 'PLATFORM_REVENUE', amountMinor: (-amountMinor).toString() },
+        ])}::jsonb)
+    `),
+  );
 }
 
 async function balanceOf(): Promise<bigint> {
@@ -186,17 +205,6 @@ afterAll(async () => {
     await tx.execute(sql`DELETE FROM settlement_lines WHERE settlement_id IN
       (SELECT id FROM settlements WHERE contributor_id = ${ids.contributor})`);
     await tx.delete(settlements).where(eq(settlements.contributorId, ids.contributor));
-
-    const requestIds = await tx
-      .select({ id: refundRequests.id })
-      .from(refundRequests)
-      .where(eq(refundRequests.customerId, ids.customer));
-    if (requestIds.length > 0) {
-      await tx.delete(refundRequestItems).where(
-        sql`refund_request_id IN (${sql.join(requestIds.map((r) => sql`${r.id}`), sql`, `)})`,
-      );
-      await tx.delete(refundRequests).where(eq(refundRequests.customerId, ids.customer));
-    }
 
     await tx.delete(entitlements).where(eq(entitlements.customerId, ids.customer));
     await tx.delete(orders).where(eq(orders.customerId, ids.customer));
@@ -379,19 +387,15 @@ describe('AUGUST — the balance clears the threshold and is paid', () => {
 });
 
 // ===========================================================================
-describe('SEPTEMBER — a refund lands after its month was settled', () => {
-  it('one sale, then two August sales are refunded', async () => {
+describe('SEPTEMBER — a debit lands after its month was settled', () => {
+  it('one sale, then an owner correction against a paid month', async () => {
     vi.setSystemTime(new Date('2026-09-14T09:00:00Z'));
     await sell(5);
     expect(await balanceOf()).toBe(1600n);
 
-    const augustOrders = (globalThis as unknown as { __p7AugustOrders: string[] })
-      .__p7AugustOrders;
+    await adjust(3200n, 'تصحيح: خصم عن شهر آب');
 
-    await refund(augustOrders[0]!, 'الملف تعذّر فتحه بعد التنزيل مراراً.');
-    await refund(augustOrders[1]!, 'نفس العطل في الملف الثاني من الطلب.');
-
-    // Earned 1600 this month, clawed back 3200 for a month already paid.
+    // Earned 1600 this month, 3200 taken back for a month already paid.
     expect(await balanceOf()).toBe(-1600n);
   });
 
@@ -409,12 +413,12 @@ describe('SEPTEMBER — a refund lands after its month was settled', () => {
 
     const row = await settlementRow('2026-09');
     expect(row!.periodSalesMinor).toBe(1600n);
-    expect(row!.periodRefundsMinor).toBe(3200n);
+    expect(row!.periodAdjustmentsMinor).toBe(-3200n);
     // August's settlement paid everything owed, so nothing carried IN.
     expect(row!.carriedForwardMinor).toBe(0n);
   });
 
-  it('the statement shows the sale and both reversals', async () => {
+  it('the statement shows the sale, and the detail adds up', async () => {
     const row = await settlementRow('2026-09');
     const lines = await withRawActorContext(OWNER_RAW, (tx) =>
       tx.select().from(settlementLines)
@@ -422,20 +426,20 @@ describe('SEPTEMBER — a refund lands after its month was settled', () => {
     );
 
     expect(lines.filter((line) => line.kind === 'SALE')).toHaveLength(1);
-    expect(lines.filter((line) => line.kind === 'REFUND')).toHaveLength(2);
-    // Refund lines are negative — the engineer reads a claw-back as a minus.
-    expect(lines.filter((line) => line.kind === 'REFUND')
-      .every((line) => line.engineerMinor < 0n)).toBe(true);
-    expect(lines.reduce((total, line) => total + line.engineerMinor, 0n)).toBe(-1600n);
+    // No refund lines can exist any more: the platform issues none.
+    expect(lines.filter((line) => line.kind === 'REFUND')).toHaveLength(0);
+    // The sale detail matches the period's SALES, and the adjustment is
+    // reported separately rather than as a statement line.
+    expect(lines.reduce((total, line) => total + line.engineerMinor, 0n)).toBe(1600n);
   });
 
-  it('AUGUST\'s paid statement is untouched by the later refund', async () => {
+  it('AUGUST\'s paid statement is untouched by the later correction', async () => {
     // §48: a settled month is settled. The reversal lands in the open month.
     const august = await settlementRow('2026-08');
     expect(august!.status).toBe('PAID');
     expect(august!.netDueMinor).toBe(8000n);
     expect(august!.periodSalesMinor).toBe(3200n);
-    expect(august!.periodRefundsMinor).toBe(0n);
+    expect(august!.periodAdjustmentsMinor).toBe(0n);
   });
 
   it('the debt rolls into October rather than disappearing', async () => {

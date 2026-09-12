@@ -90,12 +90,14 @@ export default async function EarningsPage({
                         {formatMinor(balance.earnedMinor, balance.currency)}
                       </dd>
                     </div>
-                    <div className="flex flex-col">
-                      <dt className="text-xs text-[var(--color-ink-faint)]">مسترجَع</dt>
-                      <dd className="tabular-nums">
-                        {formatMinor(balance.reversedMinor, balance.currency)}
-                      </dd>
-                    </div>
+                    {balance.reversedMinor !== 0n ? (
+                      <div className="flex flex-col">
+                        <dt className="text-xs text-[var(--color-ink-faint)]">مسترجَع</dt>
+                        <dd className="tabular-nums">
+                          {formatMinor(balance.reversedMinor, balance.currency)}
+                        </dd>
+                      </div>
+                    ) : null}
                     <div className="flex flex-col">
                       <dt className="text-xs text-[var(--color-ink-faint)]">مصروف سابقاً</dt>
                       <dd className="tabular-nums">
@@ -114,7 +116,7 @@ export default async function EarningsPage({
 
                   <p className="text-xs text-[var(--color-ink-soft)]">
                     {balance.balanceMinor < 0n
-                      ? 'رصيدك سالب لأن استرجاعاً اعتُمد بعد تسوية شهره. يُخصم من مستحقات الشهر القادم.'
+                      ? 'رصيدك سالب بسبب قيد تسوية بعد صرف شهره. يُخصم من مستحقات الشهر القادم.'
                       : balance.balanceMinor === 0n
                         ? 'لا رصيد قائم حالياً.'
                         : balance.meetsMinimum
@@ -136,7 +138,6 @@ export default async function EarningsPage({
                   <tr className="border-b border-[var(--color-line-strong)] text-right text-xs text-[var(--color-ink-soft)]">
                     <th className="py-2 font-semibold">الشهر</th>
                     <th className="py-2 font-semibold">محقق</th>
-                    <th className="py-2 font-semibold">مسترجَع</th>
                     <th className="py-2 font-semibold">الصافي</th>
                   </tr>
                 </thead>
@@ -152,9 +153,6 @@ export default async function EarningsPage({
                       <td className="py-2.5 tabular-nums">
                         {formatMinor(row.earnedMinor, row.currency)}
                       </td>
-                      <td className="py-2.5 tabular-nums">
-                        {formatMinor(row.reversedMinor, row.currency)}
-                      </td>
                       <td className="py-2.5 font-semibold tabular-nums">
                         {formatMinor(row.netMinor, row.currency)}
                       </td>
@@ -164,7 +162,7 @@ export default async function EarningsPage({
               </table>
             </div>
             <p className="text-xs text-[var(--color-ink-faint)]">
-              يُحسب الاسترجاع في شهر اعتماده، لا في شهر البيع الأصلي: الشهر المُسوّى لا يُعاد فتحه.
+              الشهر المُسوّى لا يُعاد فتحه: أي تصحيح لاحق يظهر في كشف الشهر الذي صدر فيه.
             </p>
           </section>
         ) : null}
@@ -214,12 +212,14 @@ export default async function EarningsPage({
                         {formatMinor(row.periodSalesMinor, row.currency)}
                       </dd>
                     </div>
-                    <div className="flex flex-col">
-                      <dt className="text-[var(--color-ink-faint)]">استرجاعات</dt>
-                      <dd className="tabular-nums">
-                        {formatMinor(row.periodRefundsMinor, row.currency)}
-                      </dd>
-                    </div>
+                    {row.periodRefundsMinor !== 0n ? (
+                      <div className="flex flex-col">
+                        <dt className="text-[var(--color-ink-faint)]">استرجاعات</dt>
+                        <dd className="tabular-nums">
+                          {formatMinor(row.periodRefundsMinor, row.currency)}
+                        </dd>
+                      </div>
+                    ) : null}
                     <div className="flex flex-col">
                       <dt className="text-[var(--color-ink-faint)]">مُرحَّل سابقاً</dt>
                       <dd className="tabular-nums">
@@ -238,7 +238,7 @@ export default async function EarningsPage({
                         ? `حُوِّل${row.payoutReference ? ` — مرجع ${row.payoutReference}` : ''}.`
                         : row.status === 'CARRIED_FORWARD'
                           ? row.balanceMinor < 0n
-                            ? 'رصيد سالب بسبب استرجاع اعتُمد بعد تسوية شهره. يُخصم من مستحقات الشهر القادم.'
+                            ? 'رصيد سالب بسبب قيد تسوية بعد صرف شهره. يُخصم من مستحقات الشهر القادم.'
                             : row.minimumPayoutMinor > 0n
                               ? `الرصيد دون الحد الأدنى ${formatMinor(row.minimumPayoutMinor, row.currency)}، ويُرحَّل إلى الشهر التالي.`
                               : 'لا رصيد مستحق في هذا الشهر.'
@@ -287,7 +287,6 @@ export default async function EarningsPage({
                     {row.coAuthoredUnits === 0
                       ? ` · عمولة المنصة ${formatMinor(row.platformMinor, row.currency)}`
                       : ` · عمولة المنصة تُعرض فقط للمنتجات المنفردة (${row.coAuthoredUnits} عملية مشتركة مستبعدة)`}
-                    {row.refundedUnits > 0 ? ` · ${row.refundedUnits} مسترجَعة` : ''}
                   </p>
                 </li>
               ))}
