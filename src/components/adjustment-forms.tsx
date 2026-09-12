@@ -3,11 +3,15 @@
 import Link from 'next/link';
 import { useActionState } from 'react';
 import {
-  confirmAdjustmentAction, previewAdjustmentAction,
-  INITIAL_ADJUSTMENT, type AdjustmentState,
+  confirmAdjustmentAction, previewAdjustmentAction, type AdjustmentState,
 } from '@/finance/adjustment-actions';
 import { formatMinor } from './money-display';
 import { minorDigitsOf, type CurrencyCode } from '@/lib/money/currency';
+import {
+  ADJUSTMENT_DIRECTION_LABELS as DIRECTION_LABELS,
+  ADJUSTMENT_REASON_LABELS,
+  ADJUSTMENT_TARGET_LABELS as TARGET_LABELS,
+} from '@/lib/labels';
 
 /**
  * The adjustment tool (owner decision on OPEN-21).
@@ -24,24 +28,8 @@ import { minorDigitsOf, type CurrencyCode } from '@/lib/money/currency';
  * before and after, and any warning, BEFORE anything is written.
  */
 
-export const ADJUSTMENT_REASON_LABELS: Readonly<Record<string, string>> = {
-  DATA_ENTRY_ERROR: 'خطأ إدخال',
-  DUPLICATE_PAYMENT_RECEIVED: 'دفعة مستلمة مكررة',
-  BANK_FEE_OR_SHORTFALL: 'رسوم أو نقص تحويل',
-  AGREED_COMPENSATION: 'تعويض متفق عليه',
-  SETTLEMENT_CORRECTION: 'تصحيح تسوية',
-  OTHER: 'سبب آخر',
-};
+export const INITIAL_ADJUSTMENT: AdjustmentState = { error: null };
 
-const TARGET_LABELS: Readonly<Record<string, string>> = {
-  ENGINEER: 'رصيد مهندس',
-  PLATFORM: 'حساب المنصة',
-};
-
-const DIRECTION_LABELS: Readonly<Record<string, string>> = {
-  INCREASE: 'زيادة',
-  DECREASE: 'خصم',
-};
 
 function ErrorNote({ message }: { message: string | null }) {
   if (!message) return null;

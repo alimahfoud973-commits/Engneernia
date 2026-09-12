@@ -37,14 +37,6 @@ function Note({ state }: { state: ActionState }) {
   return null;
 }
 
-export const SETTLEMENT_STATUS_LABELS: Readonly<Record<string, string>> = {
-  PENDING: 'بانتظار الاعتماد',
-  APPROVED: 'معتمد — بانتظار التحويل',
-  PAID: 'مصروف',
-  CARRIED_FORWARD: 'مُرحَّل إلى الشهر التالي',
-  CANCELLED: 'ملغى',
-};
-
 export function GenerateSettlementsForm({ defaultPeriod }: { defaultPeriod: string }) {
   const [state, formAction, pending] = useActionState(generateSettlementsAction, INITIAL);
 

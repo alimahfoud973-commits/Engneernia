@@ -3,8 +3,9 @@ import { SiteHeader, SiteFooter } from '@/components/site-chrome';
 import { AdminNav } from '../admin-nav';
 import {
   ApproveSettlementForm, CancelSettlementForm, GenerateSettlementsForm,
-  PaySettlementForm, SETTLEMENT_STATUS_LABELS,
+  PaySettlementForm,
 } from '@/components/settlement-forms';
+import { SETTLEMENT_STATUS_LABELS } from '@/lib/labels';
 import { formatMinor } from '@/components/money-display';
 import { requireOwner } from '@/auth/current';
 import { defaultSettlementPeriod, settlementRun } from '@/settlements/queries';

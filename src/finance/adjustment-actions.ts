@@ -32,7 +32,15 @@ export type AdjustmentState = {
   posted?: { reference: string; ledgerTransactionId: string } | null;
 };
 
-export const INITIAL_ADJUSTMENT: AdjustmentState = { error: null };
+/*
+ * NOTE: this file exports ONLY async functions.
+ *
+ * A "use server" module may export nothing else — every export becomes a
+ * callable server endpoint, so a plain object would be meaningless and Next
+ * refuses the file at runtime with "A 'use server' file can only export async
+ * functions, found object". The initial action state therefore lives with the
+ * component that uses it. Types are fine: they are erased before this runs.
+ */
 
 function toMessage(error: unknown): string {
   if (error instanceof AppError) return error.message;

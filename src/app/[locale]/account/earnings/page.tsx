@@ -6,7 +6,7 @@ import { requireActor } from '@/auth/current';
 import { activeContributorId } from '@/authz/actor';
 import { contributorSales, contributorStatement } from '@/finance/balances';
 import { myStatements } from '@/settlements/queries';
-import { SETTLEMENT_STATUS_LABELS } from '@/components/settlement-forms';
+import { SETTLEMENT_STATUS_LABELS } from '@/lib/labels';
 
 export const dynamic = 'force-dynamic';
 

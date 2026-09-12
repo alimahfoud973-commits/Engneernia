@@ -5,21 +5,10 @@ import { formatPrice } from '@/components/product-card';
 import { requireActor } from '@/auth/current';
 import { myPurchases } from '@/commerce/queries';
 import { activeContributorId } from '@/authz/actor';
+import { ORDER_STATUS_LABELS } from '@/lib/labels';
 import { logoutAction } from '@/auth/actions';
 
 export const dynamic = 'force-dynamic';
-
-const ORDER_LABELS: Record<string, string> = {
-  DRAFT: 'مسودة',
-  AWAITING_PAYMENT: 'بانتظار الدفع',
-  PROOF_SUBMITTED: 'قيد التحقق',
-  PENDING_VERIFICATION: 'قيد التحقق',
-  PAID: 'مدفوع',
-  COMPLETED: 'مكتمل',
-  PAYMENT_ISSUE: 'مشكلة في الدفع',
-  CANCELLED: 'ملغى',
-  REFUNDED: 'مُسترجع',
-};
 
 /** Customer account (specification §40). */
 export default async function AccountPage({ params }: { params: Promise<{ locale: string }> }) {
@@ -119,7 +108,7 @@ export default async function AccountPage({ params }: { params: Promise<{ locale
                   {orders.map((order) => (
                     <tr key={order.id} className="border-t border-[var(--color-line)]">
                       <td className="technical-term p-3">{order.orderNumber}</td>
-                      <td className="p-3">{ORDER_LABELS[order.status] ?? order.status}</td>
+                      <td className="p-3">{ORDER_STATUS_LABELS[order.status] ?? order.status}</td>
                       <td className="technical-term p-3">
                         {formatPrice(String(order.totalMinor), order.currency, order.totalMinor === 0n)}
                       </td>

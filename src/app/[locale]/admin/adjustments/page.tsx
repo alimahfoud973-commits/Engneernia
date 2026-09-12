@@ -1,7 +1,8 @@
 import { setRequestLocale } from 'next-intl/server';
 import { SiteHeader, SiteFooter } from '@/components/site-chrome';
 import { AdminNav } from '../admin-nav';
-import { AdjustmentTool, ADJUSTMENT_REASON_LABELS } from '@/components/adjustment-forms';
+import { AdjustmentTool } from '@/components/adjustment-forms';
+import { ADJUSTMENT_REASON_LABELS, ADJUSTMENT_TARGET_LABELS } from '@/lib/labels';
 import { formatMinor } from '@/components/money-display';
 import { requireOwner } from '@/auth/current';
 import { adjustableContributors, listAdjustments } from '@/finance/adjustments';
@@ -9,11 +10,6 @@ import { readFinancialPolicy } from '@/finance/policy';
 import { withActor } from '@/db/actor-context';
 
 export const dynamic = 'force-dynamic';
-
-const TARGET_LABELS: Readonly<Record<string, string>> = {
-  ENGINEER: 'مهندس',
-  PLATFORM: 'المنصة',
-};
 
 /**
  * Financial adjustments (owner decision on OPEN-21).
@@ -86,7 +82,7 @@ export default async function AdminAdjustmentsPage({
                   <div className="flex flex-wrap items-baseline justify-between gap-3">
                     <span className="technical-term font-semibold">{row.reference}</span>
                     <span className="text-[var(--color-ink-soft)]">
-                      {TARGET_LABELS[row.target] ?? row.target}
+                      {ADJUSTMENT_TARGET_LABELS[row.target] ?? row.target}
                       {row.contributorName ? ` — ${row.contributorName}` : ''}
                     </span>
                     <span
