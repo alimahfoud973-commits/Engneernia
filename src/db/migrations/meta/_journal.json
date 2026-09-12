@@ -134,6 +134,41 @@
       "when": 1789197464684,
       "tag": "0018_public_contributor_products",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1789211093847,
+      "tag": "0019_p5_commerce",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1789211231777,
+      "tag": "0020_commerce_rls",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1789211429179,
+      "tag": "0021_order_numbers",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1789211558460,
+      "tag": "0022_entitled_downloads",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1789211695638,
+      "tag": "0023_p5_fixes",
+      "breakpoints": true
     }
   ]
 }

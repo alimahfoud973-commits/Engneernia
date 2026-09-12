@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import { setRequestLocale } from 'next-intl/server';
 import { SiteHeader, SiteFooter } from '@/components/site-chrome';
 import { FILE_TYPE_LABELS, LEVEL_LABELS, formatPrice } from '@/components/product-card';
+import { BuyButton } from '@/components/commerce-forms';
 import { productBySlug } from '@/catalog/public-queries';
 
 export const dynamic = 'force-dynamic';
@@ -143,13 +144,10 @@ export default async function ProductPage({
               </span>
             </div>
 
-            <button
-              type="button"
-              disabled
-              className="cursor-not-allowed rounded-[var(--radius-card)] bg-[var(--color-surface-muted)] px-4 py-2.5 text-sm font-semibold text-[var(--color-ink-faint)]"
-            >
-              الشراء يُفعَّل في مرحلة الدفع
-            </button>
+            <BuyButton
+              slug={product.slug}
+              label={product.isFree ? 'الحصول عليه مجاناً' : 'شراء الآن'}
+            />
 
             <dl className="flex flex-col gap-3 border-t border-[var(--color-line)] pt-4">
               {facts.map(([label, value]) => (

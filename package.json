@@ -25,7 +25,8 @@
     "seed:demo": "node --experimental-strip-types scripts/seed-demo.ts",
     "db:dev": "bash scripts/dev-db.sh",
     "seed:demo-media": "node --experimental-strip-types --conditions=react-server --import ./scripts/with-alias.mjs scripts/seed-demo-media.ts",
-    "seed:scale": "node --experimental-strip-types scripts/seed-scale.ts"
+    "seed:scale": "node --experimental-strip-types scripts/seed-scale.ts",
+    "seed:payment-methods": "node --experimental-strip-types scripts/seed-payment-methods.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1131.0",

@@ -11,3 +11,4 @@ export * from './catalog';
 export * from './notifications';
 export * from './media';
 export * from './settings';
+export * from './commerce';

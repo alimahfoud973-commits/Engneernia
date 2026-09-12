@@ -1,8 +1,10 @@
 import 'server-only';
 import { and, eq } from 'drizzle-orm';
-import { downloadEvents, productFiles, products } from '@/db/schema';
+import { and as andOp, eq as eqOp, isNull as isNullOp } from 'drizzle-orm';
+import { downloadEvents, entitlements, productFiles, products } from '@/db/schema';
 import { withActor } from '@/db/actor-context';
 import { isOwner, type Actor } from '@/authz/actor';
+import { sql } from 'drizzle-orm';
 import { NotFoundError } from '@/lib/errors';
 import { serverEnv } from '@/lib/config/env';
 import { hashIp } from '@/auth/crypto';
@@ -79,6 +81,38 @@ export async function deliverProductFile(
     // Record the delivery of an original BEFORE the bytes are granted, so a
     // download cannot happen without a trail even if the transfer then fails.
     if (row.role === 'ORIGINAL') {
+      /**
+       * Why this actor is allowed the file, recorded on the event.
+       *
+       * RLS has already decided the question; this only names the reason for
+       * the trail. A customer reaching an original necessarily holds a live
+       * entitlement, because that is the only policy branch that admits them.
+       */
+      let grantReason = isOwner(actor) ? 'OWNER' : 'CONTRIBUTOR';
+
+      if (!isOwner(actor) && actor.kind === 'USER') {
+        const [owned] = await tx
+          .select({ id: entitlements.id })
+          .from(entitlements)
+          .where(
+            andOp(
+              eqOp(entitlements.productId, row.productId),
+              eqOp(entitlements.customerId, actor.userId),
+              isNullOp(entitlements.revokedAt),
+            ),
+          )
+          .limit(1);
+
+        if (owned) {
+          grantReason = 'ENTITLEMENT';
+          // Counts the download and enforces any allowance cap. Raises if the
+          // entitlement was revoked between the policy check and here.
+          await tx.execute(
+            sql`SELECT app_record_entitlement_download(${owned.id}::uuid)`,
+          );
+        }
+      }
+
       await tx.insert(downloadEvents).values({
         productFileId: row.id,
         // Denormalised so the record still identifies what was taken after the
@@ -88,7 +122,7 @@ export async function deliverProductFile(
         filename: row.originalFilename,
         storageKey: row.storageKey,
         userId: actor.kind === 'USER' ? actor.userId : null,
-        grantReason: isOwner(actor) ? 'OWNER' : 'CONTRIBUTOR',
+        grantReason,
         ipHash: hashIp(request.ip),
         userAgent: request.userAgent ?? null,
         byteSize: row.byteSize,
