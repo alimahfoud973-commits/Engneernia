@@ -18,9 +18,12 @@
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
     "verify": "npm run typecheck && npm run lint && npm run test && npm run build",
-    "db:prove-rls": "psql -v ON_ERROR_STOP=1 -f src/db/security/rls-foundation.test.sql"
+    "db:prove-rls": "psql -v ON_ERROR_STOP=1 -f src/db/security/rls-foundation.test.sql",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "bootstrap:owner": "node --experimental-strip-types scripts/bootstrap-owner.ts"
   },
   "dependencies": {
+    "@node-rs/argon2": "^2.2.1",
     "drizzle-orm": "^0.45.2",
     "next": "^16.3.5",
     "next-intl": "^4.14.4",

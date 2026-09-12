@@ -60,6 +60,30 @@ jobs:
           psql -h localhost -U postgres -d engineering_marketplace -v ON_ERROR_STOP=1 \
             -f src/db/security/rls-foundation.test.sql
 
+      - name: Apply migrations
+        env:
+          DATABASE_MIGRATION_URL: postgresql://migrator:migrator_password@localhost:5432/engineering_marketplace
+        run: npm run db:migrate
+
+      # The phase P1 exit criterion. These run every query the way a BUGGY
+      # application would write it — no WHERE clause, no policy check — and
+      # assert the database returns nothing anyway.
+      - name: Integration tests (RLS enforced without the policy layer)
+        env:
+          DATABASE_URL: postgresql://app_user:app_password@localhost:5432/engineering_marketplace
+          DATABASE_MIGRATION_URL: postgresql://migrator:migrator_password@localhost:5432/engineering_marketplace
+          DATABASE_SUPERUSER_URL: postgresql://postgres:postgres@localhost:5432/engineering_marketplace
+          SESSION_SECRET: ci-session-secret-value-at-least-32-chars
+          CONFIG_ENCRYPTION_KEY: ci-config-encryption-key-at-least-32-chars
+          APP_URL: http://localhost:3000
+          STORAGE_ENDPOINT: http://localhost:9000
+          STORAGE_REGION: us-east-1
+          STORAGE_ACCESS_KEY_ID: ci
+          STORAGE_SECRET_ACCESS_KEY: ci
+          STORAGE_BUCKET_ORIGINALS: ci-originals
+          STORAGE_BUCKET_DERIVATIVES: ci-derivatives
+        run: npm run test:integration
+
       - name: Production build
         run: npm run build
 

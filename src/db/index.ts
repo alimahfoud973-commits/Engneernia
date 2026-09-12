@@ -46,15 +46,45 @@ export function getSql(): SqlClient {
   return globalThis.__emSql;
 }
 
-/** The Drizzle query builder, bound to the restricted application role. */
+/**
+ * The Drizzle query builder, bound to the restricted application role.
+ *
+ * Memoised. Constructing it installs custom type parsers on the underlying
+ * postgres.js client, and connections opened afterwards inherit them — so
+ * building a new instance per call makes raw-SQL results depend on the order
+ * connections happened to be opened in. One instance, built once.
+ */
+let memoisedDb: ReturnType<typeof drizzle> | undefined;
+
 export function getDb() {
-  return drizzle(getSql());
+  memoisedDb ??= drizzle(getSql());
+  return memoisedDb;
 }
 
 /** Closes the pool. Used by integration tests and graceful shutdown. */
 export async function closeDb(): Promise<void> {
+  memoisedDb = undefined;
   if (globalThis.__emSql) {
     await globalThis.__emSql.end({ timeout: 5 });
     globalThis.__emSql = undefined;
   }
+}
+
+/**
+ * Coerce a timestamp coming back from SQL into a Date.
+ *
+ * Necessary because the driver's parsers are installed per connection: once
+ * Drizzle is constructed, connections opened later hand back ISO strings while
+ * ones opened earlier hand back Dates. Rather than depend on which connection
+ * a query landed on, every timestamp crossing from SQL into application code
+ * passes through here.
+ *
+ * Discovered by the login integration suite, which failed non-deterministically
+ * with "getTime is not a function" — see TD-11 in docs/DECISIONS.md.
+ */
+export function toDate(value: Date | string | number | null | undefined): Date | null {
+  if (value === null || value === undefined) return null;
+  if (value instanceof Date) return value;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
