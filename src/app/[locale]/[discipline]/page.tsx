@@ -1,0 +1,80 @@
+import { notFound } from 'next/navigation';
+import { setRequestLocale } from 'next-intl/server';
+import { SiteHeader, SiteFooter } from '@/components/site-chrome';
+import { ProductGrid } from '@/components/product-card';
+import { disciplineBySlug } from '@/catalog/public-queries';
+
+export const dynamic = 'force-dynamic';
+
+/**
+ * Discipline portal (specification §4): each behaves as its own entry point
+ * over the shared catalogue, with its own category tree.
+ */
+export default async function DisciplinePage({
+  params,
+}: {
+  params: Promise<{ locale: string; discipline: string }>;
+}) {
+  const { locale, discipline: slug } = await params;
+  setRequestLocale(locale);
+
+  const discipline = await disciplineBySlug(slug);
+  if (!discipline) notFound();
+
+  const populated = discipline.categories.filter((c) => c.productCount > 0);
+
+  return (
+    <>
+      <SiteHeader />
+      <main className="mx-auto flex max-w-6xl flex-col gap-10 px-5 py-10">
+        <header className="flex flex-col gap-3 border-b border-[var(--color-line)] pb-6">
+          <p className="technical-term text-[11px] tracking-[0.16em] text-[var(--color-ink-faint)]">
+            {discipline.nameEn}
+          </p>
+          <h1 className="text-3xl font-bold">{discipline.nameAr}</h1>
+          {discipline.descriptionAr ? (
+            <p className="max-w-prose text-base leading-relaxed text-[var(--color-ink-soft)]">
+              {discipline.descriptionAr}
+            </p>
+          ) : null}
+        </header>
+
+        <section className="flex flex-col gap-3">
+          <h2 className="text-sm font-semibold text-[var(--color-ink-soft)]">
+            الأقسام ({discipline.categories.length})
+          </h2>
+          <ul className="flex flex-wrap gap-2">
+            {discipline.categories.map((category) => (
+              <li
+                key={category.slug}
+                className={
+                  category.productCount > 0
+                    ? 'rounded-[var(--radius-card)] border border-[var(--color-accent)] bg-[var(--color-accent-soft)] px-3 py-1.5 text-sm text-[var(--color-accent-ink)]'
+                    : 'rounded-[var(--radius-card)] border border-[var(--color-line)] px-3 py-1.5 text-sm text-[var(--color-ink-faint)]'
+                }
+              >
+                {category.nameAr}
+                {category.productCount > 0 ? (
+                  <span className="ms-1.5 tabular-nums text-xs">({category.productCount})</span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+          {populated.length === 0 ? (
+            <p className="text-xs text-[var(--color-ink-faint)]">
+              الأقسام المميزة تحتوي موارد منشورة؛ البقية جاهزة لاستقبال المحتوى.
+            </p>
+          ) : null}
+        </section>
+
+        <section className="flex flex-col gap-4">
+          <h2 className="text-sm font-semibold text-[var(--color-ink-soft)]">
+            الموارد المنشورة ({discipline.products.length})
+          </h2>
+          <ProductGrid products={discipline.products} />
+        </section>
+      </main>
+      <SiteFooter />
+    </>
+  );
+}

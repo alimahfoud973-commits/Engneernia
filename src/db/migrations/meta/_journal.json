@@ -22,6 +22,55 @@
       "when": 1789177834351,
       "tag": "0002_session_expiry",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1789178536032,
+      "tag": "0003_p2_catalog",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1789178571198,
+      "tag": "0004_catalog_rls",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1789178664643,
+      "tag": "0005_p2_notifications",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1789178664721,
+      "tag": "0006_notifications_rls",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1789178850089,
+      "tag": "0007_public_authors",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1789178872350,
+      "tag": "0008_relax_force_for_trusted_path",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1789193183571,
+      "tag": "0009_reserved_slugs",
+      "breakpoints": true
     }
   ]
 }
