@@ -57,6 +57,7 @@ const sql = postgres(url, { max: 1 });
 try {
   const pdf = await buildGuide();
   await writeFile('/tmp/demo-guide.pdf', pdf);
+  // eslint-disable-next-line no-restricted-properties -- kilobytes in a log line.
   console.log(`Built a ${PAGES}-page guide (${Math.round(pdf.byteLength / 1024)} KB).`);
 
   await sql`SELECT set_config('app.actor_role', 'OWNER', false)`;
@@ -75,7 +76,7 @@ try {
   await sql.end({ timeout: 5 });
 
   // Import the pipeline only now: it reads the validated environment at load.
-  const { ingestProductFile } = await import('../src/media/ingest.ts');
+  const { ingestProductFile } = await import('../src/media/ingest');
   const result = await ingestProductFile(
     {
       kind: 'USER', userId: owner.id, role: 'OWNER', displayName: 'Owner',

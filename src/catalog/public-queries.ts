@@ -2,7 +2,7 @@ import 'server-only';
 import { and, desc, eq, isNull, or, ilike, sql } from 'drizzle-orm';
 import { withActor } from '@/db/actor-context';
 import { GUEST } from '@/authz/actor';
-import { categories, disciplines, productFiles, productPrices, products } from '@/db/schema';
+import { categories, contributors, disciplines, productFiles, productPrices, products } from '@/db/schema';
 
 /**
  * ===========================================================================
@@ -128,6 +128,23 @@ export async function latestProducts(limit = 8): Promise<readonly PublicProductC
       .leftJoin(productPrices, withCurrentPrice())
       .where(eq(products.status, 'PUBLISHED'))
       .orderBy(desc(products.publishedAt))
+      .limit(limit);
+    return rows.map(toCard);
+  });
+}
+
+/** Best sellers (specification §29, §45). Ordered by the denormalised counter
+ *  the sales path maintains, over published rows only. */
+export async function bestSellers(limit = 4): Promise<readonly PublicProductCard[]> {
+  return withActor(GUEST, async (tx) => {
+    const rows = await tx
+      .select(cardColumns)
+      .from(products)
+      .innerJoin(disciplines, eq(disciplines.id, products.disciplineId))
+      .leftJoin(categories, eq(categories.id, products.categoryId))
+      .leftJoin(productPrices, withCurrentPrice())
+      .where(and(eq(products.status, 'PUBLISHED'), sql`${products.salesCount} > 0`))
+      .orderBy(desc(products.salesCount), desc(products.publishedAt))
       .limit(limit);
     return rows.map(toCard);
   });
@@ -289,3 +306,83 @@ export async function searchProducts(query: string, limit = 24) {
 }
 
 export { isNull };
+
+/**
+ * A contributor's public profile (specification §31).
+ *
+ * Returns the intentionally public facts and their published work. The
+ * revenue share on the same join table is unreachable from here — the
+ * products come through a narrow definer function that does not select it.
+ */
+export interface PublicContributorProfile {
+  readonly slug: string;
+  readonly displayName: string;
+  readonly specialization: string | null;
+  readonly bio: string | null;
+  readonly products: readonly PublicProductCard[];
+}
+
+export async function contributorBySlug(
+  slug: string,
+): Promise<PublicContributorProfile | null> {
+  return withActor(GUEST, async (tx) => {
+    const [profile] = await tx
+      .select({
+        slug: contributors.publicSlug,
+        displayName: contributors.displayName,
+        specialization: contributors.specialization,
+        bio: contributors.bio,
+      })
+      .from(contributors)
+      .where(and(eq(contributors.publicSlug, slug), eq(contributors.isActive, true)))
+      .limit(1);
+
+    if (!profile) return null;
+
+    const result = await tx.execute(
+      sql`SELECT * FROM app_public_contributor_products(${slug})`,
+    );
+    const rows = result as unknown as Array<Record<string, unknown>>;
+
+    return {
+      ...profile,
+      products: rows.map((row) =>
+        toCard({
+          slug: row.slug,
+          titleAr: row.title_ar,
+          subtitleAr: row.subtitle_ar,
+          disciplineSlug: row.discipline_slug,
+          disciplineNameAr: row.discipline_name_ar,
+          categoryNameAr: row.category_name_ar,
+          fileType: row.file_type,
+          level: row.level,
+          isFree: row.is_free,
+          priceMinor: row.price_minor,
+          currency: row.currency,
+          publishedAt: row.published_at,
+        }),
+      ),
+    };
+  });
+}
+
+/** Active contributors with published work, for the homepage rail. */
+export async function featuredContributors(limit = 6) {
+  return withActor(GUEST, async (tx) => {
+    const rows = await tx
+      .select({
+        slug: contributors.publicSlug,
+        displayName: contributors.displayName,
+        specialization: contributors.specialization,
+        productCount: sql<number>`app_public_contributor_product_count(${contributors.publicSlug})`,
+      })
+      .from(contributors)
+      .where(eq(contributors.isActive, true))
+      .limit(limit);
+
+    return rows
+      .map((row) => ({ ...row, productCount: Number(row.productCount) }))
+      .filter((row) => row.productCount > 0)
+      .sort((a, b) => b.productCount - a.productCount);
+  });
+}

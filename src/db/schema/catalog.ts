@@ -138,6 +138,14 @@ export const products = pgTable(
     /** Denormalised counter, maintained by the sales path in phase P6. */
     salesCount: integer('sales_count').notNull().default(0),
 
+    /*
+     * NOTE: the table also carries `search_vector`, a GENERATED ALWAYS
+     * tsvector built by the database from the title, subtitle and description
+     * (migration 0015). It is deliberately absent from this schema: the ORM
+     * must never select or write it, and declaring it here would invite both.
+     * Search reads it through raw SQL in src/catalog/search.ts.
+     */
+
     createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),

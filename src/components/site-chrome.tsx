@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { getPublicSettings } from '@/platform/settings';
 
 const DISCIPLINE_NAV = [
   { slug: 'electrical', label: 'كهربائية' },
@@ -7,16 +8,19 @@ const DISCIPLINE_NAV = [
   { slug: 'mechanical', label: 'ميكانيكية' },
 ] as const;
 
-export function SiteHeader() {
+/**
+ * The brand comes from the settings table, not from a constant, so the owner
+ * can rename the platform without a deploy (OPEN-8).
+ */
+export async function SiteHeader() {
+  const settings = await getPublicSettings();
+
   return (
-    <header className="border-b border-[var(--color-line)] bg-[var(--color-surface)]">
+    <header className="sticky top-0 z-40 border-b border-[var(--color-line)] bg-[var(--color-surface)]/95 backdrop-blur">
       <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-6 gap-y-3 px-5 py-3">
         <Link href="/" className="flex items-center gap-2 font-bold">
-          <span
-            aria-hidden
-            className="inline-block h-6 w-6 rounded-sm bg-[var(--color-accent)]"
-          />
-          <span className="text-base">منصة الموارد الهندسية</span>
+          <span aria-hidden className="inline-block h-6 w-6 rounded-sm bg-[var(--color-accent)]" />
+          <span className="text-base">{settings.platformNameAr}</span>
         </Link>
 
         <nav aria-label="التخصصات" className="flex flex-wrap items-center gap-1 text-sm">
@@ -40,7 +44,7 @@ export function SiteHeader() {
             name="q"
             type="search"
             placeholder="ابحث في الموارد الهندسية"
-            className="w-full rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-ground)] px-3 py-1.5 text-sm outline-none focus:border-[var(--color-accent)]"
+            className="w-full rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-ground)] px-3 py-1.5 text-sm outline-none transition-colors focus:border-[var(--color-accent)]"
           />
         </form>
       </div>
@@ -48,18 +52,31 @@ export function SiteHeader() {
   );
 }
 
-export function SiteFooter() {
+export async function SiteFooter() {
+  const settings = await getPublicSettings();
+
   return (
     <footer className="mt-16 border-t border-[var(--color-line)] bg-[var(--color-surface)]">
-      <div className="mx-auto flex max-w-6xl flex-col gap-4 px-5 py-8 text-sm text-[var(--color-ink-soft)]">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <p className="font-semibold text-[var(--color-ink)]">منصة الموارد الهندسية</p>
-          <p className="text-xs text-[var(--color-ink-faint)]">
-            المرحلة <span className="technical-term">P2</span> — الكتالوج والتصنيفات
-          </p>
+      <div className="mx-auto flex max-w-6xl flex-col gap-5 px-5 py-8 text-sm text-[var(--color-ink-soft)]">
+        <div className="flex flex-wrap items-start justify-between gap-6">
+          <div className="flex flex-col gap-1">
+            <p className="font-semibold text-[var(--color-ink)]">{settings.platformNameAr}</p>
+            <p className="technical-term text-xs text-[var(--color-ink-faint)]">
+              {settings.platformName}
+            </p>
+          </div>
+          <nav aria-label="روابط" className="flex flex-wrap gap-x-5 gap-y-2 text-sm">
+            <Link href="/search" className="hover:text-[var(--color-ink)]">
+              تصفّح الموارد
+            </Link>
+            <Link href="/search?price=free" className="hover:text-[var(--color-ink)]">
+              الموارد المجانية
+            </Link>
+          </nav>
         </div>
+
         <p className="max-w-prose text-xs leading-relaxed text-[var(--color-ink-faint)]">
-          هل لديك موارد هندسية عالية الجودة؟ النشر على المنصة يتم باعتماد من إدارتها —
+          النشر على المنصة يتم باعتماد من إدارتها. إن كانت لديك موارد هندسية عالية الجودة،
           تواصل معنا لتصبح أحد المهندسين المساهمين.
         </p>
       </div>

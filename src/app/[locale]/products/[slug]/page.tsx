@@ -164,14 +164,18 @@ export default async function ProductPage({
               <div className="flex flex-col gap-2 border-t border-[var(--color-line)] pt-4">
                 <span className="text-xs text-[var(--color-ink-faint)]">إعداد</span>
                 {product.authors.map((author) => (
-                  <div key={author.contributorSlug} className="flex flex-col">
+                  <Link
+                    key={author.contributorSlug}
+                    href={`/contributors/${author.contributorSlug}`}
+                    className="flex flex-col rounded-sm px-1 py-0.5 transition-colors hover:bg-[var(--color-surface-muted)]"
+                  >
                     <span className="text-sm font-semibold">{author.displayName}</span>
                     {author.specialization ? (
                       <span className="text-xs text-[var(--color-ink-soft)]">
                         {author.specialization}
                       </span>
                     ) : null}
-                  </div>
+                  </Link>
                 ))}
               </div>
             ) : null}
