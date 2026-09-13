@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { withRawActorContext } from '@/db/actor-context';
+import { ensureTestOwner } from '@/db/testing/single-owner';
 import { closeDb } from '@/db';
 import {
   auditLogs, contributors, disciplines, notifications,
@@ -25,17 +26,17 @@ import type { Actor } from '@/authz/actor';
 
 const suffix = Date.now();
 const ids = {
-  ownerUser: randomUUID(),
+  ownerUser: '',
   userA: randomUUID(), userB: randomUUID(),
   contribA: randomUUID(), contribB: randomUUID(),
   productA: randomUUID(), productB: randomUUID(),
   discipline: randomUUID(),
 };
 
-const OWNER_RAW = { actorId: ids.ownerUser, actorRole: 'OWNER' };
+let OWNER_RAW: { actorId: string; actorRole: string };
 const base = { kind: 'USER', displayName: 'T', locale: 'ar', sessionId: 's', twoFactorSatisfied: true } as const;
 
-const owner: Actor = { ...base, userId: ids.ownerUser, role: 'OWNER', contributorId: null, contributorActive: false };
+let owner: Actor;
 const engineerA: Actor = { ...base, userId: ids.userA, role: 'CONTRIBUTOR', contributorId: ids.contribA, contributorActive: true };
 const engineerB: Actor = { ...base, userId: ids.userB, role: 'CONTRIBUTOR', contributorId: ids.contribB, contributorActive: true };
 
@@ -45,9 +46,14 @@ const ctxOf = (actor: Actor) =>
     : { actorId: '', actorRole: 'GUEST', contributorId: '' };
 
 beforeAll(async () => {
+  // The platform has exactly one owner (migration 0041), so this file no
+  // longer invents one of its own — it asks for the one that exists.
+  ids.ownerUser = await ensureTestOwner({ displayName: 'Owner' });
+  OWNER_RAW = { actorId: ids.ownerUser, actorRole: 'OWNER' };
+  owner = { ...base, userId: ids.ownerUser, role: 'OWNER', contributorId: null, contributorActive: false };
+
   await withRawActorContext(OWNER_RAW, async (tx) => {
     await tx.insert(users).values([
-      { id: ids.ownerUser, email: `p2-owner+${suffix}@test.local`, passwordHash: 'x', role: 'OWNER', status: 'ACTIVE', displayName: 'Owner' },
       { id: ids.userA, email: `p2-a+${suffix}@test.local`, passwordHash: 'x', role: 'CONTRIBUTOR', status: 'ACTIVE', displayName: 'Engineer A' },
       { id: ids.userB, email: `p2-b+${suffix}@test.local`, passwordHash: 'x', role: 'CONTRIBUTOR', status: 'ACTIVE', displayName: 'Engineer B' },
     ]);
@@ -102,7 +108,7 @@ afterAll(async () => {
     await tx.delete(products).where(sql`id IN (${ids.productA}, ${ids.productB})`);
     await tx.delete(disciplines).where(eq(disciplines.id, ids.discipline));
     await tx.delete(contributors).where(sql`id IN (${ids.contribA}, ${ids.contribB})`);
-    await tx.delete(users).where(sql`id IN (${ids.ownerUser}, ${ids.userA}, ${ids.userB})`);
+    await tx.delete(users).where(sql`id IN (${ids.userA}, ${ids.userB})`);
   });
   await closeDb();
 });

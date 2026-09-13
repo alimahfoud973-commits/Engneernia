@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { eq, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { withRawActorContext } from '@/db/actor-context';
+import { ensureTestOwner } from '@/db/testing/single-owner';
 import { closeDb } from '@/db';
 import {
   commissionAgreements, contributors, disciplines, entitlements,
@@ -53,7 +54,7 @@ import type { Actor } from '@/authz/actor';
 
 const suffix = Date.now();
 const ids = {
-  owner: randomUUID(), customer: randomUUID(),
+  owner: '', customer: randomUUID(),
   engineerUser: randomUUID(), contributor: randomUUID(),
   discipline: randomUUID(), method: randomUUID(),
   products: [randomUUID(), randomUUID(), randomUUID(), randomUUID(),
@@ -61,14 +62,12 @@ const ids = {
 };
 const slugs = ids.products.map((_, index) => `p7-prod-${index}-${suffix}`);
 
-const OWNER_RAW = { actorId: ids.owner, actorRole: 'OWNER' };
+let OWNER_RAW: { actorId: string; actorRole: string };
 const base = {
   kind: 'USER', displayName: 'T', locale: 'ar', sessionId: 's', twoFactorSatisfied: true,
 } as const;
 
-const owner: Actor = {
-  ...base, userId: ids.owner, role: 'OWNER', contributorId: null, contributorActive: false,
-};
+let owner: Actor;
 const customer: Actor = {
   ...base, userId: ids.customer, role: 'CUSTOMER', contributorId: null, contributorActive: false,
 };
@@ -139,6 +138,12 @@ async function settlementRow(periodKey: string) {
 let seededMinimum: unknown = null;
 
 beforeAll(async () => {
+  // The platform has exactly one owner (migration 0041), so this file no
+  // longer invents one of its own — it asks for the one that exists.
+  ids.owner = await ensureTestOwner({ displayName: 'Owner' });
+  OWNER_RAW = { actorId: ids.owner, actorRole: 'OWNER' };
+  owner = { ...base, userId: ids.owner, role: 'OWNER', contributorId: null, contributorActive: false };
+
   vi.useFakeTimers({ toFake: ['Date'] });
 
   await withRawActorContext(OWNER_RAW, async (tx) => {
@@ -153,7 +158,6 @@ beforeAll(async () => {
     `);
 
     await tx.insert(users).values([
-      { id: ids.owner, email: `p7-owner+${suffix}@test.local`, passwordHash: 'x', role: 'OWNER', status: 'ACTIVE', displayName: 'Owner' },
       { id: ids.customer, email: `p7-cust+${suffix}@test.local`, passwordHash: 'x', role: 'CUSTOMER', status: 'ACTIVE', displayName: 'Customer', countryCode: 'SY' },
       { id: ids.engineerUser, email: `p7-eng+${suffix}@test.local`, passwordHash: 'x', role: 'CONTRIBUTOR', status: 'ACTIVE', displayName: 'Engineer' },
     ]);
@@ -216,7 +220,7 @@ afterAll(async () => {
     await tx.delete(disciplines).where(eq(disciplines.id, ids.discipline));
     await tx.delete(contributors).where(eq(contributors.id, ids.contributor));
     await tx.delete(users).where(
-      sql`id IN (${ids.owner}, ${ids.customer}, ${ids.engineerUser})`,
+      sql`id IN (${ids.customer}, ${ids.engineerUser})`,
     );
   });
   await closeDb();

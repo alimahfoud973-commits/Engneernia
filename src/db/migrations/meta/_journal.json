@@ -288,6 +288,13 @@
       "when": 1789230185659,
       "tag": "0040_brand_enginora",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1789230186659,
+      "tag": "0041_single_owner",
+      "breakpoints": true
     }
   ]
 }

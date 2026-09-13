@@ -3,6 +3,7 @@ import { eq, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { withRawActorContext } from '@/db/actor-context';
+import { ensureTestOwner } from '@/db/testing/single-owner';
 import { closeDb } from '@/db';
 import { contributors, disciplines, downloadEvents, productContributors, productFiles, productPrices, products, users } from '@/db/schema';
 import { ingestProductFile } from './ingest';
@@ -24,7 +25,7 @@ import { NotFoundError, RuleViolationError } from '@/lib/errors';
 
 const suffix = Date.now();
 const ids = {
-  owner: randomUUID(), engineerUser: randomUUID(), contributor: randomUUID(),
+  owner: '', engineerUser: randomUUID(), contributor: randomUUID(),
   discipline: randomUUID(),
   pdfProduct: randomUUID(), dwgProduct: randomUUID(), zipProduct: randomUUID(),
 };
@@ -32,9 +33,9 @@ const slugs = {
   pdf: `p3-pdf-${suffix}`, dwg: `p3-dwg-${suffix}`, zip: `p3-zip-${suffix}`,
 };
 
-const OWNER_RAW = { actorId: ids.owner, actorRole: 'OWNER' };
+let OWNER_RAW: { actorId: string; actorRole: string };
 const base = { kind: 'USER', displayName: 'T', locale: 'ar', sessionId: 's', twoFactorSatisfied: true } as const;
-const owner: Actor = { ...base, userId: ids.owner, role: 'OWNER', contributorId: null, contributorActive: false };
+let owner: Actor;
 const engineer: Actor = { ...base, userId: ids.engineerUser, role: 'CONTRIBUTOR', contributorId: ids.contributor, contributorActive: true };
 
 async function buildPdf(pages: number): Promise<Uint8Array> {
@@ -56,9 +57,14 @@ const ZIP_BYTES = pad([0x50, 0x4b, 0x03, 0x04]);
 const RVT_BYTES = pad([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
 
 beforeAll(async () => {
+  // The platform has exactly one owner (migration 0041), so this file no
+  // longer invents one of its own — it asks for the one that exists.
+  ids.owner = await ensureTestOwner({ displayName: 'Owner' });
+  OWNER_RAW = { actorId: ids.owner, actorRole: 'OWNER' };
+  owner = { ...base, userId: ids.owner, role: 'OWNER', contributorId: null, contributorActive: false };
+
   await withRawActorContext(OWNER_RAW, async (tx) => {
     await tx.insert(users).values([
-      { id: ids.owner, email: `p3-owner+${suffix}@test.local`, passwordHash: 'x', role: 'OWNER', status: 'ACTIVE', displayName: 'Owner' },
       { id: ids.engineerUser, email: `p3-eng+${suffix}@test.local`, passwordHash: 'x', role: 'CONTRIBUTOR', status: 'ACTIVE', displayName: 'Engineer' },
     ]);
     await tx.insert(contributors).values({
@@ -85,7 +91,7 @@ afterAll(async () => {
     await tx.delete(products).where(sql`id IN (${ids.pdfProduct}, ${ids.dwgProduct}, ${ids.zipProduct})`);
     await tx.delete(disciplines).where(eq(disciplines.id, ids.discipline));
     await tx.delete(contributors).where(eq(contributors.id, ids.contributor));
-    await tx.delete(users).where(sql`id IN (${ids.owner}, ${ids.engineerUser})`);
+    await tx.delete(users).where(sql`id IN (${ids.engineerUser})`);
   });
   await closeDb();
 });

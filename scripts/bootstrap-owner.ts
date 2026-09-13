@@ -43,7 +43,14 @@ try {
 
   if ((existing[0]?.count ?? 0) > 0) {
     console.error('An owner account already exists. Refusing to create a second one.');
-    console.error('The platform has exactly one owner by design (specification §2.1).');
+    console.error('The platform has exactly one owner by design (specification §2.1),');
+    console.error('and since migration 0041 the database enforces it: the unique index');
+    console.error('users_single_owner would refuse the INSERT even if this check did not.');
+    console.error('');
+    console.error('To hand the platform to a different account instead of creating one:');
+    console.error('  SELECT app_transfer_ownership(\'<the new owner\'s user id>\');');
+    console.error('run with the migration role. It demotes the current owner to CUSTOMER');
+    console.error('and promotes the new one in a single transaction, and audits both.');
     process.exit(1);
   }
 

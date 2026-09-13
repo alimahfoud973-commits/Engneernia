@@ -7,6 +7,7 @@ import { encryptSecret } from './crypto';
 import { generateTotp, generateTotpSecret } from './totp';
 import { resolveActor, revokeAllSessions } from './session';
 import { withRawActorContext } from '@/db/actor-context';
+import { TEST_OWNER_EMAIL, ensureTestOwner } from '@/db/testing/single-owner';
 import { closeDb, getSql } from '@/db';
 import { users } from '@/db/schema';
 import { LOCKOUT } from '@/lib/rate-limit';
@@ -20,25 +21,32 @@ const OWNER_CTX = { actorId: randomUUID(), actorRole: 'OWNER' };
 const suffix = Date.now();
 const PASSWORD = 'a-perfectly-fine-long-password';
 
-const ids = { plain: randomUUID(), twoFactor: randomUUID(), disabled: randomUUID() };
+const ids = { plain: randomUUID(), twoFactor: '', disabled: randomUUID() };
 const emails = {
   plain: `login-plain+${suffix}@test.local`,
-  twoFactor: `login-2fa+${suffix}@test.local`,
+  /**
+   * The two-factor account IS the platform owner, and since migration 0041
+   * there is exactly one of those. So this file asks for the shared owner row
+   * rather than creating a second one, and looks it up by the address a person
+   * would actually type.
+   */
+  twoFactor: TEST_OWNER_EMAIL,
   disabled: `login-disabled+${suffix}@test.local`,
 };
 const totpSecret = generateTotpSecret();
 
 beforeAll(async () => {
   const passwordHash = await hashPassword(PASSWORD);
+  ids.twoFactor = await ensureTestOwner({
+    displayName: 'Owner 2FA',
+    passwordHash,
+    totpSecretEncrypted: encryptSecret(totpSecret),
+    totpEnabledAt: new Date(),
+  });
+
   await withRawActorContext(OWNER_CTX, async (tx) => {
     await tx.insert(users).values([
       { id: ids.plain, email: emails.plain, passwordHash, role: 'CUSTOMER', status: 'ACTIVE', displayName: 'Plain' },
-      {
-        id: ids.twoFactor, email: emails.twoFactor, passwordHash, role: 'OWNER', status: 'ACTIVE',
-        displayName: 'Owner 2FA',
-        totpSecretEncrypted: encryptSecret(totpSecret),
-        totpEnabledAt: new Date(),
-      },
       { id: ids.disabled, email: emails.disabled, passwordHash, role: 'CUSTOMER', status: 'DISABLED', displayName: 'Disabled' },
     ]);
   });
@@ -46,7 +54,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await withRawActorContext(OWNER_CTX, async (tx) => {
-    await tx.delete(users).where(sql`id IN (${ids.plain}, ${ids.twoFactor}, ${ids.disabled})`);
+    await tx.delete(users).where(sql`id IN (${ids.plain}, ${ids.disabled})`);
   });
   await getSql()`DELETE FROM rate_limit_buckets WHERE key LIKE 'login:%'`;
   await closeDb();

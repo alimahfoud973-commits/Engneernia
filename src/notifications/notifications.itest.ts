@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { eq, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { withRawActorContext } from '@/db/actor-context';
+import { ensureTestOwner } from '@/db/testing/single-owner';
 import { closeDb } from '@/db';
 import {
   commissionAgreements, contributors, disciplines, entitlements, notifications,
@@ -25,21 +26,19 @@ import type { Actor } from '@/authz/actor';
 
 const suffix = Date.now();
 const ids = {
-  owner: randomUUID(), customer: randomUUID(),
+  owner: '', customer: randomUUID(),
   userA: randomUUID(), contribA: randomUUID(),
   userB: randomUUID(), contribB: randomUUID(),
   discipline: randomUUID(), product: randomUUID(), method: randomUUID(),
 };
 const slug = `notif-prod-${suffix}`;
 
-const OWNER_RAW = { actorId: ids.owner, actorRole: 'OWNER' };
+let OWNER_RAW: { actorId: string; actorRole: string };
 const base = {
   kind: 'USER', displayName: 'T', locale: 'ar', sessionId: 's', twoFactorSatisfied: true,
 } as const;
 
-const owner: Actor = {
-  ...base, userId: ids.owner, role: 'OWNER', contributorId: null, contributorActive: false,
-};
+let owner: Actor;
 const customer: Actor = {
   ...base, userId: ids.customer, role: 'CUSTOMER', contributorId: null, contributorActive: false,
 };
@@ -55,9 +54,14 @@ const engineerB: Actor = {
 const PRICE = 2000n;  // 80% engineer = 1600, split 75/25 between two authors
 
 beforeAll(async () => {
+  // The platform has exactly one owner (migration 0041), so this file no
+  // longer invents one of its own — it asks for the one that exists.
+  ids.owner = await ensureTestOwner({ displayName: 'Owner' });
+  OWNER_RAW = { actorId: ids.owner, actorRole: 'OWNER' };
+  owner = { ...base, userId: ids.owner, role: 'OWNER', contributorId: null, contributorActive: false };
+
   await withRawActorContext(OWNER_RAW, async (tx) => {
     await tx.insert(users).values([
-      { id: ids.owner, email: `nf-owner+${suffix}@test.local`, passwordHash: 'x', role: 'OWNER', status: 'ACTIVE', displayName: 'Owner' },
       { id: ids.customer, email: `nf-cust+${suffix}@test.local`, passwordHash: 'x', role: 'CUSTOMER', status: 'ACTIVE', displayName: 'Customer', countryCode: 'SY' },
       { id: ids.userA, email: `nf-a+${suffix}@test.local`, passwordHash: 'x', role: 'CONTRIBUTOR', status: 'ACTIVE', displayName: 'Author A' },
       { id: ids.userB, email: `nf-b+${suffix}@test.local`, passwordHash: 'x', role: 'CONTRIBUTOR', status: 'ACTIVE', displayName: 'Author B' },
@@ -96,7 +100,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await withRawActorContext(OWNER_RAW, async (tx) => {
     await tx.execute(sql`DELETE FROM notifications WHERE user_id IN
-      (${ids.owner}, ${ids.customer}, ${ids.userA}, ${ids.userB})`);
+      (${ids.customer}, ${ids.userA}, ${ids.userB})`);
     await tx.delete(entitlements).where(eq(entitlements.customerId, ids.customer));
     await tx.delete(orders).where(eq(orders.customerId, ids.customer));
     await tx.delete(paymentMethods).where(eq(paymentMethods.id, ids.method));
@@ -107,7 +111,7 @@ afterAll(async () => {
     await tx.delete(disciplines).where(eq(disciplines.id, ids.discipline));
     await tx.execute(sql`DELETE FROM contributors WHERE id IN (${ids.contribA}, ${ids.contribB})`);
     await tx.execute(sql`DELETE FROM users WHERE id IN
-      (${ids.owner}, ${ids.customer}, ${ids.userA}, ${ids.userB})`);
+      (${ids.customer}, ${ids.userA}, ${ids.userB})`);
   });
   await closeDb();
 }, 60_000);

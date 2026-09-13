@@ -40,11 +40,16 @@ async function rootCauseOf(promise: Promise<unknown>): Promise<string> {
   }
 }
 
+/**
+ * The owner context is a transaction setting, not a row: RLS reads
+ * `app_actor_role()`, never `users.role`. This file used to seed an OWNER
+ * user as well and never once referred to it — which migration 0041, the
+ * single-owner index, made visible by refusing the second one.
+ */
 const OWNER_CTX = { actorId: randomUUID(), actorRole: 'OWNER' };
 const GUEST_CTX = { actorId: '', actorRole: 'GUEST' };
 
 const ids = {
-  ownerUser: randomUUID(),
   userA: randomUUID(),
   userB: randomUUID(),
   userInactive: randomUUID(),
@@ -62,7 +67,6 @@ function contributorCtx(userId: string, contributorId: string) {
 beforeAll(async () => {
   await withRawActorContext(OWNER_CTX, async (tx) => {
     await tx.insert(users).values([
-      { id: ids.ownerUser, email: `owner+${suffix}@test.local`, passwordHash: 'x', role: 'OWNER', status: 'ACTIVE', displayName: 'Owner' },
       { id: ids.userA, email: `a+${suffix}@test.local`, passwordHash: 'x', role: 'CONTRIBUTOR', status: 'ACTIVE', displayName: 'Engineer A' },
       { id: ids.userB, email: `b+${suffix}@test.local`, passwordHash: 'x', role: 'CONTRIBUTOR', status: 'ACTIVE', displayName: 'Engineer B' },
       { id: ids.userInactive, email: `c+${suffix}@test.local`, passwordHash: 'x', role: 'CONTRIBUTOR', status: 'ACTIVE', displayName: 'Engineer C' },
@@ -90,7 +94,7 @@ afterAll(async () => {
   await withRawActorContext(OWNER_CTX, async (tx) => {
     await tx.delete(sessions).where(sql`user_id IN (${ids.userA}, ${ids.userB})`);
     await tx.delete(contributors).where(sql`id IN (${ids.contribA}, ${ids.contribB}, ${ids.contribInactive})`);
-    await tx.delete(users).where(sql`id IN (${ids.ownerUser}, ${ids.userA}, ${ids.userB}, ${ids.userInactive})`);
+    await tx.delete(users).where(sql`id IN (${ids.userA}, ${ids.userB}, ${ids.userInactive})`);
   });
   await closeDb();
 });

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { eq, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { withRawActorContext } from '@/db/actor-context';
+import { ensureTestOwner } from '@/db/testing/single-owner';
 import { closeDb } from '@/db';
 import {
   auditLogs, commissionAgreements, contributors, disciplines, entitlements,
@@ -39,22 +40,20 @@ import type { Actor } from '@/authz/actor';
 
 const suffix = Date.now();
 const ids = {
-  owner: randomUUID(), customer: randomUUID(),
+  owner: '', customer: randomUUID(),
   engineerUser: randomUUID(), contributor: randomUUID(),
   otherUser: randomUUID(), otherContributor: randomUUID(),
   discipline: randomUUID(), product: randomUUID(), method: randomUUID(),
 };
 const slug = `adj-prod-${suffix}`;
 
-const OWNER_RAW = { actorId: ids.owner, actorRole: 'OWNER' };
+let OWNER_RAW: { actorId: string; actorRole: string };
 const base = {
   kind: 'USER', displayName: 'Owner Name', locale: 'ar', sessionId: 's',
   twoFactorSatisfied: true,
 } as const;
 
-const owner: Actor = {
-  ...base, userId: ids.owner, role: 'OWNER', contributorId: null, contributorActive: false,
-};
+let owner: Actor;
 const customer: Actor = {
   ...base, userId: ids.customer, role: 'CUSTOMER', displayName: 'Customer',
   contributorId: null, contributorActive: false,
@@ -79,9 +78,14 @@ let orderId = '';
 let orderItemBefore: typeof orderItems.$inferSelect | undefined;
 
 beforeAll(async () => {
+  // The platform has exactly one owner (migration 0041), so this file no
+  // longer invents one of its own — it asks for the one that exists.
+  ids.owner = await ensureTestOwner({ displayName: 'Owner Name' });
+  OWNER_RAW = { actorId: ids.owner, actorRole: 'OWNER' };
+  owner = { ...base, userId: ids.owner, role: 'OWNER', contributorId: null, contributorActive: false };
+
   await withRawActorContext(OWNER_RAW, async (tx) => {
     await tx.insert(users).values([
-      { id: ids.owner, email: `adj-owner+${suffix}@test.local`, passwordHash: 'x', role: 'OWNER', status: 'ACTIVE', displayName: 'Owner Name' },
       { id: ids.customer, email: `adj-cust+${suffix}@test.local`, passwordHash: 'x', role: 'CUSTOMER', status: 'ACTIVE', displayName: 'Customer', countryCode: 'SY' },
       { id: ids.engineerUser, email: `adj-eng+${suffix}@test.local`, passwordHash: 'x', role: 'CONTRIBUTOR', status: 'ACTIVE', displayName: 'Engineer' },
       { id: ids.otherUser, email: `adj-eng2+${suffix}@test.local`, passwordHash: 'x', role: 'CONTRIBUTOR', status: 'ACTIVE', displayName: 'Other Engineer' },
