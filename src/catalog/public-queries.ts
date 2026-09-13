@@ -96,8 +96,42 @@ function toCard(row: Record<string, unknown>): PublicProductCard {
   };
 }
 
+/**
+ * ===========================================================================
+ * HOW MANY PUBLISHED PRODUCTS EACH GROUPING HAS
+ * ===========================================================================
+ * Counted with a GROUPED JOIN, and never again with a correlated subquery
+ * written inside a `sql` fragment. What was here before:
+ *
+ *     SELECT count(*) FROM products p WHERE p.discipline_id = ${disciplines.id}
+ *
+ * Drizzle emits a bare `"id"` for that reference when the outer query has no
+ * join — and PostgreSQL resolves an unqualified name against the INNERMOST
+ * scope first, where `products p` also has an `id`. So the condition compiled
+ * to `p.discipline_id = p.id`: never true, no error, **every discipline on the
+ * home page reported 0 published resources** while the catalogue held 5,009.
+ *
+ * It was invisible to every check the project had. The types were right, the
+ * SQL was valid, no test asserted a non-zero count, and the number rendered
+ * happily as "0 مورد منشور". It was found by LOOKING AT THE PAGE.
+ *
+ * A join is the fix rather than a qualified name, for two reasons: Drizzle
+ * qualifies every column once a join is present, so the ambiguity cannot come
+ * back; and one grouped scan replaces one subquery per row.
+ * ===========================================================================
+ */
 export async function listDisciplines(): Promise<readonly PublicDiscipline[]> {
   return withActor(GUEST, async (tx) => {
+    const publishedPerDiscipline = tx
+      .select({
+        disciplineId: products.disciplineId,
+        total: sql<number>`count(*)::int`.as('total'),
+      })
+      .from(products)
+      .where(eq(products.status, 'PUBLISHED'))
+      .groupBy(products.disciplineId)
+      .as('published_per_discipline');
+
     const rows = await tx
       .select({
         slug: disciplines.slug,
@@ -105,12 +139,14 @@ export async function listDisciplines(): Promise<readonly PublicDiscipline[]> {
         nameEn: disciplines.nameEn,
         descriptionAr: disciplines.descriptionAr,
         iconKey: disciplines.iconKey,
-        productCount: sql<number>`(
-          SELECT count(*)::int FROM products p
-           WHERE p.discipline_id = ${disciplines.id} AND p.status = 'PUBLISHED'
-        )`,
+        // A discipline with nothing published has no row to join to.
+        productCount: sql<number>`COALESCE(${publishedPerDiscipline.total}, 0)`,
       })
       .from(disciplines)
+      .leftJoin(
+        publishedPerDiscipline,
+        eq(publishedPerDiscipline.disciplineId, disciplines.id),
+      )
       .where(eq(disciplines.isActive, true))
       .orderBy(disciplines.sortOrder);
 
@@ -212,16 +248,26 @@ export async function disciplineBySlug(slug: string) {
 
     if (!discipline) return null;
 
+    // The same defect lived here, counting every category as 0 on every
+    // discipline portal. Same fix — see the note on listDisciplines.
+    const publishedPerCategory = tx
+      .select({
+        categoryId: products.categoryId,
+        total: sql<number>`count(*)::int`.as('total'),
+      })
+      .from(products)
+      .where(eq(products.status, 'PUBLISHED'))
+      .groupBy(products.categoryId)
+      .as('published_per_category');
+
     const categoryRows = await tx
       .select({
         slug: categories.slug,
         nameAr: categories.nameAr,
-        productCount: sql<number>`(
-          SELECT count(*)::int FROM products p
-           WHERE p.category_id = ${categories.id} AND p.status = 'PUBLISHED'
-        )`,
+        productCount: sql<number>`COALESCE(${publishedPerCategory.total}, 0)`,
       })
       .from(categories)
+      .leftJoin(publishedPerCategory, eq(publishedPerCategory.categoryId, categories.id))
       .where(and(eq(categories.disciplineId, discipline.id), eq(categories.isActive, true)))
       .orderBy(categories.sortOrder);
 
