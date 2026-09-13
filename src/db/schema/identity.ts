@@ -97,6 +97,35 @@ export const sessions = pgTable(
 );
 
 /**
+ * Email verification tokens (owner decision on OPEN-23).
+ *
+ * Declared here so the schema stays the single description of the database,
+ * but NOTHING reads this table through Drizzle: row-level security denies it
+ * to `app_user` outright, and the only way in is the three SECURITY DEFINER
+ * functions in migration 0039. As with sessions, only a SHA-256 hash of the
+ * token is stored — a leak of this table yields no usable link.
+ */
+export const emailVerificationTokens = pgTable(
+  'email_verification_tokens',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').notNull(),
+    expiresAt: utcTimestamp('expires_at').notNull(),
+    /** Set the moment the link is redeemed, or when a newer one supersedes it. */
+    consumedAt: utcTimestamp('consumed_at'),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    uniqueIndex('email_verification_tokens_hash_unique').on(table.tokenHash),
+    index('email_verification_tokens_user_idx').on(table.userId),
+    index('email_verification_tokens_expiry_idx').on(table.expiresAt),
+  ],
+);
+
+/**
  * Contributor profiles.
  *
  * A user having role CONTRIBUTOR is not sufficient to act as one: the profile

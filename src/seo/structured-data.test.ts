@@ -25,6 +25,8 @@ beforeAll(() => {
   process.env.STORAGE_SECRET_ACCESS_KEY ??= 'b';
   process.env.STORAGE_BUCKET_ORIGINALS ??= 'originals';
   process.env.STORAGE_BUCKET_DERIVATIVES ??= 'derivatives';
+  process.env.MAIL_TRANSPORT_URL ??= 'log://test';
+  process.env.MAIL_FROM ??= 'Engineernia <no-reply@example.test>';
 });
 
 const paid: ProductForSearchEngines = {

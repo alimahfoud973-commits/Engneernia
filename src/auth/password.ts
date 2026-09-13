@@ -1,6 +1,7 @@
 import 'server-only';
 import { hash as argonHash, verify as argonVerify } from '@node-rs/argon2';
 import { ValidationError } from '@/lib/errors';
+import { MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH } from './password-policy';
 
 /**
  * Password hashing with argon2id.
@@ -21,14 +22,11 @@ const ARGON_OPTIONS = {
 } as const;
 
 /**
- * Minimum length only, deliberately.
- *
- * Composition rules (one uppercase, one symbol...) measurably push people
- * toward predictable substitutions. Length plus the lockout in the login flow
- * is the stronger combination, and it is what NIST SP 800-63B recommends.
+ * The numbers themselves live in `password-policy.ts`, which carries no
+ * `server-only` marker, so the sign-up form can state the same minimum it will
+ * be judged against. Re-exported here so existing importers are unaffected.
  */
-export const MIN_PASSWORD_LENGTH = 12;
-export const MAX_PASSWORD_LENGTH = 256;
+export { MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH } from './password-policy';
 
 export function assertPasswordAcceptable(password: string): void {
   if (password.length < MIN_PASSWORD_LENGTH) {

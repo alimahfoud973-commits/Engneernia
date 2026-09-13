@@ -18,6 +18,8 @@ const BASE: Record<string, string> = {
   STORAGE_SECRET_ACCESS_KEY: 'b',
   STORAGE_BUCKET_ORIGINALS: 'originals',
   STORAGE_BUCKET_DERIVATIVES: 'derivatives',
+  MAIL_TRANSPORT_URL: 'smtps://u:p@smtp.example.test:465',
+  MAIL_FROM: 'Engineernia <no-reply@example.test>',
 };
 
 const saved = { ...process.env };
@@ -52,6 +54,18 @@ describe('serverEnv', () => {
   it('still allows filesystem storage outside production', () => {
     withEnv({ NODE_ENV: 'development', STORAGE_ENDPOINT: 'file:///var/data' }, () => {
       expect(serverEnv().STORAGE_ENDPOINT).toBe('file:///var/data');
+    });
+  });
+
+  it('refuses the log mail transport in production, at startup', () => {
+    withEnv({ NODE_ENV: 'production', MAIL_TRANSPORT_URL: 'log://local' }, () => {
+      expect(() => serverEnv()).toThrow(/MAIL_TRANSPORT_URL/);
+    });
+  });
+
+  it('still allows the log mail transport outside production', () => {
+    withEnv({ NODE_ENV: 'development', MAIL_TRANSPORT_URL: 'log://local' }, () => {
+      expect(serverEnv().MAIL_TRANSPORT_URL).toBe('log://local');
     });
   });
 

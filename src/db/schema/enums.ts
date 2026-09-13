@@ -60,4 +60,10 @@ export const auditActionEnum = pgEnum('audit_action', [
   'SETTLEMENT_APPROVED',
   'SETTLEMENT_PAID',
   'SETTINGS_CHANGED',
+  // self-registration — added by migration 0039 (owner decision on OPEN-23).
+  // Appended, not slotted in beside USER_CREATED: ALTER TYPE ... ADD VALUE
+  // appends in PostgreSQL, and this list must mirror the database's own
+  // ordering rather than a tidier one.
+  'USER_REGISTERED',
+  'USER_EMAIL_VERIFIED',
 ]);

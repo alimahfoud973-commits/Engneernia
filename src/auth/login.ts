@@ -28,7 +28,8 @@ export type LoginOutcome =
   | { readonly status: 'TWO_FACTOR_REQUIRED'; readonly userId: string; readonly session: CreatedSession }
   | { readonly status: 'INVALID_CREDENTIALS' }
   | { readonly status: 'ACCOUNT_LOCKED'; readonly until: Date }
-  | { readonly status: 'ACCOUNT_DISABLED' };
+  | { readonly status: 'ACCOUNT_DISABLED' }
+  | { readonly status: 'EMAIL_NOT_VERIFIED' };
 
 interface LookupRow {
   id: string;
@@ -84,8 +85,19 @@ export async function attemptLogin(request: LoginRequest): Promise<LoginOutcome>
     return { status: 'INVALID_CREDENTIALS' };
   }
 
-  // The password was right, so telling them the account is disabled is useful
+  // The password was right, so telling them WHY they cannot get in is useful
   // rather than a disclosure — they already proved they own the credentials.
+  //
+  // PENDING and DISABLED are separated because the remedy is not the same, and
+  // since self-registration exists (OPEN-23) PENDING is the common case: an
+  // account waiting on its verification link. Telling that person to "contact
+  // the platform" — as this did when PENDING was unreachable — sends them to
+  // the owner's inbox for something a link in their own inbox already solves.
+  if (user.status === 'PENDING') {
+    await audit(user.id, user.role, 'LOGIN_FAILED', user.id, request);
+    return { status: 'EMAIL_NOT_VERIFIED' };
+  }
+
   if (user.status !== 'ACTIVE') {
     await audit(user.id, user.role, 'LOGIN_FAILED', user.id, request);
     return { status: 'ACCOUNT_DISABLED' };

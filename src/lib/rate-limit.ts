@@ -32,6 +32,20 @@ export const LOGIN_RULES = {
   perAccount: { limit: 10, windowSeconds: 300 },
 } as const satisfies Record<string, RateLimitRule>;
 
+/**
+ * Registration rules (owner decision on OPEN-23).
+ *
+ * Tighter than login, because the cost of a refused attempt is different: a
+ * legitimate person registers ONCE, so a low ceiling inconveniences almost
+ * nobody, while each accepted attempt costs an argon2 hash and an outbound
+ * email. The per-address rule is what stops someone using the "send it again"
+ * link to mail-bomb a stranger.
+ */
+export const REGISTRATION_RULES = {
+  perIp: { limit: 5, windowSeconds: 3600 },
+  perAddress: { limit: 3, windowSeconds: 3600 },
+} as const satisfies Record<string, RateLimitRule>;
+
 /** Account lockout, applied on top of rate limiting. */
 export const LOCKOUT = { maxAttempts: 8, lockMinutes: 15 } as const;
 

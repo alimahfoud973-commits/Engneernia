@@ -1,4 +1,5 @@
 import { setRequestLocale } from 'next-intl/server';
+import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { SiteHeader, SiteFooter } from '@/components/site-chrome';
 import { LoginForm } from '@/components/login-form';
@@ -44,6 +45,13 @@ export default async function LoginPage({
           </p>
         </header>
         <LoginForm next={next ?? null} />
+
+        <p className="text-sm text-[var(--color-ink-soft)]">
+          لا حساب لك بعد؟{' '}
+          <Link href="/register" className="font-semibold text-[var(--color-accent)] hover:underline">
+            أنشئ حساباً
+          </Link>
+        </p>
       </main>
       <SiteFooter />
     </>

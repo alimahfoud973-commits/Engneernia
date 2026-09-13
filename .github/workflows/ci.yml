@@ -65,6 +65,33 @@ jobs:
           DATABASE_MIGRATION_URL: postgresql://migrator:migrator_password@localhost:5432/engineering_marketplace
         run: npm run db:migrate
 
+      # Three tests in src/catalog/search.itest.ts assert properties that only
+      # exist at scale — a discipline portal capping its preview, a facet
+      # offering alternatives, a heavy query staying fast over 5,000 products.
+      # Against an empty catalogue they do not pass; they fail, which is the
+      # correct answer to "is the page bounded" when there is nothing to bound.
+      # So the catalogue is seeded here, exactly as a developer seeds it
+      # locally before running the same suite.
+      - name: Seed the catalogue
+        env:
+          DATABASE_URL: postgresql://app_user:app_password@localhost:5432/engineering_marketplace
+          DATABASE_MIGRATION_URL: postgresql://migrator:migrator_password@localhost:5432/engineering_marketplace
+          SESSION_SECRET: ci-session-secret-value-at-least-32-chars
+          CONFIG_ENCRYPTION_KEY: ci-config-encryption-key-at-least-32-chars
+          APP_URL: http://localhost:3000
+          STORAGE_ENDPOINT: http://localhost:9000
+          STORAGE_REGION: us-east-1
+          STORAGE_ACCESS_KEY_ID: ci
+          STORAGE_SECRET_ACCESS_KEY: ci
+          STORAGE_BUCKET_ORIGINALS: ci-originals
+          STORAGE_BUCKET_DERIVATIVES: ci-derivatives
+          MAIL_TRANSPORT_URL: log://ci
+          MAIL_FROM: "Engineernia <no-reply@ci.local>"
+        run: |
+          npm run seed:catalog
+          npm run seed:demo
+          npm run seed:scale
+
       # The phase P1 exit criterion. These run every query the way a BUGGY
       # application would write it — no WHERE clause, no policy check — and
       # assert the database returns nothing anyway.
@@ -82,6 +109,11 @@ jobs:
           STORAGE_SECRET_ACCESS_KEY: ci
           STORAGE_BUCKET_ORIGINALS: ci-originals
           STORAGE_BUCKET_DERIVATIVES: ci-derivatives
+          # Registration verification mail. The log transport is what CI wants:
+          # nothing leaves the runner, and the tests install their own
+          # capturing adapter anyway.
+          MAIL_TRANSPORT_URL: log://ci
+          MAIL_FROM: "Engineernia <no-reply@ci.local>"
         run: npm run test:integration
 
       - name: Production build

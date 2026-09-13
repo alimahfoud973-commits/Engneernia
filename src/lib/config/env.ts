@@ -54,6 +54,23 @@ const schema = z.object({
     .default('true')
     .transform((value) => value === 'true'),
 
+  /**
+   * Outbound email, as one URL — the same idiom as STORAGE_ENDPOINT.
+   *
+   * `log://` writes messages to the log instead of sending them, which is what
+   * local work wants and what production must never have. `smtp://` and
+   * `smtps://` carry the credentials, so the provider can be replaced without
+   * a code change; the platform is operated from Syria and that is not a
+   * hypothetical requirement.
+   *
+   * There is no default. A deployment that forgets this variable stops at
+   * boot, rather than accepting registrations whose verification mail is
+   * addressed to nowhere.
+   */
+  MAIL_TRANSPORT_URL: urlLike('MAIL_TRANSPORT_URL'),
+  /** RFC 5322 From header, e.g. `إنجينيرنيا <no-reply@example.com>`. */
+  MAIL_FROM: nonEmpty('MAIL_FROM'),
+
   PLATFORM_TIMEZONE: nonEmpty('PLATFORM_TIMEZONE').default('Asia/Damascus'),
   PLATFORM_BASE_CURRENCY: z.string().regex(/^[A-Z]{3}$/).default('USD'),
   DEFAULT_LOCALE: z.enum(['ar', 'en']).default('ar'),
@@ -105,6 +122,25 @@ const schema = z.object({
         message:
           'Filesystem storage is not permitted in production — a single-node disk cannot '
           + 'survive the container being replaced. Configure an S3-compatible endpoint.',
+      });
+    }
+
+    /**
+     * The log mail transport in production.
+     *
+     * `getEmail()` refuses it too, but lazily — on the first registration that
+     * actually tries to send. A deployment carrying `log://` therefore boots
+     * clean, serves the whole catalogue, and then quietly accepts sign-ups
+     * whose verification mail never leaves the server. Nobody reports that as
+     * a bug; they just never come back. Checked here, it stops at startup.
+     */
+    if (env.NODE_ENV === 'production' && env.MAIL_TRANSPORT_URL.startsWith('log:')) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['MAIL_TRANSPORT_URL'],
+        message:
+          'The log mail transport is not permitted in production — verification emails '
+          + 'would never be delivered. Configure an smtp:// or smtps:// URL.',
       });
     }
 
