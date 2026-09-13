@@ -1,0 +1,85 @@
+# =============================================================================
+# SINGLE-SERVER PRODUCTION STACK
+# =============================================================================
+#   docker compose -f docker-compose.prod.yml --env-file .env.production up -d
+#
+# For a VPS, which is the realistic deployment for a platform operated from
+# Syria: the large hosting platforms are difficult or impossible to pay for
+# from there, and nothing in this application depends on any of them.
+#
+# WHAT THIS DOES NOT DO, ON PURPOSE:
+#   - no TLS. Put a reverse proxy in front (Caddy, nginx). The session cookie
+#     is `Secure` and `__Host-`, so over plain HTTP NOBODY CAN SIGN IN — that
+#     is the cookie working, not a bug to route around.
+#   - no backups. `npm run backup` needs a superuser connection; schedule it on
+#     the host with a destination that is NOT this server. See
+#     docs/BACKUP-AND-RESTORE.md §6, which is still awaiting the owner's answer
+#     on where those copies live.
+#   - no database exposed to the internet. `postgres` has no `ports:` entry on
+#     purpose; it is reachable only from this compose network.
+# =============================================================================
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?set POSTGRES_SUPERUSER_PASSWORD}
+      POSTGRES_DB: engineering_marketplace
+      # The database stays in UTC. Accounting months are computed in
+      # Asia/Damascus by a trigger, from a UTC timestamp — one clock at rest,
+      # one conversion, in one place.
+      TZ: UTC
+      PGTZ: UTC
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Creates `app_user` (NOBYPASSRLS) and `migrator`. This runs ONLY on an
+      # empty data directory — on an existing volume the roles are already
+      # there and this file is ignored.
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d engineering_marketplace']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      APP_URL: ${APP_URL:?set APP_URL to the real https origin}
+      # MUST be app_user. A higher role here silently disables every row-level
+      # policy on the platform — no error, no failing test, just a database
+      # whose security model has stopped meaning anything.
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL (app_user)}
+      DATABASE_MIGRATION_URL: ${DATABASE_MIGRATION_URL:?set DATABASE_MIGRATION_URL (migrator)}
+      SESSION_SECRET: ${SESSION_SECRET:?}
+      CONFIG_ENCRYPTION_KEY: ${CONFIG_ENCRYPTION_KEY:?}
+      # Not a local path: the application refuses to start in production with
+      # file:// storage, because a single-node disk cannot survive the
+      # container being replaced and a lost original cannot be recovered.
+      STORAGE_ENDPOINT: ${STORAGE_ENDPOINT:?}
+      STORAGE_REGION: ${STORAGE_REGION:-auto}
+      STORAGE_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY_ID:?}
+      STORAGE_SECRET_ACCESS_KEY: ${STORAGE_SECRET_ACCESS_KEY:?}
+      STORAGE_BUCKET_ORIGINALS: ${STORAGE_BUCKET_ORIGINALS:-em-originals}
+      STORAGE_BUCKET_DERIVATIVES: ${STORAGE_BUCKET_DERIVATIVES:-em-derivatives}
+      PLATFORM_TIMEZONE: ${PLATFORM_TIMEZONE:-Asia/Damascus}
+      PLATFORM_BASE_CURRENCY: ${PLATFORM_BASE_CURRENCY:-USD}
+      MALWARE_SCANNER: ${MALWARE_SCANNER:-none}
+      # Off until the site is really live, on the real domain. See docs/SEO.md.
+      SEO_INDEXABLE: ${SEO_INDEXABLE:-false}
+    ports:
+      # Bound to loopback: the reverse proxy reaches it, the internet does not.
+      - '127.0.0.1:3000:3000'
+
+volumes:
+  postgres_data:

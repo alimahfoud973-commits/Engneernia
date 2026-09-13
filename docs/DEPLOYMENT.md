@@ -70,6 +70,29 @@ node -e "console.log(require('crypto').randomBytes(36).toString('base64'))"
 
 ## ٤. البناء والتشغيل
 
+### أ. بحاويات — الطريق الموصى به لخادم واحد
+
+```bash
+cp .env.production.example .env.production      # ثم املأ كل قيمة
+docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+docker compose -f docker-compose.prod.yml exec app npm run db:migrate
+docker compose -f docker-compose.prod.yml exec app npm run bootstrap:owner
+```
+
+**قاعدة البيانات غير معرَّضة للإنترنت** (لا `ports:` لها)، والتطبيق مربوط
+بـ`127.0.0.1:3000` — يصل إليه الوسيط العكسي وحده. ولا TLS في هذه الحزمة: ضع
+Caddy أو nginx أمامها. **بلا HTTPS لن يستطيع أحد تسجيل الدخول أصلاً**، لأن
+كعكة الجلسة `Secure` و`__Host-` — وهذا عمل الكعكة لا عطل يُلتَفّ عليه.
+
+> **الصورة لم تُبنَ في بيئة التطوير هذه**: سياسة الشبكة تحجب شبكات توزيع
+> طبقات الصور، فتعذّر `docker build`. المكتوب في `Dockerfile` يذكر بدقة ما
+> تحقّقتُ منه وما لم أتحقّق منه. **ولا تستعمل `output: 'standalone'`** — يكسر
+> توجيه اللغة (KI-2 في `docs/KNOWN-ISSUES.md`).
+
+### ب. مباشرة على الخادم
+
+
+
 ```bash
 npm ci
 npm run db:migrate

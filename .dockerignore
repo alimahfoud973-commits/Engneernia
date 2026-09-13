@@ -1,0 +1,10 @@
+# Never inside the image: real secrets, local state, build output from the host.
+.env
+.env.local
+.env.*.local
+.git
+.next
+node_modules
+backups
+.data
+*.log
