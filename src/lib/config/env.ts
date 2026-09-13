@@ -81,7 +81,54 @@ const schema = z.object({
     .string()
     .default('false')
     .transform((value) => value === 'true'),
-});
+})
+  /**
+   * Cross-field rules — the ones that only make sense once everything else has
+   * parsed. Each exists because the configuration it rejects produces a
+   * deployment that STARTS, serves pages, and fails later on a specific
+   * action, which is the worst way to learn about a misconfiguration.
+   */
+  .superRefine((env, ctx) => {
+    /**
+     * Filesystem storage in production.
+     *
+     * `getStorage()` already refuses it — but lazily, on the first request
+     * that actually reaches a file. A deployment missing STORAGE_ENDPOINT
+     * therefore boots clean, serves the whole catalogue, and then answers 500
+     * the first time the owner opens a payment receipt. Checked here, the same
+     * mistake stops the process at startup with the variable named.
+     */
+    if (env.NODE_ENV === 'production' && env.STORAGE_ENDPOINT.startsWith('file:')) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['STORAGE_ENDPOINT'],
+        message:
+          'Filesystem storage is not permitted in production — a single-node disk cannot '
+          + 'survive the container being replaced. Configure an S3-compatible endpoint.',
+      });
+    }
+
+    /**
+     * An indexable deployment pointing at localhost.
+     *
+     * APP_URL is what every canonical link, sitemap entry and Open Graph URL
+     * is built from. Letting a production deployment publish a sitemap full of
+     * `http://localhost:3000/...` is not a small error: those URLs are what
+     * search engines record.
+     */
+    if (env.SEO_INDEXABLE) {
+      const host = new URL(env.APP_URL).hostname;
+      if (host === 'localhost' || host === '127.0.0.1' || host === '::1') {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['APP_URL'],
+          message:
+            'SEO_INDEXABLE is on while APP_URL points at localhost. Every canonical URL and '
+            + 'sitemap entry would name a host no crawler can reach.',
+        });
+      }
+    }
+  });
 
 export type ServerEnv = z.infer<typeof schema>;
 

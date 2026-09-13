@@ -39,9 +39,20 @@ export const ARABIC_FONT_BOLD = 'NotoNaskhArBold';
 /** Latin fallback for references and figures, which read better unshaped. */
 export const LATIN_FONT = 'sans-serif';
 
+/**
+ * The directory is a literal and only the FILE NAME varies.
+ *
+ * Written this way for the bundler, not for tidiness. With the whole path in
+ * the variable, Turbopack cannot tell which files are reached and warns that
+ * "this filesystem access causes tracing of the whole project" — which means
+ * every source file, and the public folder, shipped inside the server bundle.
+ * A statically scoped directory lets it trace just this folder.
+ */
+const FONT_DIR = 'assets/fonts';
+
 const FONT_FILES = [
-  { path: 'assets/fonts/NotoNaskhArabic-Regular.ttf', family: ARABIC_FONT },
-  { path: 'assets/fonts/NotoNaskhArabic-Bold.ttf', family: ARABIC_FONT_BOLD },
+  { file: 'NotoNaskhArabic-Regular.ttf', family: ARABIC_FONT },
+  { file: 'NotoNaskhArabic-Bold.ttf', family: ARABIC_FONT_BOLD },
 ] as const;
 
 let registered: boolean | null = null;
@@ -55,8 +66,8 @@ let registered: boolean | null = null;
 export function registerArabicFonts(): boolean {
   if (registered !== null) return registered;
 
-  registered = FONT_FILES.every(({ path, family }) => {
-    const absolute = join(process.cwd(), path);
+  registered = FONT_FILES.every(({ file, family }) => {
+    const absolute = join(process.cwd(), FONT_DIR, file);
     if (!existsSync(absolute)) return false;
     return GlobalFonts.registerFromPath(absolute, family);
   });

@@ -22,7 +22,18 @@ npm run dev
 الفحص الكامل قبل أي commit:
 
 ```bash
-npm run verify
+npm run verify              # أنواع + lint + اختبارات الوحدة + بناء
+npm run test:integration    # على قاعدة بيانات حقيقية
+npm run db:prove-rls        # إثبات أن دور التطبيق لا يتجاوز سياسات الصفوف
+```
+
+وعلى بناء إنتاجي يعمل:
+
+```bash
+node scripts/security-probe.mjs   # ٤٨ فحصاً أمنياً من خارج التطبيق
+node scripts/csp-check.mjs        # سياسة المحتوى لا تكسر الموقع
+node scripts/measure-pages.mjs    # زمن كل صفحة وعدد استعلاماتها
+npm run backup && npm run restore-drill
 ```
 
 ## البنية
@@ -49,6 +60,12 @@ src/
 | `docs/ROADMAP.md` | المراحل ومعايير الخروج |
 | `docs/PROJECT_SPECIFICATION.md` | المواصفات الأساسية |
 | `docs/ADDITIONAL_DECISIONS.md` | قرارات المالك المكمّلة |
+| `docs/DEPLOYMENT.md` | **النشر وقائمة ما قبل الإطلاق وأدلة التشغيل** |
+| `docs/SECURITY-REVIEW.md` | المراجعة الأمنية والقائمة المرجعية (تنتظر اعتماد المالك) |
+| `docs/BACKUP-AND-RESTORE.md` | النسخ الاحتياطي وتمرين الاستعادة |
+| `docs/PERFORMANCE.md` | القياسات على ٥٬٠٠٩ منتج، والعتبات |
+| `docs/SEO.md` | الفهرسة والبيانات الوصفية |
+| `docs/KNOWN-ISSUES.md` | مسائل معروفة وما يجب تعلّمه منها |
 
 ## ملاحظة أمنية
 
