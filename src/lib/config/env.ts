@@ -64,6 +64,23 @@ const schema = z.object({
 
   // Explicit: running without a scanner must be a recorded decision.
   MALWARE_SCANNER: z.enum(['none', 'clamav']).default('none'),
+
+  /**
+   * May search engines index this deployment?
+   *
+   * DEFAULTS TO FALSE, and that default is the safe one: a staging copy that
+   * forgets to set it stays out of the index, whereas a production site that
+   * forgets it merely stays invisible until somebody notices. The reverse
+   * default would put a half-finished catalogue — and the engineers' names on
+   * it — into Google permanently, since removal is slow and partial.
+   *
+   * Only ever widens what `robots.ts` and the page metadata allow; the private
+   * areas are refused regardless of this flag.
+   */
+  SEO_INDEXABLE: z
+    .string()
+    .default('false')
+    .transform((value) => value === 'true'),
 });
 
 export type ServerEnv = z.infer<typeof schema>;

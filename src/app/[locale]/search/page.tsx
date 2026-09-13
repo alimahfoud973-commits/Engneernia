@@ -3,6 +3,19 @@ import { SiteHeader, SiteFooter } from '@/components/site-chrome';
 import { ProductGrid } from '@/components/product-card';
 import { Pagination, SearchFiltersPanel, SortControl } from '@/components/search-filters';
 import { searchCatalogue, type SearchFilters, type SortOption } from '@/catalog/search';
+import type { Metadata } from 'next';
+
+/**
+ * Search results are not indexed.
+ *
+ * The reason is arithmetic, not privacy. Five facets over four disciplines and
+ * eight file types multiply into tens of thousands of URLs that all show the
+ * same products in a different order. A crawler that follows them spends its
+ * whole budget on permutations and never reaches the product pages those
+ * results exist to lead to — and the near-duplicates compete with each other.
+ * `follow` stays on so the links out of here are still discovered.
+ */
+export const metadata: Metadata = { robots: { index: false, follow: true } };
 
 export const dynamic = 'force-dynamic';
 

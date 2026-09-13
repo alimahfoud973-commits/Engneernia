@@ -5,8 +5,51 @@ import { SiteHeader, SiteFooter } from '@/components/site-chrome';
 import { FILE_TYPE_LABELS, LEVEL_LABELS, formatPrice } from '@/components/product-card';
 import { BuyButton } from '@/components/commerce-forms';
 import { productBySlug } from '@/catalog/public-queries';
+import type { Metadata } from 'next';
+import { JsonLd } from '@/components/json-ld';
+import { metaDescription, productJsonLd } from '@/seo/structured-data';
+import { publicRobots } from '@/seo/config';
 
 export const dynamic = 'force-dynamic';
+
+/**
+ * The product page's own metadata.
+ *
+ * The canonical URL is the point of it. The same product is reachable at
+ * `/products/<slug>` and `/ar/products/<slug>`, and a discipline listing links
+ * to it from four places; without a canonical those are competing duplicates
+ * as far as a search engine is concerned.
+ *
+ * A product that does not resolve gets a plain title and no indexing, rather
+ * than throwing: metadata generation runs before the page body, and a throw
+ * here produces a 500 where the page itself would have produced a clean 404.
+ */
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ locale: string; slug: string }>;
+}): Promise<Metadata> {
+  const { slug } = await params;
+  const product = await productBySlug(slug);
+  if (!product) return { title: 'غير موجود', robots: { index: false, follow: false } };
+
+  const description = metaDescription(product);
+  const canonical = `/products/${product.slug}`;
+
+  return {
+    title: product.titleAr,
+    description,
+    robots: publicRobots(),
+    alternates: { canonical },
+    openGraph: {
+      type: 'article',
+      title: product.titleAr,
+      description,
+      url: canonical,
+    },
+  };
+}
+
 
 /**
  * Public product page (specification §28).
@@ -39,6 +82,7 @@ export default async function ProductPage({
 
   return (
     <>
+      <JsonLd data={productJsonLd(product)} />
       <SiteHeader />
       <main className="mx-auto flex max-w-6xl flex-col gap-8 px-5 py-10">
         <nav aria-label="مسار التصفح" className="text-sm text-[var(--color-ink-faint)]">

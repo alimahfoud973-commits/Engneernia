@@ -4,8 +4,32 @@ import { setRequestLocale } from 'next-intl/server';
 import { SiteHeader, SiteFooter } from '@/components/site-chrome';
 import { ProductGrid } from '@/components/product-card';
 import { disciplineBySlug } from '@/catalog/public-queries';
+import type { Metadata } from 'next';
+import { publicRobots } from '@/seo/config';
 
 export const dynamic = 'force-dynamic';
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ locale: string; discipline: string }>;
+}): Promise<Metadata> {
+  const { discipline: slug } = await params;
+  const discipline = await disciplineBySlug(slug);
+  if (!discipline) return { title: 'غير موجود', robots: { index: false, follow: false } };
+
+  const description =
+    discipline.descriptionAr ??
+    `موارد ${discipline.nameAr} الهندسية: ${discipline.totalProducts} مورداً منشوراً.`;
+
+  return {
+    title: discipline.nameAr,
+    description,
+    robots: publicRobots(),
+    alternates: { canonical: `/${discipline.slug}` },
+    openGraph: { type: 'website', title: discipline.nameAr, description, url: `/${discipline.slug}` },
+  };
+}
 
 /**
  * Discipline portal (specification §4): each behaves as its own entry point

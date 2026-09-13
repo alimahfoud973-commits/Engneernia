@@ -4,6 +4,18 @@ import { SiteHeader, SiteFooter } from '@/components/site-chrome';
 import { LoginForm } from '@/components/login-form';
 import { currentActor } from '@/auth/current';
 import { safeReturnPath } from '@/auth/return-path';
+import type { Metadata } from 'next';
+import { PRIVATE_ROBOTS } from '@/seo/config';
+
+/**
+ * The sign-in page is kept out of search results.
+ *
+ * Not for secrecy — the form is public — but because a sign-in page ranking
+ * for the platform's own name is how phishing pages get clicked: a visitor who
+ * searches for the site and lands on a login screen has no way to tell a real
+ * result from a paid one.
+ */
+export const metadata: Metadata = { robots: PRIVATE_ROBOTS };
 
 export const dynamic = 'force-dynamic';
 

@@ -4,6 +4,8 @@ import { NextIntlClientProvider } from 'next-intl';
 import { getMessages, setRequestLocale } from 'next-intl/server';
 import { IBM_Plex_Sans_Arabic, IBM_Plex_Mono } from 'next/font/google';
 import { routing, directionOf } from '@/i18n/routing';
+import { getPublicSettings } from '@/platform/settings';
+import { languageAlternates, publicRobots, siteUrl } from '@/seo/config';
 import '../globals.css';
 
 /**
@@ -25,11 +27,56 @@ const plexMono = IBM_Plex_Mono({
   display: 'swap',
 });
 
-export const metadata: Metadata = {
-  title: 'منصة الموارد الهندسية',
-  description: 'المعرفة الهندسية والموارد الرقمية — كهربائية، ميكانيكية، معمارية، مدنية',
-  robots: { index: false, follow: false }, // Lifted at launch (phase P8).
-};
+/**
+ * The metadata every page inherits.
+ *
+ * Built at request time rather than declared as a constant, for two reasons
+ * that both come from the owner's decisions: the platform NAME lives in the
+ * settings table so it can be changed without a deployment, and whether this
+ * deployment may be indexed at all is a per-environment flag that defaults to
+ * no. A static export could express neither.
+ *
+ * `metadataBase` is what turns every relative URL below — canonical links,
+ * Open Graph images — into an absolute one. Without it Next emits relative
+ * canonicals, which some crawlers resolve against the wrong host.
+ */
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ locale: string }>;
+}): Promise<Metadata> {
+  const { locale } = await params;
+  const settings = await getPublicSettings();
+  const name = locale === 'ar' ? settings.platformNameAr : settings.platformName;
+
+  return {
+    metadataBase: siteUrl(),
+    title: {
+      // A product page sets only its own title; this appends the platform's.
+      template: `%s — ${name}`,
+      default: `${name} — ${settings.tagline}`,
+    },
+    description: settings.tagline,
+    applicationName: name,
+    robots: publicRobots(),
+    alternates: {
+      canonical: '/',
+      languages: languageAlternates('/'),
+    },
+    openGraph: {
+      type: 'website',
+      siteName: name,
+      locale: locale === 'ar' ? 'ar_SY' : 'en_US',
+      title: `${name} — ${settings.tagline}`,
+      description: settings.tagline,
+      url: '/',
+    },
+    // No Twitter image is declared: an og:image that 404s is worse than none,
+    // and the platform has no artwork yet (OPEN-8).
+    twitter: { card: 'summary', title: name, description: settings.tagline },
+    formatDetection: { telephone: false },
+  };
+}
 
 export function generateStaticParams() {
   return routing.locales.map((locale) => ({ locale }));

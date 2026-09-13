@@ -3,8 +3,43 @@ import { setRequestLocale } from 'next-intl/server';
 import { SiteHeader, SiteFooter } from '@/components/site-chrome';
 import { ProductGrid } from '@/components/product-card';
 import { contributorBySlug } from '@/catalog/public-queries';
+import type { Metadata } from 'next';
+import { publicRobots } from '@/seo/config';
 
 export const dynamic = 'force-dynamic';
+
+/**
+ * The profile's metadata carries the same facts the page shows and no others.
+ * An engineer's earnings, commission and sales figures have no field on the
+ * type this page receives, so there is nothing here to remember to leave out.
+ */
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ locale: string; slug: string }>;
+}): Promise<Metadata> {
+  const { slug } = await params;
+  const contributor = await contributorBySlug(slug);
+  if (!contributor) return { title: 'غير موجود', robots: { index: false, follow: false } };
+
+  const description = [contributor.specialization, contributor.bio]
+    .filter(Boolean)
+    .join(' — ')
+    .slice(0, 180) || `أعمال ${contributor.displayName} المنشورة على المنصة.`;
+
+  return {
+    title: contributor.displayName,
+    description,
+    robots: publicRobots(),
+    alternates: { canonical: `/contributors/${slug}` },
+    openGraph: {
+      type: 'profile',
+      title: contributor.displayName,
+      description,
+      url: `/contributors/${slug}`,
+    },
+  };
+}
 
 /**
  * Public contributor profile (specification §31).

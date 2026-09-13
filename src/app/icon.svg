@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Engineernia">
+  <!--
+    A placeholder mark, deliberately plain.
+
+    The platform's name, domain and logo are still the owner's to settle
+    (OPEN-8), so this commits to nothing but the agreed palette: black ground,
+    gold rule, white counter. It exists because the alternative was three 404s
+    on every page load — /favicon.ico, /icon.png and /apple-icon.png — and a
+    browser tab with no mark at all reads as an unfinished site.
+
+    Replace this one file and every icon on the platform changes with it.
+  -->
+  <rect width="64" height="64" rx="12" fill="#14120d"/>
+  <!-- A drafting square: two strokes meeting at a right angle, and a rule. -->
+  <path d="M16 46V18h6v22h26v6H16z" fill="#d4af37"/>
+  <path d="M27 35l9-12 9 12H27z" fill="#ffffff"/>
+</svg>
