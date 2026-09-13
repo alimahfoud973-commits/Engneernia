@@ -34,7 +34,7 @@
 | | لماذا |
 |---|---|
 | **التخزين** | الملف الأصلي يصل إلى **١ غيغابايت** لملفات Revit والمشاريع المضغوطة، و٣٠٠ ميغابايت لـCAD، و٢٠٠ لـPDF (`MAX_UPLOAD_BYTES`). أي طبقة تخزين مجانية تنفد بعد ملفات قليلة. **وهذا بالضبط أول بند يستحق الدفع.** |
-| **النطاق** | نطاق فرعي مجاني يكفي للتجربة، لكن روابط canonical وخريطة الموقع تُبنى من `APP_URL`، وتغييره لاحقاً يعني فهرسة من الصفر |
+| **النطاق** | `enginora.com` (قرارك على OPEN-8). روابط canonical وخريطة الموقع تُبنى من `APP_URL`، فتغييره لاحقاً يعني فهرسة من الصفر — ونطاق البريد يجب أن يطابقه وإلا صُنِّفت رسائل التأكيد مزعجة |
 | **HTTPS** | ليس ترفاً: كعكة الجلسة `__Host-` و`Secure`، فبلا HTTPS **لا يستطيع أحد تسجيل الدخول**. شهادة Let's Encrypt مجانية، لكن يجب أن تكون موجودة من اليوم الأول |
 
 **قبل أن تختار مزوّداً، اختبر التسجيل عنده أولاً.** المنصة تُدار من سوريا، وكثير
@@ -71,14 +71,14 @@ npm run db:prove-rls    # إثبات أن app_user مقيَّد فعلاً — �
 
 ```bash
 NODE_ENV=production          # لا تضعه في .env.local أبداً (KI-1)
-APP_URL=https://<النطاق>     # منه تُبنى كل روابط canonical والخريطة
+APP_URL=https://enginora.com # منه تُبنى كل روابط canonical والخريطة
 DATABASE_URL=postgresql://app_user:...     # app_user، وليس أي دور آخر
 DATABASE_MIGRATION_URL=postgresql://migrator:...
 SESSION_SECRET=<٤٨ محرفاً عشوائياً>
 CONFIG_ENCRYPTION_KEY=<٤٨ محرفاً عشوائياً>
 STORAGE_ENDPOINT=https://<خدمة S3>         # ليس file:// — يُرفض في الإنتاج
 MAIL_TRANSPORT_URL=smtps://user:pass@host:465   # ليس log:// — يُرفض في الإنتاج
-MAIL_FROM="إنجينيرنيا <no-reply@النطاق>"
+MAIL_FROM="إنجينورا <no-reply@enginora.com>"
 MALWARE_SCANNER=clamav                     # 'none' قرار يُسجَّل، لا افتراض
 SEO_INDEXABLE=true                         # على الإنتاج وحده، عند الإطلاق
 ```

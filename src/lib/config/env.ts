@@ -68,7 +68,7 @@ const schema = z.object({
    * addressed to nowhere.
    */
   MAIL_TRANSPORT_URL: urlLike('MAIL_TRANSPORT_URL'),
-  /** RFC 5322 From header, e.g. `إنجينيرنيا <no-reply@example.com>`. */
+  /** RFC 5322 From header, e.g. `إنجينورا <no-reply@enginora.com>`. */
   MAIL_FROM: nonEmpty('MAIL_FROM'),
 
   PLATFORM_TIMEZONE: nonEmpty('PLATFORM_TIMEZONE').default('Asia/Damascus'),

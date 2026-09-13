@@ -31,8 +31,8 @@ export interface PublicSettings {
  * values live in the settings table and are the owner's to edit (OPEN-8).
  */
 const DEFAULTS: PublicSettings = {
-  platformName: 'Engineernia',
-  platformNameAr: 'إنجينيرنيا',
+  platformName: 'Enginora',
+  platformNameAr: 'إنجينورا',
   tagline: 'المعرفة الهندسية والموارد الرقمية',
   previewPageCount: 5,
   showSalesCount: false,

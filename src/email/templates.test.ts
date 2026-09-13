@@ -10,7 +10,7 @@ import { accountAlreadyExistsEmail, verificationEmail } from './templates';
 const BASE = {
   to: 'someone@example.test',
   url: 'https://engineernia.test/verify-email?token=abc123',
-  platformName: 'إنجينيرنيا',
+  platformName: 'إنجينورا',
   expiresInHours: 24,
 };
 
@@ -57,7 +57,7 @@ describe('accountAlreadyExistsEmail', () => {
     to: 'someone@example.test',
     displayName: 'زين',
     signInUrl: 'https://engineernia.test/login',
-    platformName: 'إنجينيرنيا',
+    platformName: 'إنجينورا',
   };
 
   it('contains no verification link — nothing was issued', () => {

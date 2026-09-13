@@ -86,7 +86,7 @@ jobs:
           STORAGE_BUCKET_ORIGINALS: ci-originals
           STORAGE_BUCKET_DERIVATIVES: ci-derivatives
           MAIL_TRANSPORT_URL: log://ci
-          MAIL_FROM: "Engineernia <no-reply@ci.local>"
+          MAIL_FROM: "Enginora <no-reply@ci.local>"
         run: |
           npm run seed:catalog
           npm run seed:demo
@@ -113,7 +113,7 @@ jobs:
           # nothing leaves the runner, and the tests install their own
           # capturing adapter anyway.
           MAIL_TRANSPORT_URL: log://ci
-          MAIL_FROM: "Engineernia <no-reply@ci.local>"
+          MAIL_FROM: "Enginora <no-reply@ci.local>"
         run: npm run test:integration
 
       - name: Production build

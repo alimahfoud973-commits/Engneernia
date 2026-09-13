@@ -519,7 +519,7 @@ describe('the monthly statement as a PDF (owner decision)', () => {
       settlement: document!.settlement,
       lines: document!.lines,
       contributorName: document!.contributorName,
-      platformName: 'Engineernia',
+      platformName: 'Enginora',
     });
 
     // A real PDF, not an empty buffer or an error page.

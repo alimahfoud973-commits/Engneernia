@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { getPublicSettings } from '@/platform/settings';
+import { BrandMark } from '@/components/brand-mark';
 import { currentActor } from '@/auth/current';
 import { unreadNotificationCount } from '@/notifications/queries';
 
@@ -28,7 +29,7 @@ export async function SiteHeader() {
     <header className="sticky top-0 z-40 border-b border-[var(--color-line)] bg-[var(--color-surface)]/95 backdrop-blur">
       <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-6 gap-y-3 px-5 py-3">
         <Link href="/" className="flex items-center gap-2 font-bold">
-          <span aria-hidden className="inline-block h-6 w-6 rounded-sm bg-[var(--color-accent)]" />
+          <BrandMark className="h-7 w-7 shrink-0" />
           <span className="text-base">{settings.platformNameAr}</span>
         </Link>
 

@@ -19,7 +19,7 @@ const BASE: Record<string, string> = {
   STORAGE_BUCKET_ORIGINALS: 'originals',
   STORAGE_BUCKET_DERIVATIVES: 'derivatives',
   MAIL_TRANSPORT_URL: 'smtps://u:p@smtp.example.test:465',
-  MAIL_FROM: 'Engineernia <no-reply@example.test>',
+  MAIL_FROM: 'Enginora <no-reply@example.test>',
 };
 
 const saved = { ...process.env };
