@@ -3,7 +3,7 @@ import { eq, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { withRawActorContext } from '@/db/actor-context';
 import { closeDb } from '@/db';
-import { disciplines, products } from '@/db/schema';
+import { categories, disciplines, productPrices, products } from '@/db/schema';
 import { searchCatalogue } from './search';
 
 /**
@@ -19,7 +19,12 @@ import { searchCatalogue } from './search';
 
 const suffix = Date.now();
 const OWNER = { actorId: randomUUID(), actorRole: 'OWNER' };
-const ids = { discipline: randomUUID(), published: randomUUID(), draft: randomUUID() };
+const ids = {
+  discipline: randomUUID(),
+  category: randomUUID(),
+  published: randomUUID(),
+  draft: randomUUID(),
+};
 const slugs = { published: `s4-pub-${suffix}`, draft: `s4-draft-${suffix}` };
 
 beforeAll(async () => {
@@ -27,6 +32,18 @@ beforeAll(async () => {
     await tx.insert(disciplines).values({
       id: ids.discipline, slug: `s4-disc-${suffix}`, nameAr: 'تخصص البحث',
       nameEn: 'Search Test', sortOrder: 90, isActive: true,
+    });
+    /**
+     * A category and a price exist on the fixture so that the CATEGORY and
+     * PRICE-BOUND filters can be exercised. Those two filters are the only
+     * ones that make the facet scan join `categories` and `product_prices`;
+     * every other search leaves both out, and a mistake in that conditional
+     * would raise "missing FROM-clause entry" rather than return a wrong
+     * answer — which is exactly why it needs a test rather than a review.
+     */
+    await tx.insert(categories).values({
+      id: ids.category, disciplineId: ids.discipline, slug: `s4-cat-${suffix}`,
+      nameAr: 'قسم البحث', nameEn: 'Search Category', sortOrder: 10, isActive: true,
     });
     await tx.insert(products).values([
       {
@@ -36,7 +53,7 @@ beforeAll(async () => {
         descriptionAr: 'مرجع يشرح اختيار المحولات الكهربائية وحساب الأحمال.',
         disciplineId: ids.discipline, fileType: 'PDF', level: 'ADVANCED',
         softwareTags: ['ETAP'], status: 'PUBLISHED', currency: 'USD',
-        publishedAt: new Date(), salesCount: 0,
+        publishedAt: new Date(), salesCount: 0, categoryId: ids.category,
       },
       {
         id: ids.draft, slug: slugs.draft,
@@ -44,12 +61,18 @@ beforeAll(async () => {
         disciplineId: ids.discipline, fileType: 'PDF', status: 'DRAFT', currency: 'USD',
       },
     ]);
+    await tx.insert(productPrices).values({
+      productId: ids.published, amountMinor: 2500n, currency: 'USD',
+      effectiveFrom: new Date(Date.now() - 86_400_000),
+    });
   });
 }, 30_000);
 
 afterAll(async () => {
   await withRawActorContext(OWNER, async (tx) => {
+    await tx.delete(productPrices).where(eq(productPrices.productId, ids.published));
     await tx.delete(products).where(sql`id IN (${ids.published}, ${ids.draft})`);
+    await tx.delete(categories).where(eq(categories.id, ids.category));
     await tx.delete(disciplines).where(eq(disciplines.id, ids.discipline));
   });
   await closeDb();
@@ -148,6 +171,75 @@ describe('3. facets', () => {
     expect(results.total).toBeGreaterThan(0);
     const stillThere = await searchCatalogue({});
     expect(stillThere.total).toBeGreaterThan(0);
+  });
+});
+
+
+/**
+ * These two filters are the ones the facet scan joins extra tables for. The
+ * joins became CONDITIONAL in P8 — dead most of the time, and expensive under
+ * Row-Level Security, which re-derives the parent product's visibility once per
+ * price row. The saving was 60 ms to 27 ms on the facet query; the risk is a
+ * predicate left referring to a table that is no longer in the FROM clause.
+ */
+describe('3b. the filters that add a join', () => {
+  const scope = `s4-disc-${suffix}`;
+
+  it('filters by category, and the facets still add up', async () => {
+    const results = await searchCatalogue({ discipline: scope, category: `s4-cat-${suffix}` });
+    expect(results.items.some((i) => i.slug === slugs.published)).toBe(true);
+
+    const fromPrice = results.facets.price.reduce((sum, f) => sum + f.count, 0);
+    expect(fromPrice).toBe(results.total);
+  });
+
+  it('returns nothing for a category that does not exist', async () => {
+    const results = await searchCatalogue({ discipline: scope, category: 'no-such-category' });
+    expect(results.total).toBe(0);
+  });
+
+  it('filters by a lower price bound', async () => {
+    const included = await searchCatalogue({ discipline: scope, minPriceMinor: 2000 });
+    expect(included.items.some((i) => i.slug === slugs.published)).toBe(true);
+
+    const excluded = await searchCatalogue({ discipline: scope, minPriceMinor: 9000 });
+    expect(excluded.items.some((i) => i.slug === slugs.published)).toBe(false);
+  });
+
+  it('filters by an upper price bound', async () => {
+    const included = await searchCatalogue({ discipline: scope, maxPriceMinor: 3000 });
+    expect(included.items.some((i) => i.slug === slugs.published)).toBe(true);
+
+    const excluded = await searchCatalogue({ discipline: scope, maxPriceMinor: 1000 });
+    expect(excluded.items.some((i) => i.slug === slugs.published)).toBe(false);
+  });
+
+  it('filters by both bounds at once, with the facets consistent', async () => {
+    const results = await searchCatalogue({
+      discipline: scope,
+      minPriceMinor: 2000,
+      maxPriceMinor: 3000,
+    });
+    expect(results.items.some((i) => i.slug === slugs.published)).toBe(true);
+    const fromDisciplines = results.facets.disciplines.reduce((sum, f) => sum + f.count, 0);
+    expect(fromDisciplines).toBe(results.total);
+  });
+
+  /**
+   * The counts must not depend on which tables the scan happened to join —
+   * the joins are an implementation detail of how the rows are reached, and
+   * a facet count that changed with them would mean one of the two paths is
+   * filtering rows the other does not.
+   */
+  it('counts the same discipline totals with and without the extra joins', async () => {
+    const plain = await searchCatalogue({ discipline: scope });
+    const joined = await searchCatalogue({ discipline: scope, minPriceMinor: 0 });
+    const total = (r: typeof plain) =>
+      r.facets.disciplines.reduce((sum, f) => sum + f.count, 0);
+    // The price-bounded search can only be a subset, never larger.
+    expect(total(joined)).toBeLessThanOrEqual(total(plain));
+    expect(total(plain)).toBe(plain.total);
+    expect(total(joined)).toBe(joined.total);
   });
 });
 

@@ -59,6 +59,9 @@ npm run test:integration  # اختبارات RLS والدخول على قاعد�
 npm run bootstrap:owner   # إنشاء حساب المالك (مرة واحدة)
 node scripts/security-probe.mjs  # ٤٨ فحصاً أمنياً على بناء إنتاجي يعمل
 node scripts/csp-check.mjs       # إثبات أن CSP لا تكسر الموقع في متصفح حقيقي
+node scripts/measure-pages.mjs   # زمن كل صفحة وعدد استعلاماتها
+npm run backup                   # نسخة احتياطية (أدوار + قاعدة + بيان)
+npm run restore-drill            # تمرين استعادة كامل مع فحوص الهوية والسلامة
 docker compose up -d   # PostgreSQL + MinIO محلياً
 ```
 
@@ -96,6 +99,18 @@ docker compose up -d   # PostgreSQL + MinIO محلياً
 
 **القاعدة:** بعد أي عمل يمسّ واجهة، شغّل التطبيق فعلاً وافتح الصفحة. و**كل حارس
 جديد يجب أن تتحقق أنه يفشل** بإعادة العيب قبل أن تعتمده — حارسٌ لا يفشل ليس حارساً.
+
+### الأداء (P8)
+
+- **أي قياس أداء يجب أن يُجرى بدور `app_user`.** superuser يتجاوز RLS، وقياسٌ
+  به أظهر فرق ١٫٢ ms حيث الفرق الحقيقي ٣٣ ms — لأن تكلفة سياسات الصفوف سقطت من
+  القياس كلياً.
+- ترتيب «الأحدث أولاً» تعبير واحد: `newestFirst` في `public-queries.ts`،
+  ويطابق الفهرس `products_recent_idx` حرفاً بحرف. تغيير أحدهما دون الآخر يعيد
+  المسح الكامل بصمت.
+- كل ترتيب يجب أن ينتهي بفاصل تعادل فريد (`id DESC`)، وإلا تداخلت الصفحات.
+- `scripts/measure-pages.mjs` يقيس زمن الصفحة وعدد الاستعلامات من
+  `pg_stat_statements`. القياسات والعتبات في `docs/PERFORMANCE.md`.
 
 ### الأمن (P8)
 

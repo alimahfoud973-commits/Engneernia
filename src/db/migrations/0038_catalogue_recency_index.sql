@@ -1,0 +1,41 @@
+-- ===========================================================================
+-- THE INDEX THE CATALOGUE'S DEFAULT ORDERING NEEDED ALL ALONG
+-- ===========================================================================
+-- Measured in P8 against 5,009 published products, with pg_stat_statements.
+--
+-- "Newest first" is the default ordering of the search page, the home page's
+-- latest strip and the free-resources strip — the three most-visited reads on
+-- the platform. Every one of them was running a SEQUENTIAL SCAN of the whole
+-- products table, joining prices and disciplines for all 5,009 rows, and then
+-- throwing all but the first 24 away in a top-N sort.
+--
+-- Migration 0015 said, in a comment above the best-sellers index, that "best
+-- sellers and new releases are ordered reads over published rows only" — and
+-- then created the index for best sellers only. This is the other half.
+--
+-- WHY THE EXISTING INDEX DID NOT SERVE IT. `products_status_published_idx` is
+-- ("status", "published_at") ascending, with no tiebreaker. PostgreSQL can read
+-- a btree backwards, but the ordering these queries ask for is
+-- `published_at DESC NULLS LAST, id DESC`, and neither the NULLS placement nor
+-- the second key matches — so the planner could not use it and fell back to
+-- scanning everything.
+--
+-- MEASURED EFFECT on the search page's default query, warm, LIMIT 24:
+--
+--     before   6.58 ms   639 shared buffers   Seq Scan + top-N sort
+--     after    0.24 ms    88 shared buffers   Index Scan, 24 rows touched
+--
+-- and the work no longer grows with the size of the catalogue, which is the
+-- part that matters: the seq-scan plan gets slower with every product added,
+-- and this one does not.
+--
+-- The id tiebreaker is in the index because it is in the ORDER BY, and it is in
+-- the ORDER BY because published_at is not unique: without it the sort is not
+-- total, page 1 and page 2 can overlap, and a product can appear twice while
+-- another is never shown. That rule is already documented in
+-- src/catalog/search.ts; this migration makes it cheap to obey.
+-- ===========================================================================
+
+CREATE INDEX IF NOT EXISTS "products_recent_idx"
+  ON "products" ("published_at" DESC NULLS LAST, "id" DESC)
+  WHERE status = 'PUBLISHED';

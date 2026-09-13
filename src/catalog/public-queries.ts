@@ -118,6 +118,25 @@ export async function listDisciplines(): Promise<readonly PublicDiscipline[]> {
   });
 }
 
+/**
+ * "Newest first", written the one way the whole catalogue writes it.
+ *
+ * TWO THINGS ARE LOAD-BEARING HERE, and both were missing from the home page's
+ * lists until P8.
+ *
+ * `NULLS LAST` — a product with no publication date has no place at the top of
+ * a list of the most recent. No published row has a null date today, so this
+ * changes no result; it is here because it must MATCH the index
+ * `products_recent_idx` exactly, and a mismatched null placement silently
+ * costs a sequential scan of the whole table.
+ *
+ * `id DESC` — published_at is not unique. Without a total order PostgreSQL may
+ * return ties in any order and need not repeat itself, so page 1 and page 2 of
+ * a listing can overlap: one product shown twice, another never shown at all.
+ * The search page has carried this tiebreaker since P4; these lists did not.
+ */
+const newestFirst = [sql`${products.publishedAt} DESC NULLS LAST`, desc(products.id)] as const;
+
 export async function latestProducts(limit = 8): Promise<readonly PublicProductCard[]> {
   return withActor(GUEST, async (tx) => {
     const rows = await tx
@@ -127,7 +146,7 @@ export async function latestProducts(limit = 8): Promise<readonly PublicProductC
       .leftJoin(categories, eq(categories.id, products.categoryId))
       .leftJoin(productPrices, withCurrentPrice())
       .where(eq(products.status, 'PUBLISHED'))
-      .orderBy(desc(products.publishedAt))
+      .orderBy(...newestFirst)
       .limit(limit);
     return rows.map(toCard);
   });
@@ -159,7 +178,7 @@ export async function freeProducts(limit = 4): Promise<readonly PublicProductCar
       .leftJoin(categories, eq(categories.id, products.categoryId))
       .leftJoin(productPrices, withCurrentPrice())
       .where(and(eq(products.status, 'PUBLISHED'), eq(products.isFree, true)))
-      .orderBy(desc(products.publishedAt))
+      .orderBy(...newestFirst)
       .limit(limit);
     return rows.map(toCard);
   });
@@ -214,7 +233,7 @@ export async function disciplineBySlug(slug: string) {
       .leftJoin(productPrices, withCurrentPrice())
       .where(and(eq(products.disciplineId, discipline.id), eq(products.status, 'PUBLISHED')))
       // Same tiebreaker rule as search: published_at alone is not unique.
-      .orderBy(desc(products.publishedAt), desc(products.id))
+      .orderBy(...newestFirst)
       .limit(PORTAL_PREVIEW_LIMIT);
 
     const [counted] = await tx

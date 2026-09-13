@@ -226,6 +226,39 @@ export async function searchCatalogue(filters: SearchFilters): Promise<SearchRes
     `;
 
     /**
+     * The FACET scan joins only what it actually needs — which, most of the
+     * time, is neither categories nor prices.
+     *
+     * The facet CTE selects no column from either table; they were joined only
+     * because the results query needs them and both shared one fragment. The
+     * results query reads twenty-four rows, so a dead join costs it nothing.
+     * The facet scan reads EVERY published product, so a dead join costs it
+     * once per product.
+     *
+     * AND UNDER ROW-LEVEL SECURITY THAT IS NOT A SMALL NUMBER. The policy on
+     * `product_prices` re-derives whether the parent product is visible, as a
+     * correlated subquery, for every price row the join touches — 5,009 extra
+     * index scans on `products` to produce a column nobody selected. Measured:
+     * the facet query cost 60 ms with the joins and 27 ms without.
+     *
+     * A WARNING WORTH KEEPING. The same comparison run as a SUPERUSER showed a
+     * 1.2 ms difference and would have closed this investigation as "not worth
+     * it" — superusers bypass RLS, so the measurement omitted the entire cost.
+     * Performance work on this platform has to be measured as `app_user`.
+     */
+    const facetJoins = sql`
+      FROM products p
+      JOIN disciplines d ON d.id = p.discipline_id
+      ${filters.category ? sql`LEFT JOIN categories c ON c.id = p.category_id` : sql``}
+      ${
+        filters.minPriceMinor !== undefined || filters.maxPriceMinor !== undefined
+          ? sql`LEFT JOIN product_prices pr
+                       ON pr.product_id = p.id AND pr.effective_to IS NULL`
+          : sql``
+      }
+    `;
+
+    /**
      * No `count(*) OVER ()` here, deliberately.
      *
      * A window count forces the whole filtered set to be materialised before
@@ -266,7 +299,7 @@ export async function searchCatalogue(filters: SearchFilters): Promise<SearchRes
       WITH base AS MATERIALIZED (
         SELECT p.id, p.file_type, p.level, p.is_free, p.software_tags,
                d.slug AS discipline_slug, d.name_ar AS discipline_name, d.sort_order
-        ${joins}
+        ${facetJoins}
         WHERE ${conditions}
       )
       SELECT 'discipline' AS dim, discipline_slug AS value,
