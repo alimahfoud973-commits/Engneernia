@@ -1,8 +1,10 @@
 import 'server-only';
 import { and, eq } from 'drizzle-orm';
 import { and as andOp, eq as eqOp, isNull as isNullOp } from 'drizzle-orm';
-import { downloadEvents, entitlements, productFiles, products } from '@/db/schema';
+import { downloadEvents, entitlements, orderItems, orders, productFiles, products } from '@/db/schema';
 import { withActor } from '@/db/actor-context';
+// Timestamps from SQL arrive as Date or string depending on the client (TD-11).
+import { toDate } from '@/db';
 import { isOwner, type Actor } from '@/authz/actor';
 import { sql } from 'drizzle-orm';
 import { NotFoundError } from '@/lib/errors';
@@ -10,6 +12,7 @@ import { serverEnv } from '@/lib/config/env';
 import { hashIp } from '@/auth/crypto';
 import { getStorage, type BucketName, type DeliveryGrant } from './storage';
 import { isServable } from './scanner';
+import { stampPdfForBuyer, type BuyerStamp } from './personalise';
 
 /**
  * ===========================================================================
@@ -50,6 +53,9 @@ export async function deliverProductFile(
   request: DeliveryRequest,
 ): Promise<DeliveryResponse> {
   const env = serverEnv();
+
+  /** Set only for a buyer taking their own original — see OPEN-5 below. */
+  let stamp: BuyerStamp | null = null;
 
   const file = await withActor(actor, async (tx) => {
     const [row] = await tx
@@ -92,8 +98,16 @@ export async function deliverProductFile(
 
       if (!isOwner(actor) && actor.kind === 'USER') {
         const [owned] = await tx
-          .select({ id: entitlements.id })
+          .select({
+            id: entitlements.id,
+            grantedAt: entitlements.grantedAt,
+            // Left-joined: `order_item_id` is ON DELETE SET NULL, and a grant
+            // can exist without an order behind it at all.
+            orderNumber: orders.orderNumber,
+          })
           .from(entitlements)
+          .leftJoin(orderItems, eqOp(orderItems.id, entitlements.orderItemId))
+          .leftJoin(orders, eqOp(orders.id, orderItems.orderId))
           .where(
             andOp(
               eqOp(entitlements.productId, row.productId),
@@ -105,6 +119,16 @@ export async function deliverProductFile(
 
         if (owned) {
           grantReason = 'ENTITLEMENT';
+          /**
+           * What goes on the buyer's copy (OPEN-5). The name comes from the
+           * session actor, so it is the account's own name and not anything a
+           * request carried.
+           */
+          stamp = {
+            buyerName: actor.displayName,
+            orderNumber: owned.orderNumber ?? null,
+            purchasedAt: toDate(owned.grantedAt) ?? new Date(),
+          };
           // Counts the download and enforces any allowance cap. Raises if the
           // entitlement was revoked between the policy check and here.
           await tx.execute(
@@ -146,6 +170,32 @@ export async function deliverProductFile(
   });
 
   const isOriginal = file.role === 'ORIGINAL';
+
+  /**
+   * ===========================================================================
+   * THE BUYER'S COPY IS PERSONALISED (OPEN-5)
+   * ===========================================================================
+   * Only for a buyer (`stamp` is set on the ENTITLEMENT branch alone), only for
+   * the original, and only for a PDF — nothing can write a visible mark into a
+   * Revit model or a zip archive, and pretending otherwise would give the owner
+   * a traceability they do not have.
+   *
+   * THIS PATH STREAMS, IT DOES NOT REDIRECT. A signed URL points at the master
+   * in storage; handing one to a buyer would deliver the unstamped file and
+   * quietly undo the whole feature. The bytes below exist for this one response
+   * and are never written back — the stored original is untouched, which is the
+   * owner's condition on this decision.
+   */
+  if (isOriginal && stamp && file.contentType === 'application/pdf') {
+    const master = await getStorage().get(file.bucket as BucketName, file.storageKey);
+    const personalised = await stampPdfForBuyer(master, stamp);
+
+    return {
+      grant: { kind: 'stream', body: personalised, contentType: file.contentType },
+      filename: file.originalFilename,
+      contentType: file.contentType,
+    };
+  }
 
   const grant = await getStorage().grantDelivery(file.bucket as BucketName, file.storageKey, {
     ttlSeconds: isOriginal ? ORIGINAL_URL_TTL_SECONDS : PREVIEW_URL_TTL_SECONDS,
