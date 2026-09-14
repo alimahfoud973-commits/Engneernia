@@ -13,11 +13,12 @@ import { approvePayment, createOrder, placeOrder } from '@/commerce/orders';
 import { generateSettlements } from './generate';
 import { approveSettlement, cancelSettlement, markSettlementPaid } from './lifecycle';
 import { contributorStatement } from '@/finance/balances';
-import { statementDocument } from './queries';
+import { myStatements, settlementRun, statementDocument, statementLines } from './queries';
 import { renderStatementPdf } from './statement-pdf';
 import { checkLedgerHealth } from '@/ledger/verify';
+import { revenueByDiscipline, revenueByPeriod } from '@/finance/reports';
 import { RuleViolationError } from '@/lib/errors';
-import type { Actor } from '@/authz/actor';
+import { GUEST, type Actor } from '@/authz/actor';
 
 /**
  * ===========================================================================
@@ -614,6 +615,56 @@ describe('who may read a statement (§12, §49)', () => {
         (SELECT id FROM settlements WHERE period_key = '2026-11')`);
       await tx.execute(sql`DELETE FROM settlements WHERE period_key = '2026-11'`);
     });
+  });
+
+  /**
+   * The WRITE refusals below were covered; the READ paths were not, and they
+   * are the ones that leak rather than break. `statementLines` issues no
+   * ownership filter at all — the scoping is entirely the row policy's — and a
+   * statement is the single densest financial document about one engineer:
+   * every sale, every date, every figure they earned.
+   */
+  it('a contributor cannot read another engineer\'s statement lines', async () => {
+    const row = await settlementRow('2026-08');
+    expect(row).toBeDefined();
+
+    // Real lines exist for the engineer who owns it.
+    expect((await statementLines(engineer, row!.id)).length).toBeGreaterThan(0);
+
+    const stranger: Actor = {
+      ...base, userId: randomUUID(), role: 'CONTRIBUTOR',
+      contributorId: randomUUID(), contributorActive: true,
+    };
+    // Not an error, and not a partial view: nothing at all, decided by the row
+    // policy rather than by a comparison in the query.
+    expect(await statementLines(stranger, row!.id)).toEqual([]);
+    expect(await statementLines(customer, row!.id)).toEqual([]);
+    expect(await statementLines(GUEST, row!.id)).toEqual([]);
+  });
+
+  it('a contributor lists only their own statements', async () => {
+    const mine = await myStatements(engineer);
+    expect(mine.length).toBeGreaterThan(0);
+
+    const stranger: Actor = {
+      ...base, userId: randomUUID(), role: 'CONTRIBUTOR',
+      contributorId: randomUUID(), contributorActive: true,
+    };
+    expect(await myStatements(stranger)).toEqual([]);
+    // A customer has no contributor profile, so there is nothing to scope by.
+    expect(await myStatements(customer)).toEqual([]);
+  });
+
+  it('a contributor cannot open the owner\'s settlement run', async () => {
+    // The run lists EVERY engineer for a period, with names and amounts — the
+    // one screen where one engineer could read the whole payroll.
+    await expect(settlementRun(engineer, '2026-08')).rejects.toThrow(RuleViolationError);
+    await expect(settlementRun(customer, '2026-08')).rejects.toThrow(RuleViolationError);
+  });
+
+  it('a contributor cannot open the platform revenue reports', async () => {
+    await expect(revenueByPeriod(engineer)).rejects.toThrow(RuleViolationError);
+    await expect(revenueByDiscipline(engineer)).rejects.toThrow(RuleViolationError);
   });
 
   it('a contributor cannot generate, approve or pay a settlement', async () => {
