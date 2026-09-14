@@ -31,7 +31,22 @@ export interface TestOwnerPatch {
   readonly totpEnabledAt?: Date | null;
 }
 
-export async function ensureTestOwner(patch?: TestOwnerPatch): Promise<string> {
+export interface TestOwner {
+  readonly id: string;
+  /**
+   * The address the owner row ACTUALLY has — not the constant above.
+   *
+   * On a developer's database `bootstrap:owner` may already have created the
+   * one owner under a real address, and this fixture then adopts that row
+   * rather than making a second one it is not allowed to make. A caller that
+   * looks the owner up by email (login.itest.ts does, because that is what a
+   * person types) must use this, and assuming the constant is how three
+   * two-factor tests failed the first time a real owner existed.
+   */
+  readonly email: string;
+}
+
+export async function ensureTestOwner(patch?: TestOwnerPatch): Promise<TestOwner> {
   return withRawActorContext(CTX, async (tx) => {
     await tx.execute(sql`
       INSERT INTO users (email, password_hash, role, status, display_name, email_verified_at)
@@ -40,8 +55,8 @@ export async function ensureTestOwner(patch?: TestOwnerPatch): Promise<string> {
       ON CONFLICT DO NOTHING
     `);
 
-    const found = await tx.execute(sql`SELECT id FROM users WHERE role = 'OWNER'`);
-    const row = (found as unknown as Array<{ id: string }>)[0];
+    const found = await tx.execute(sql`SELECT id, email::text AS email FROM users WHERE role = 'OWNER'`);
+    const row = (found as unknown as Array<{ id: string; email: string }>)[0];
     if (!row) throw new Error('No owner row after ensureTestOwner — is migration 0041 applied?');
 
     // Applied as an update so the caller gets what it asked for even when the
@@ -61,6 +76,6 @@ export async function ensureTestOwner(patch?: TestOwnerPatch): Promise<string> {
       `);
     }
 
-    return row.id;
+    return { id: row.id, email: row.email };
   });
 }

@@ -56,7 +56,7 @@ const PRICE = 2000n;  // 80% engineer = 1600, split 75/25 between two authors
 beforeAll(async () => {
   // The platform has exactly one owner (migration 0041), so this file no
   // longer invents one of its own — it asks for the one that exists.
-  ids.owner = await ensureTestOwner({ displayName: 'Owner' });
+  ids.owner = (await ensureTestOwner({ displayName: 'Owner' })).id;
   OWNER_RAW = { actorId: ids.owner, actorRole: 'OWNER' };
   owner = { ...base, userId: ids.owner, role: 'OWNER', contributorId: null, contributorActive: false };
 

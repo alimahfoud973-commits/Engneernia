@@ -171,6 +171,12 @@ expect_equal "SECURITY DEFINER functions"  "$(m security.securityDefinerFunction
 echo
 if [ "$failures" -eq 0 ]; then
   echo "DRILL PASSED — this backup restores to the same, sound books."
+  # Recorded so that a drill which quietly stopped happening becomes visible:
+  # scripts/backup-hourly.sh reads this date and complains once it goes stale.
+  # Written ONLY on a pass — a failed drill must not reset the clock.
+  STATE_DIR="${BACKUP_DIR:-./backups}/.state"
+  mkdir -p "$STATE_DIR" 2>/dev/null || true
+  date -u +%Y-%m-%dT%H:%M:%SZ > "$STATE_DIR/last-drill" 2>/dev/null || true
 else
   echo "DRILL FAILED — $failures check(s). Do not rely on this backup."
 fi

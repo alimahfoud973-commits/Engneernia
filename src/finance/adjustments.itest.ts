@@ -80,7 +80,7 @@ let orderItemBefore: typeof orderItems.$inferSelect | undefined;
 beforeAll(async () => {
   // The platform has exactly one owner (migration 0041), so this file no
   // longer invents one of its own — it asks for the one that exists.
-  ids.owner = await ensureTestOwner({ displayName: 'Owner Name' });
+  ids.owner = (await ensureTestOwner({ displayName: 'Owner Name' })).id;
   OWNER_RAW = { actorId: ids.owner, actorRole: 'OWNER' };
   owner = { ...base, userId: ids.owner, role: 'OWNER', contributorId: null, contributorActive: false };
 

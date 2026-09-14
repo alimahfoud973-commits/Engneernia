@@ -59,7 +59,7 @@ const RVT_BYTES = pad([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
 beforeAll(async () => {
   // The platform has exactly one owner (migration 0041), so this file no
   // longer invents one of its own — it asks for the one that exists.
-  ids.owner = await ensureTestOwner({ displayName: 'Owner' });
+  ids.owner = (await ensureTestOwner({ displayName: 'Owner' })).id;
   OWNER_RAW = { actorId: ids.owner, actorRole: 'OWNER' };
   owner = { ...base, userId: ids.owner, role: 'OWNER', contributorId: null, contributorActive: false };
 

@@ -15,6 +15,10 @@
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
+    // Node's --experimental-strip-types, which the scripts/ entry points run
+    // under, resolves relative imports with the .ts extension written out.
+    // Safe here because nothing is emitted: noEmit is true above.
+    "allowImportingTsExtensions": true,
     "skipLibCheck": true,
     "verbatimModuleSyntax": true,
     "strict": true,

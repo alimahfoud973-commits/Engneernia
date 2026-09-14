@@ -16,7 +16,10 @@ export default defineConfig({
   test: {
     globals: false,
     environment: 'node',
-    include: ['src/**/*.test.ts'],
+    // scripts/ is included because the backup path lives there, and backup
+    // code that is never tested is the worst kind: it is exercised for the
+    // first time on the day the original is already gone.
+    include: ['src/**/*.test.ts', 'scripts/**/*.test.ts'],
     coverage: {
       provider: 'v8',
       thresholds: {

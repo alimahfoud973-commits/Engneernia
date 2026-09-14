@@ -48,7 +48,7 @@ const ctxOf = (actor: Actor) =>
 beforeAll(async () => {
   // The platform has exactly one owner (migration 0041), so this file no
   // longer invents one of its own — it asks for the one that exists.
-  ids.ownerUser = await ensureTestOwner({ displayName: 'Owner' });
+  ids.ownerUser = (await ensureTestOwner({ displayName: 'Owner' })).id;
   OWNER_RAW = { actorId: ids.ownerUser, actorRole: 'OWNER' };
   owner = { ...base, userId: ids.ownerUser, role: 'OWNER', contributorId: null, contributorActive: false };
 

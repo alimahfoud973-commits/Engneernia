@@ -28,7 +28,8 @@ const emails = {
    * The two-factor account IS the platform owner, and since migration 0041
    * there is exactly one of those. So this file asks for the shared owner row
    * rather than creating a second one, and looks it up by the address a person
-   * would actually type.
+   * would actually type. Overwritten in beforeAll with whatever address the
+   * owner really has.
    */
   twoFactor: TEST_OWNER_EMAIL,
   disabled: `login-disabled+${suffix}@test.local`,
@@ -37,12 +38,22 @@ const totpSecret = generateTotpSecret();
 
 beforeAll(async () => {
   const passwordHash = await hashPassword(PASSWORD);
-  ids.twoFactor = await ensureTestOwner({
+  const theOwner = await ensureTestOwner({
     displayName: 'Owner 2FA',
     passwordHash,
     totpSecretEncrypted: encryptSecret(totpSecret),
     totpEnabledAt: new Date(),
   });
+  ids.twoFactor = theOwner.id;
+  /**
+   * The address the owner row actually has, not the fixture's constant.
+   *
+   * On a database where `bootstrap:owner` has already run, the single owner is
+   * a real account under a real address and this fixture adopts it — it is not
+   * allowed to create a second one. Assuming the constant is how these
+   * two-factor tests failed the first time that happened.
+   */
+  emails.twoFactor = theOwner.email;
 
   await withRawActorContext(OWNER_CTX, async (tx) => {
     await tx.insert(users).values([

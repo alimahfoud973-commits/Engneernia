@@ -31,7 +31,7 @@ function privileged() {
 }
 
 beforeAll(async () => {
-  ownerId = await ensureTestOwner({ displayName: 'Owner' });
+  ownerId = (await ensureTestOwner({ displayName: 'Owner' })).id;
   await withRawActorContext(CTX, async (tx) => {
     await tx.insert(users).values([
       {
