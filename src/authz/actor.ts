@@ -23,6 +23,16 @@ export interface AuthenticatedActor {
   readonly contributorActive: boolean;
   /** True once the second factor has been satisfied for this session. */
   readonly twoFactorSatisfied: boolean;
+  /**
+   * Whether this ACCOUNT has a second factor armed at all — distinct from
+   * whether this SESSION has satisfied it.
+   *
+   * An owner with no factor enrolled satisfies `twoFactorSatisfied` trivially,
+   * because there is nothing to satisfy. That is the state the route gate has
+   * to tell apart in order to send them to enrol, and no other field can: it
+   * looks identical to a completed challenge.
+   */
+  readonly totpEnabled: boolean;
 }
 
 export interface GuestActor {

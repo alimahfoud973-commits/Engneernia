@@ -19,7 +19,7 @@
  * =============================================================================
  */
 import postgres from 'postgres';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createCipheriv, createHash, randomBytes, randomUUID } from 'node:crypto';
 import { hash as argonHash } from '@node-rs/argon2';
 
 const url = process.env.DATABASE_MIGRATION_URL ?? process.env.DATABASE_SUPERUSER_URL;
@@ -55,6 +55,58 @@ if (process.env.NODE_ENV === 'production' || process.env.ALLOW_PROBE_SEED !== 'y
  * longer reachable with anything written down.
  */
 const PASSWORD = `probe-${randomBytes(24).toString('base64url')}`;
+
+/**
+ * THE PROBE'S OWNER IS TWO-FACTOR PROTECTED, like a real one.
+ *
+ * The admin console now refuses an owner with no second factor enrolled and
+ * sends them to /account/security instead. That is the platform being correct,
+ * and it made the probe's positive control fail — the check that proves the
+ * owner CAN reach the finance report, which is what stops the whole probe from
+ * passing because everything is broken.
+ *
+ * So the fixture arms one. The base32 and the AES-GCM envelope are written out
+ * here rather than imported from `src/`, because this script runs outside the
+ * application's module resolution — and because a fixture that shares the
+ * application's crypto would keep agreeing with it even if it were wrong.
+ */
+const BASE32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+
+function base32Encode(bytes: Buffer): string {
+  let bits = 0;
+  let value = 0;
+  let out = '';
+  for (const byte of bytes) {
+    value = (value << 8) | byte;
+    bits += 8;
+    while (bits >= 5) {
+      out += BASE32[(value >>> (bits - 5)) & 31];
+      bits -= 5;
+    }
+  }
+  if (bits > 0) out += BASE32[(value << (5 - bits)) & 31];
+  return out;
+}
+
+/** Mirrors src/auth/crypto.ts: v1.<iv>.<tag>.<ciphertext>, all base64url. */
+function encryptSecret(plaintext: string, configKey: string): string {
+  const key = createHash('sha256').update(configKey, 'utf8').digest();
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', key, iv);
+  const ciphertext = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+  return [
+    'v1', iv.toString('base64url'),
+    cipher.getAuthTag().toString('base64url'),
+    ciphertext.toString('base64url'),
+  ].join('.');
+}
+
+const CONFIG_KEY = process.env.CONFIG_ENCRYPTION_KEY;
+if (!CONFIG_KEY) {
+  console.error('CONFIG_ENCRYPTION_KEY must be set: the probe owner needs an armed second factor.');
+  process.exit(1);
+}
+const TOTP_SECRET = base32Encode(randomBytes(20));
 const sql = postgres(url, { max: 1 });
 const stamp = Date.now();
 
@@ -100,8 +152,9 @@ try {
   await tx`
     UPDATE users SET password_hash = ${passwordHash}, status = 'ACTIVE',
                      email_verified_at = now(), failed_login_count = 0,
-                     locked_until = NULL, totp_secret_encrypted = NULL,
-                     totp_enabled_at = NULL
+                     locked_until = NULL,
+                     totp_secret_encrypted = ${encryptSecret(TOTP_SECRET, CONFIG_KEY)},
+                     totp_enabled_at = now()
      WHERE id = ${owner.id}::uuid
   `;
 
@@ -193,6 +246,7 @@ try {
   console.log('# The password is generated per run and is printed ONLY here.');
   console.log(`export PROBE_OWNER_EMAIL='${ownerEmail}'`);
   console.log(`export PROBE_OWNER_PASSWORD='${PASSWORD}'`);
+  console.log(`export PROBE_OWNER_TOTP_SECRET='${TOTP_SECRET}'`);
   console.log(`export PROBE_ENGINEER_EMAIL='${engineerEmail}'`);
   console.log(`export PROBE_ENGINEER_PASSWORD='${PASSWORD}'`);
   console.log(`export PROBE_FOREIGN_SETTLEMENT_ID='${ids.settlement}'`);

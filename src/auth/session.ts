@@ -125,6 +125,7 @@ export async function resolveActor(rawToken: string | undefined | null): Promise
     contributorId: row.contributor_id,
     contributorActive: row.contributor_active,
     twoFactorSatisfied,
+    totpEnabled: toDate(row.totp_enabled_at) !== null,
   };
   return actor;
 }

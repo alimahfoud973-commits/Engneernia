@@ -15,7 +15,7 @@ const ALL_STATUSES: readonly ProductStatus[] = [
   'APPROVED', 'PUBLISHED', 'UNPUBLISHED', 'ARCHIVED',
 ];
 
-const base = { kind: 'USER', displayName: 'x', locale: 'ar', sessionId: 's', twoFactorSatisfied: true } as const;
+const base = { kind: 'USER', displayName: 'x', locale: 'ar', sessionId: 's', twoFactorSatisfied: true, totpEnabled: false } as const;
 const owner: Actor = { ...base, userId: 'u1', role: 'OWNER', contributorId: null, contributorActive: false };
 const contributor: Actor = { ...base, userId: 'u2', role: 'CONTRIBUTOR', contributorId: 'c1', contributorActive: true };
 

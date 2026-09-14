@@ -126,6 +126,26 @@ export async function attemptLogin(request: LoginRequest): Promise<LoginOutcome>
 /** Second step for accounts with TOTP enrolled. */
 export async function verifyLoginTotp(input: {
   userId: string;
+  /**
+   * Resolved through a TRUSTED lookup, not an ordinary query.
+   *
+   * This read `(SELECT email FROM users WHERE id = …)` through `getSql()`,
+   * which carries no actor context: `app_actor_id()` is empty, `users_select`
+   * admits nothing, the subquery yielded NULL, and the trusted function was
+   * handed NULL — so this answered FALSE for every code ever submitted, and
+   * the second factor could not be passed at all.
+   *
+   * The caller cannot look the address up either: a session that has not yet
+   * answered its factor is announced to PostgreSQL as a guest, which is the
+   * point of that rule. So the lookup is by id, through a SECURITY DEFINER
+   * function, exactly as `attemptLogin` reaches the one by email. Migration
+   * 0044.
+   *
+   * Nothing caught this: no screen called it, and no test did either — the
+   * two-factor tests exercised `attemptLogin` and the secret's round-trip
+   * through encryption, and stopped short of the one function that decides
+   * whether a code is right.
+   */
   code: string;
   ip?: string | null;
   userAgent?: string | null;
@@ -134,9 +154,7 @@ export async function verifyLoginTotp(input: {
   await consumeRateLimit('login:totp', input.userId, LOGIN_RULES.perAccount);
 
   const rows = await getSql()<LookupRow[]>`
-    SELECT * FROM app_auth_lookup_user(
-      (SELECT email FROM users WHERE id = ${input.userId}::uuid)
-    )
+    SELECT * FROM app_auth_lookup_user_by_id(${input.userId}::uuid)
   `;
   const user = rows[0];
   if (!user?.totp_secret_encrypted) return false;
@@ -177,7 +195,7 @@ async function audit(
           sessionId: '',
           contributorId: null,
           contributorActive: false,
-          twoFactorSatisfied: false,
+          twoFactorSatisfied: false, totpEnabled: false,
         })
       : GUEST;
 

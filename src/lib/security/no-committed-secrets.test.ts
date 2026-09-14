@@ -117,6 +117,19 @@ describe('no credential is committed', () => {
         if (isAllowed(value)) continue;
         // A reference to another variable is not a value.
         if (/^\$|\$\{|process\.env|env\.|required\(|z\.|nonEmpty|base64Key|urlLike/.test(value)) continue;
+        /**
+         * Nor is a value COMPUTED at run time.
+         *
+         * `const TOTP_SECRET = base32Encode(randomBytes(20))` is the opposite
+         * of a committed secret: it is the fix for one. The rule reads a name
+         * and a value, and a call expression carries no secret into the
+         * repository — what it produces exists only while the process runs.
+         *
+         * Narrow on purpose: this skips `name(`, not anything containing a
+         * bracket. A quoted literal is still caught, which is what found the
+         * real defect this file exists for.
+         */
+        if (/^[A-Za-z_$][\w$]*\(/.test(value)) continue;
         offenders.push(`${file.path}: ${name}`);
       }
     }

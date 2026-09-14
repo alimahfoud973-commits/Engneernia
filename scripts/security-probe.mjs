@@ -28,13 +28,43 @@
  * ===========================================================================
  */
 import { chromium } from 'playwright';
+import { createHmac } from 'node:crypto';
 
 const BASE = process.argv[2] ?? process.env.PROBE_BASE_URL ?? 'http://localhost:3111';
 const CHROME = process.env.PROBE_CHROMIUM ?? undefined;
 
+/**
+ * TOTP, reimplemented here on purpose.
+ *
+ * The probe is a black-box check: it drives the site over HTTP and must not
+ * import the application's own code, or it would agree with a broken
+ * implementation. RFC 6238 is thirty lines; sharing the platform's would leave
+ * the owner's second factor untested rather than tested.
+ */
+function totpNow(base32Secret) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits = '';
+  for (const char of base32Secret.replace(/=+$/, '').toUpperCase()) {
+    const index = alphabet.indexOf(char);
+    if (index === -1) continue;
+    bits += index.toString(2).padStart(5, '0');
+  }
+  const bytes = Buffer.from((bits.match(/.{8}/g) ?? []).map((b) => Number.parseInt(b, 2)));
+
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 1000 / 30)));
+
+  const digest = createHmac('sha1', bytes).update(counter).digest();
+  const offset = digest[digest.length - 1] & 0x0f;
+  const binary = ((digest[offset] & 0x7f) << 24) | ((digest[offset + 1] & 0xff) << 16)
+    | ((digest[offset + 2] & 0xff) << 8) | (digest[offset + 3] & 0xff);
+  return String(binary % 1_000_000).padStart(6, '0');
+}
+
 const required = [
   'PROBE_OWNER_EMAIL',
   'PROBE_OWNER_PASSWORD',
+  'PROBE_OWNER_TOTP_SECRET',
   'PROBE_ENGINEER_EMAIL',
   'PROBE_ENGINEER_PASSWORD',
   'PROBE_FOREIGN_SETTLEMENT_ID',
@@ -77,13 +107,28 @@ const GUARDED_PAGES = [
 
 const browser = await chromium.launch(CHROME ? { executablePath: CHROME } : {});
 
-async function signIn(ctx, email, password) {
+async function signIn(ctx, email, password, totpSecret) {
   const page = await ctx.newPage();
   await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' });
   await page.fill('input[name="email"]', email);
   await page.fill('input[name="password"]', password);
   await page.click('button[type="submit"]');
   await page.waitForTimeout(2000);
+
+  /**
+   * The second factor, answered the way a person would.
+   *
+   * The owner's account is two-factor protected, so the password alone lands
+   * here and not on /account — which is the platform being correct. Driving
+   * the real challenge keeps the positive control honest: it proves the owner
+   * reaches the console THROUGH the factor, not around it.
+   */
+  if (totpSecret && page.url().includes('/login/two-factor')) {
+    await page.fill('input[name="code"]', totpNow(totpSecret));
+    await page.click('button[type="submit"]');
+    await page.waitForTimeout(2000);
+  }
+
   return { page, signedIn: page.url().includes('/account') };
 }
 
@@ -159,7 +204,7 @@ console.log('\n3. A SIGNED-IN ENGINEER REACHES ONLY THEIR OWN');
 console.log('\n4. THE OWNER DOES REACH THEM (POSITIVE CONTROL)');
 {
   const ctx = await browser.newContext({ locale: 'ar' });
-  const { page, signedIn } = await signIn(ctx, env.PROBE_OWNER_EMAIL, env.PROBE_OWNER_PASSWORD);
+  const { page, signedIn } = await signIn(ctx, env.PROBE_OWNER_EMAIL, env.PROBE_OWNER_PASSWORD, env.PROBE_OWNER_TOTP_SECRET);
   check(signedIn, 'the owner can sign in');
   const finance = await get(page, '/admin/finance');
   check(finance.landedOn.startsWith('/admin/finance'), 'the owner reaches the finance report');

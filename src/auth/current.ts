@@ -39,12 +39,24 @@ export async function requireActor(returnTo: string): Promise<Actor> {
   return actor;
 }
 
-/** For the admin console. A non-owner is sent away, not told it exists. */
+/**
+ * For the admin console. A non-owner is sent away, not told it exists.
+ *
+ * An owner with NO second factor enrolled is sent to enrol instead. The
+ * platform is operated by one account that approves payments, pays engineers
+ * and writes ledger corrections; a password is not enough for it, and the
+ * deployment checklist has always said so. What was missing was any way to
+ * comply — so this is a guided step, not a lockout: /account/security is
+ * reachable, and everything else about the account keeps working.
+ */
 export async function requireOwner(returnTo: string): Promise<Actor> {
   const actor = await requireActor(returnTo);
   if (!isOwner(actor)) {
     // Not a 403: confirming that an admin console exists is itself a hint.
     redirect('/');
+  }
+  if (actor.kind === 'USER' && !actor.totpEnabled) {
+    redirect(`/account/security?next=${encodeURIComponent(returnTo)}`);
   }
   return actor;
 }

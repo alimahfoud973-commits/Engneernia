@@ -1,11 +1,17 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
-import { attemptLogin } from './login';
+import { attemptLogin, verifyLoginTotp } from './login';
 import { hashPassword } from './password';
 import { encryptSecret } from './crypto';
 import { generateTotp, generateTotpSecret } from './totp';
 import { markTwoFactorVerified, resolveActor, revokeAllSessions } from './session';
+import {
+  beginTotpEnrolment, confirmTotpEnrolment, disableTotp, twoFactorState,
+} from './totp-enrolment';
+import { decryptSecret } from './crypto';
+import { RuleViolationError, ValidationError } from '@/lib/errors';
+import type { Actor } from '@/authz/actor';
 import { withActor, withRawActorContext } from '@/db/actor-context';
 import { TEST_OWNER_EMAIL, ensureTestOwner } from '@/db/testing/single-owner';
 import { closeDb, getSql } from '@/db';
@@ -194,6 +200,38 @@ describe('two-factor', () => {
     expect(seenAsOwnerAfter).toBe(true);
   });
 
+  it('ACCEPTS a correct code — the success path nobody ran', async () => {
+    /**
+     * `verifyLoginTotp` was never called by anything: there was no second-factor
+     * screen, and these tests stopped at `attemptLogin` and at the secret's
+     * round-trip through encryption. So the one function that decides whether a
+     * code is right went unexercised, and it answered FALSE for every code —
+     * its user lookup ran through `getSql()` with no actor context, which
+     * row-level security answers with nothing.
+     *
+     * A refusal test would have passed on that code. Only asking it to ACCEPT
+     * a code that is genuinely correct could tell the difference.
+     */
+    const accepted = await verifyLoginTotp({
+      userId: ids.twoFactor,
+      code: generateTotp(totpSecret),
+      ip: nextIp(),
+    });
+    expect(accepted).toBe(true);
+  });
+
+  it('refuses a wrong code, and a code for a different secret', async () => {
+    expect(await verifyLoginTotp({
+      userId: ids.twoFactor, code: '000000', ip: nextIp(),
+    })).toBe(false);
+
+    expect(await verifyLoginTotp({
+      userId: ids.twoFactor,
+      code: generateTotp(generateTotpSecret()),
+      ip: nextIp(),
+    })).toBe(false);
+  });
+
   it('the enrolled secret round-trips through encryption and verifies', async () => {
     const rows = await getSql()<Array<{ totp_secret_encrypted: string }>>`
       SELECT * FROM app_auth_lookup_user(${emails.twoFactor})
@@ -258,5 +296,134 @@ describe('sessions', () => {
       SELECT count(*)::int AS count FROM sessions WHERE token_hash = ${result.session.rawToken}
     `;
     expect(found[0]?.count).toBe(0);
+  });
+});
+
+/**
+ * ===========================================================================
+ * ENROLLING THE SECOND FACTOR
+ * ===========================================================================
+ * The platform could verify a factor and require one, and had no way to turn
+ * one on — nothing outside a test ever wrote `totp_secret_encrypted`, and
+ * `bootstrap:owner` does not. The launch checklist asked for an owner account
+ * with TOTP enabled and no such account could be created.
+ *
+ * These run LAST in the file and restore the fixture's original secret
+ * afterwards, because there is exactly one owner row since migration 0041 and
+ * the tests above are built on the state of its two TOTP columns.
+ * ===========================================================================
+ */
+describe('two-factor enrolment', () => {
+  const ownerActor = (): Actor => ({
+    kind: 'USER', userId: ids.twoFactor, role: 'OWNER', displayName: 'Owner 2FA',
+    locale: 'ar', sessionId: randomUUID(), contributorId: null,
+    contributorActive: false, twoFactorSatisfied: true, totpEnabled: false,
+  });
+
+  const clearFactor = () => withRawActorContext(OWNER_CTX, (tx) =>
+    tx.update(users)
+      .set({ totpSecretEncrypted: null, totpEnabledAt: null })
+      .where(eq(users.id, ids.twoFactor)));
+
+  beforeAll(clearFactor);
+
+  afterAll(async () => {
+    // Put the file's fixture back exactly as the tests above expect it.
+    await withRawActorContext(OWNER_CTX, (tx) =>
+      tx.update(users)
+        .set({ totpSecretEncrypted: encryptSecret(totpSecret), totpEnabledAt: new Date() })
+        .where(eq(users.id, ids.twoFactor)));
+    await getSql()`DELETE FROM rate_limit_buckets WHERE key LIKE 'totp:%'`;
+  });
+
+  it('refuses to start without the correct password', async () => {
+    // A stolen session must not be able to add a factor — or, worse, to
+    // replace one with a device the real owner does not hold.
+    await expect(
+      beginTotpEnrolment(ownerActor(), { password: 'not-the-password' }),
+    ).rejects.toThrow(ValidationError);
+  });
+
+  it('stores the secret UNARMED, so an abandoned enrolment changes nothing', async () => {
+    /**
+     * The property that makes this safe to start: a secret written before a
+     * code is proven does nothing at all. A closed tab, a lost phone, a
+     * mistyped code — the account is exactly as it was, rather than demanding
+     * a code from an app that was never finished being set up.
+     */
+    const offer = await beginTotpEnrolment(ownerActor(), { password: PASSWORD });
+    expect(offer.secret).toMatch(/^[A-Z2-7]+$/);
+    expect(offer.uri).toContain('otpauth://totp/');
+    expect(offer.uri).toContain(offer.secret.replace(/=+$/, ''));
+
+    expect(await twoFactorState(ownerActor())).toEqual({ enabled: false, enrolmentStarted: true });
+
+    // And the proof that it is unarmed: login still completes on the password.
+    const result = await attemptLogin({ email: emails.twoFactor, password: PASSWORD, ip: nextIp() });
+    expect(result.status).toBe('SUCCESS');
+  });
+
+  it('does not arm on a wrong code', async () => {
+    await expect(
+      confirmTotpEnrolment(ownerActor(), { code: '000000' }),
+    ).rejects.toThrow(ValidationError);
+    expect((await twoFactorState(ownerActor())).enabled).toBe(false);
+  });
+
+  it('arms on the right code, and login then demands one', async () => {
+    const offer = await beginTotpEnrolment(ownerActor(), { password: PASSWORD });
+    await confirmTotpEnrolment(ownerActor(), { code: generateTotp(offer.secret) });
+
+    expect(await twoFactorState(ownerActor())).toEqual({ enabled: true, enrolmentStarted: true });
+
+    // The consequence, asked of the login path rather than of a column.
+    const result = await attemptLogin({ email: emails.twoFactor, password: PASSWORD, ip: nextIp() });
+    expect(result.status).toBe('TWO_FACTOR_REQUIRED');
+
+    // And the session that login issues is not yet an owner to PostgreSQL.
+    if (result.status !== 'TWO_FACTOR_REQUIRED') return;
+    const pending = await resolveActor(result.session.rawToken);
+    expect(pending.kind === 'USER' && pending.totpEnabled).toBe(true);
+    expect(pending.kind === 'USER' && pending.twoFactorSatisfied).toBe(false);
+  });
+
+  it('refuses to start again while it is armed', async () => {
+    // Re-enrolling silently would let anyone holding the password swap the
+    // device out from under the owner. Disable first, which needs a live code.
+    await expect(
+      beginTotpEnrolment(ownerActor(), { password: PASSWORD }),
+    ).rejects.toThrow(RuleViolationError);
+  });
+
+  it('needs BOTH the password and a live code to remove', async () => {
+    const [row] = await withRawActorContext(OWNER_CTX, (tx) =>
+      tx.select({ secret: users.totpSecretEncrypted }).from(users).where(eq(users.id, ids.twoFactor)));
+    const live = generateTotp(decryptSecret(row!.secret!));
+
+    await expect(
+      disableTotp(ownerActor(), { password: 'wrong', code: live }),
+    ).rejects.toThrow(ValidationError);
+    await expect(
+      disableTotp(ownerActor(), { password: PASSWORD, code: '000000' }),
+    ).rejects.toThrow(ValidationError);
+
+    // Still armed after both failures.
+    expect((await twoFactorState(ownerActor())).enabled).toBe(true);
+
+    await disableTotp(ownerActor(), { password: PASSWORD, code: live });
+    expect(await twoFactorState(ownerActor())).toEqual({ enabled: false, enrolmentStarted: false });
+  });
+
+  it('is refused to anyone who is not the owner', async () => {
+    const customer: Actor = {
+      kind: 'USER', userId: ids.plain, role: 'CUSTOMER', displayName: 'Plain',
+      locale: 'ar', sessionId: randomUUID(), contributorId: null,
+      contributorActive: false, twoFactorSatisfied: true, totpEnabled: false,
+    };
+    // Stated here rather than left to row-level security refusing the write
+    // with no rows and a confusing error.
+    await expect(
+      beginTotpEnrolment(customer, { password: PASSWORD }),
+    ).rejects.toThrow(RuleViolationError);
   });
 });

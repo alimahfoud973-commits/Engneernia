@@ -30,7 +30,7 @@ const base = {
   displayName: 'Test',
   locale: 'ar',
   sessionId: 'session-1',
-  twoFactorSatisfied: true,
+  twoFactorSatisfied: true, totpEnabled: false,
 } as const;
 
 const owner: Actor = { ...base, userId: OWNER_USER, role: 'OWNER', contributorId: null, contributorActive: false };
@@ -303,7 +303,7 @@ describe('query scoping', () => {
 describe('a pending second factor', () => {
   const pendingOwner: Actor = {
     ...base,
-    twoFactorSatisfied: false,
+    twoFactorSatisfied: false, totpEnabled: false,
     userId: OWNER_USER,
     role: 'OWNER',
     contributorId: null,
@@ -311,7 +311,7 @@ describe('a pending second factor', () => {
   };
   const pendingContributor: Actor = {
     ...base,
-    twoFactorSatisfied: false,
+    twoFactorSatisfied: false, totpEnabled: false,
     userId: CONTRIB_A_USER,
     role: 'CONTRIBUTOR',
     contributorId: CONTRIB_A,

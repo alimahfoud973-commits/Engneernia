@@ -5,10 +5,17 @@ import { redirect } from 'next/navigation';
 import { safeReturnPath } from './return-path';
 import { z } from 'zod';
 import { attemptLogin, verifyLoginTotp } from './login';
+import {
+  beginTotpEnrolment, confirmTotpEnrolment, disableTotp, formatSecretForReading,
+  revokeOtherSessionsAfterEnrolment,
+} from './totp-enrolment';
+import { currentActor } from './current';
+import { toUserMessage } from '@/lib/action-errors';
+import { revalidatePath } from 'next/cache';
 import { registerCustomer, resendVerification } from './register';
 import {
-  SESSION_COOKIE_NAME, markTwoFactorVerified, resolveActor, revokeAllSessions,
-  sessionCookieOptions,
+  SESSION_COOKIE_NAME, createSession, markTwoFactorVerified, resolveActor,
+  revokeAllSessions, sessionCookieOptions,
 } from './session';
 import { RateLimitedError } from '@/lib/rate-limit';
 import { ValidationError } from '@/lib/errors';
@@ -353,4 +360,129 @@ export async function verifyTwoFactorAction(
 
   await markTwoFactorVerified(actor.sessionId);
   redirect(safeReturnPath(parsed.data.next));
+}
+
+/* ---------------------------------------------------------------------------
+ * The second factor, from the account's side (enrolment).
+ * ------------------------------------------------------------------------- */
+
+/** The shape both confirm and disable return: an error, or nothing. */
+export type TotpActionState = { error: string | null };
+
+export type EnrolState = {
+  error: string | null;
+  /** Present only on the response that created it. Never re-fetched. */
+  offer: { secret: string; readable: string; uri: string } | null;
+};
+
+const passwordOnly = z.object({ password: z.string().min(1).max(256) });
+const codeOnly = z.object({
+  code: z.string().trim().transform((v) => v.replace(/\s+/g, '')).pipe(z.string().regex(/^\d{6}$/)),
+});
+const passwordAndCode = passwordOnly.merge(codeOnly);
+
+/** Step one: mint a secret and show it once. */
+export async function beginTotpAction(
+  _previous: EnrolState,
+  formData: FormData,
+): Promise<EnrolState> {
+  const parsed = passwordOnly.safeParse({ password: formData.get('password') });
+  if (!parsed.success) return { error: 'أدخل كلمة المرور', offer: null };
+
+  const actor = await currentActor();
+
+  try {
+    const offer = await beginTotpEnrolment(actor, { password: parsed.data.password });
+    return {
+      error: null,
+      offer: {
+        secret: offer.secret,
+        readable: formatSecretForReading(offer.secret),
+        uri: offer.uri,
+      },
+    };
+  } catch (error) {
+    if (error instanceof RateLimitedError) {
+      return {
+        error: `محاولات كثيرة. أعد المحاولة بعد ${waitLabelAr(error.retryAfterSeconds)}.`,
+        offer: null,
+      };
+    }
+    return { error: toUserMessage(error, 'Starting TOTP enrolment failed'), offer: null };
+  }
+}
+
+/** Step two: prove the app has the same secret, then arm it. */
+export async function confirmTotpAction(
+  _previous: TotpActionState,
+  formData: FormData,
+): Promise<TotpActionState> {
+  const parsed = codeOnly.safeParse({ code: formData.get('code') });
+  if (!parsed.success) return { error: 'الرمز ستة أرقام.' };
+
+  const actor = await currentActor();
+
+  try {
+    await confirmTotpEnrolment(actor, { code: parsed.data.code });
+  } catch (error) {
+    if (error instanceof RateLimitedError) {
+      return { error: `محاولات كثيرة. أعد المحاولة بعد ${waitLabelAr(error.retryAfterSeconds)}.` };
+    }
+    return { error: toUserMessage(error, 'Confirming TOTP enrolment failed') };
+  }
+
+  /**
+   * Every other session goes, and this one stays.
+   *
+   * Turning the factor on is a statement that the password alone is no longer
+   * enough; sessions opened under the old rule are exactly what that statement
+   * is about. The current session is re-established immediately below so the
+   * person who just proved a code is not thrown back to the login screen for
+   * having secured their account.
+   */
+  await revokeOtherSessionsAfterEnrolment(actor);
+
+  const headerStore = await headers();
+  const session = await createSession({
+    userId: actor.kind === 'USER' ? actor.userId : '',
+    ip: headerStore.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null,
+    userAgent: headerStore.get('user-agent'),
+    twoFactorVerified: true,
+  });
+
+  const cookieStore = await cookies();
+  cookieStore.set(
+    SESSION_COOKIE_NAME,
+    session.rawToken,
+    sessionCookieOptions(serverEnv().NODE_ENV === 'production'),
+  );
+
+  revalidatePath('/account/security');
+  return { error: null };
+}
+
+/** Removing it needs the password AND a live code — see totp-enrolment.ts. */
+export async function disableTotpAction(
+  _previous: TotpActionState,
+  formData: FormData,
+): Promise<TotpActionState> {
+  const parsed = passwordAndCode.safeParse({
+    password: formData.get('password'),
+    code: formData.get('code'),
+  });
+  if (!parsed.success) return { error: 'أدخل كلمة المرور ورمزاً من ستة أرقام.' };
+
+  const actor = await currentActor();
+
+  try {
+    await disableTotp(actor, { password: parsed.data.password, code: parsed.data.code });
+  } catch (error) {
+    if (error instanceof RateLimitedError) {
+      return { error: `محاولات كثيرة. أعد المحاولة بعد ${waitLabelAr(error.retryAfterSeconds)}.` };
+    }
+    return { error: toUserMessage(error, 'Disabling TOTP failed') };
+  }
+
+  revalidatePath('/account/security');
+  return { error: null };
 }

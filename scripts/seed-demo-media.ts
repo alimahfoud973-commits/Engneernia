@@ -81,7 +81,7 @@ try {
     {
       kind: 'USER', userId: owner.id, role: 'OWNER', displayName: 'Owner',
       locale: 'ar', sessionId: 'seed', contributorId: null,
-      contributorActive: false, twoFactorSatisfied: true,
+      contributorActive: false, twoFactorSatisfied: true, totpEnabled: false,
     },
     {
       productId: product.id,
