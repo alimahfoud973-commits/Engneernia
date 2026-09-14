@@ -11,7 +11,6 @@ import {
 } from './session';
 import { RateLimitedError } from '@/lib/rate-limit';
 import { ValidationError } from '@/lib/errors';
-import { MIN_PASSWORD_LENGTH } from './password';
 import { serverEnv } from '@/lib/config/env';
 import { logger } from '@/lib/logger';
 import { waitLabelAr } from '@/lib/duration-ar';
@@ -207,8 +206,30 @@ export async function registerAction(
       return { error: error.message, done: false };
     }
     logger.error({ err: error }, 'Registration failed unexpectedly');
+    /**
+     * NO PASSWORD HINT HERE.
+     *
+     * This branch used to append "the password must be at least N characters".
+     * By the time it runs that cause has already been ruled out twice: the Zod
+     * schema accepted the field above, and `assertPasswordAcceptable` throws a
+     * ValidationError, which the branch before this one returns. So the hint
+     * named the one thing that could not be wrong.
+     *
+     * What actually reaches here is our side failing — and the likeliest one on
+     * launch day is outbound mail: a wrong SMTP password, a blocked port 465,
+     * a provider still holding new senders. The person then sees a message
+     * blaming their password, changes it, fails again, and leaves; and whoever
+     * reads the report goes looking at the password policy instead of at the
+     * mail server. Observed with an unreachable SMTP host, which is exactly the
+     * shape of a misconfigured launch.
+     *
+     * The account itself is not lost: `app_register_customer` reissues on a
+     * PENDING row, so a later attempt succeeds once the real fault is fixed.
+     * The text stays identical for every address — a message that varied would
+     * be the enumeration oracle this whole path avoids.
+     */
     return {
-      error: `تعذّر إتمام إنشاء الحساب. حاول مرة أخرى. (كلمة المرور ${MIN_PASSWORD_LENGTH} محرفاً على الأقل)`,
+      error: 'تعذّر إتمام إنشاء الحساب لخلل مؤقت من جانبنا، لا في بياناتك. أعد المحاولة بعد قليل.',
       done: false,
     };
   }

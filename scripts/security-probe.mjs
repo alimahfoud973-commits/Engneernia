@@ -286,9 +286,47 @@ console.log('\n7. REGISTRATION DOES NOT ANSWER "DOES THIS PERSON HAVE AN ACCOUNT
    */
   const controlAnswer = await register(`nobody-${Date.now()}-b@test.local`);
 
-  if (unknownAnswer !== controlAnswer) {
+  /**
+   * A SECOND WAY TO BE INCONCLUSIVE, found the same way as the first.
+   *
+   * If outbound mail is unreachable, every registration ends in the same
+   * server-side failure — so the three answers agree perfectly, the sameness
+   * check passes, and only the "is it the neutral message" check fails. That
+   * reads exactly like the neutral message having regressed, and it is not: it
+   * is the mail server. Seen on a run whose SMTP host did not resolve.
+   *
+   * Enumeration is genuinely untested in that state, so say so rather than
+   * report a failure whose cause is somewhere else entirely.
+   */
+  const mailDown = /تعذّر إتمام إنشاء الحساب/.test(unknownAnswer);
+
+  /**
+   * THE RATE LIMIT, DETECTED RATHER THAN INFERRED.
+   *
+   * Comparing the two unknown addresses was meant to catch this, and it does
+   * not catch all of it: the per-IP bucket is shared by all three attempts and
+   * the known address goes first, so a limit crossed after it leaves the two
+   * unknowns agreeing with each other and disagreeing with the known one —
+   * which is indistinguishable, from here, from the leak this section exists
+   * to find. It reported exactly that on a run whose buckets were not cleared.
+   *
+   * Reading the limiter's own message is order-independent and needs no
+   * inference. The equality control below stays, because it still catches the
+   * case where the limit lands between the second and third attempt.
+   */
+  const rateLimited = [knownAnswer, unknownAnswer, controlAnswer]
+    .some((answer) => /محاولات كثيرة/.test(answer));
+
+  if (rateLimited) {
+    console.log('  SKIP  registration is rate limited right now — enumeration check not conclusive');
+    console.log('        run `ALLOW_PROBE_SEED=yes npm run seed:probe` immediately before the probe.');
+  } else if (unknownAnswer !== controlAnswer) {
     console.log('  SKIP  registration is rate limited right now — enumeration check not conclusive');
     console.log('        clear the buckets and re-run: DELETE FROM rate_limit_buckets WHERE key LIKE \'register%\'');
+  } else if (mailDown) {
+    console.log('  SKIP  registration is failing on the server — enumeration check not conclusive');
+    console.log('        every address gets the same error, so this proves nothing either way.');
+    console.log('        check MAIL_TRANSPORT_URL: the host must resolve and accept the credentials.');
   } else {
     check(
       knownAnswer === unknownAnswer,
