@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { eq, sql } from 'drizzle-orm';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { withRawActorContext } from '@/db/actor-context';
 import { ensureTestOwner } from '@/db/testing/single-owner';
 import { closeDb } from '@/db';
-import { contributors, disciplines, downloadEvents, productContributors, productFiles, productPrices, products, users } from '@/db/schema';
+import { contributors, disciplines, downloadEvents, entitlements, productContributors, productFiles, productPrices, products, users } from '@/db/schema';
+import { getStorage } from './storage';
 import { ingestProductFile } from './ingest';
 import { deliverProductFile } from './deliver';
 import { changeProductStatus } from '@/catalog/products';
@@ -88,10 +89,16 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await withRawActorContext(OWNER_RAW, async (tx) => {
+    // Entitlements restrict the product delete (ON DELETE RESTRICT, so a
+    // purchase can never be erased by removing a product). Section 5 creates
+    // them, so teardown clears them first.
+    await tx.delete(entitlements)
+      .where(sql`product_id IN (${ids.pdfProduct}, ${ids.dwgProduct}, ${ids.zipProduct})`);
     await tx.delete(products).where(sql`id IN (${ids.pdfProduct}, ${ids.dwgProduct}, ${ids.zipProduct})`);
     await tx.delete(disciplines).where(eq(disciplines.id, ids.discipline));
     await tx.delete(contributors).where(eq(contributors.id, ids.contributor));
     await tx.delete(users).where(sql`id IN (${ids.engineerUser})`);
+    await tx.delete(users).where(sql`email LIKE ${`p3-buyer-${suffix}%`}`);
   });
   await closeDb();
 });
@@ -252,4 +259,115 @@ describe('4. every delivery of an original leaves a trail', () => {
     );
     expect(Number(after[0]?.c)).toBe(Number(before[0]?.c));
   });
+});
+
+/**
+ * ===========================================================================
+ * 5. THE BUYER'S COPY (OPEN-5)
+ * ===========================================================================
+ * `personalise.test.ts` proves the stamping function itself. This proves the
+ * DELIVERY PATH — which is where the feature can be lost without the function
+ * ever being wrong: by handing the buyer a signed URL to the master, by
+ * stamping the wrong people's downloads, or by writing the stamped bytes back
+ * over the original.
+ * ===========================================================================
+ */
+describe('5. the buyer gets a personalised copy, and storage keeps the original', () => {
+  const buyerId = randomUUID();
+  const buyer: Actor = {
+    ...base, userId: buyerId, role: 'CUSTOMER', displayName: 'محمد الأحمد',
+    contributorId: null, contributorActive: false,
+  };
+
+  let masterKey = '';
+  let masterBefore = '';
+
+  beforeAll(async () => {
+    await withRawActorContext(OWNER_RAW, async (tx) => {
+      await tx.insert(users).values({
+        id: buyerId, email: `p3-buyer-${suffix}@test.local`, passwordHash: 'x',
+        role: 'CUSTOMER', status: 'ACTIVE', displayName: 'محمد الأحمد',
+      });
+      // A grant with no order behind it — `order_item_id` is nullable, and the
+      // stamp has to cope with a missing reference rather than invent one.
+      await tx.insert(entitlements).values({
+        customerId: buyerId, productId: ids.pdfProduct,
+      });
+    });
+
+    const [file] = await withRawActorContext(OWNER_RAW, (tx) =>
+      tx.select().from(productFiles)
+        .where(eq(productFiles.productId, ids.pdfProduct)).limit(50),
+    ).then((rows) => rows.filter((r) => r.role === 'ORIGINAL'));
+
+    masterKey = file!.storageKey;
+    masterBefore = createHash('sha256')
+      .update(await getStorage().get('originals', masterKey)).digest('hex');
+  }, 30_000);
+
+  it('streams a stamped copy rather than redirecting to the master', async () => {
+    /**
+     * A redirect here would be the whole feature lost in one line: the signed
+     * URL points at the unstamped original in storage.
+     */
+    const result = await deliverProductFile(buyer, { productSlug: slugs.pdf, role: 'ORIGINAL' });
+    expect(result.grant.kind).toBe('stream');
+    if (result.grant.kind !== 'stream') return;
+
+    const stored = await getStorage().get('originals', masterKey);
+    expect(Buffer.from(result.grant.body).equals(Buffer.from(stored))).toBe(false);
+    expect(Buffer.from(result.grant.body.subarray(0, 5)).toString()).toBe('%PDF-');
+  });
+
+  it('leaves the stored original byte-for-byte as it was', async () => {
+    // The owner's condition on OPEN-5, asserted after a real download.
+    await deliverProductFile(buyer, { productSlug: slugs.pdf, role: 'ORIGINAL' });
+
+    const after = createHash('sha256')
+      .update(await getStorage().get('originals', masterKey)).digest('hex');
+    expect(after).toBe(masterBefore);
+  });
+
+  it('records the download as an entitlement, not as a contributor', async () => {
+    await deliverProductFile(buyer, { productSlug: slugs.pdf, role: 'ORIGINAL' });
+
+    const events = await withRawActorContext(OWNER_RAW, (tx) =>
+      tx.select().from(downloadEvents).orderBy(sql`created_at DESC`).limit(20),
+    );
+    const mine = events.filter((e) => e.userId === buyerId);
+    expect(mine.length).toBeGreaterThan(0);
+    expect(mine[0]?.grantReason).toBe('ENTITLEMENT');
+  });
+
+  it('does not stamp the owner or the engineer — neither is a buyer to trace', async () => {
+    /**
+     * Stamping their downloads would put a customer's name on a file the
+     * customer never received, and would make the mark useless as evidence of
+     * where a leak came from.
+     */
+    const stored = await getStorage().get('originals', masterKey);
+
+    for (const actor of [owner, engineer]) {
+      const result = await deliverProductFile(actor, { productSlug: slugs.pdf, role: 'ORIGINAL' });
+      if (result.grant.kind !== 'stream') continue; // an S3 redirect is also unstamped
+      expect(Buffer.from(result.grant.body).equals(Buffer.from(stored))).toBe(true);
+    }
+  });
+
+  it('delivers a non-PDF original unchanged, because nothing can mark it', async () => {
+    await withRawActorContext(OWNER_RAW, (tx) =>
+      tx.insert(entitlements).values({ customerId: buyerId, productId: ids.dwgProduct }),
+    );
+    await changeProductStatus(owner, { productId: ids.dwgProduct, to: 'PUBLISHED' });
+
+    const [dwg] = await withRawActorContext(OWNER_RAW, (tx) =>
+      tx.select().from(productFiles).where(eq(productFiles.productId, ids.dwgProduct)),
+    ).then((rows) => rows.filter((r) => r.role === 'ORIGINAL'));
+
+    const result = await deliverProductFile(buyer, { productSlug: slugs.dwg, role: 'ORIGINAL' });
+    if (result.grant.kind !== 'stream') return;
+
+    const stored = await getStorage().get('originals', dwg!.storageKey);
+    expect(Buffer.from(result.grant.body).equals(Buffer.from(stored))).toBe(true);
+  }, 30_000);
 });
