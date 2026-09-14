@@ -2,6 +2,7 @@ import 'server-only';
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import { commissionAgreements, productContributors, productPrices } from '@/db/schema';
 import type { Transaction } from '@/db/actor-context';
+import { extractTax, type TaxBreakdown } from '@/lib/money/tax';
 import { RuleViolationError } from '@/lib/errors';
 import { money, type Money } from '@/lib/money/money';
 import {
@@ -24,6 +25,15 @@ import { distributeEngineerAmount, type ContributorShare } from '@/lib/money/dis
 
 export interface ResolvedTerms {
   readonly snapshot: CommissionSnapshot;
+  /**
+   * What the customer pays: the price as displayed, tax included.
+   *
+   * Distinct from `snapshot.netPriceMinor`, which is list-minus-discount and
+   * has nothing to do with tax. The commission was computed on
+   * `tax.netMinor` — the amount left after the state's portion came out.
+   */
+  readonly grossMinor: bigint;
+  readonly tax: TaxBreakdown;
   readonly agreementId: string;
   readonly priceRowId: string;
   /** How the engineer's side divides between credited contributors. */
@@ -118,6 +128,13 @@ async function findAgreement(
 export async function resolveTermsForSale(
   tx: Transaction,
   productId: string,
+  /**
+   * The rate in force, read from settings by the caller (owner decision on
+   * OPEN-9). REQUIRED, not defaulted: a sale path that forgets tax would
+   * silently split the state's portion between the platform and the engineer,
+   * and a default of zero would let it compile.
+   */
+  taxRateBp: number,
 ): Promise<ResolvedTerms> {
   // 1. The price in force: the single open row.
   const [priceRow] = await tx
@@ -155,8 +172,22 @@ export async function resolveTermsForSale(
   const agreementRow = await findAgreement(tx, primary.contributorId, productId);
   const price: Money = money(priceRow.amountMinor, priceRow.currency);
 
+  /**
+   * TAX COMES OUT BEFORE ANYTHING IS DIVIDED (owner decision on OPEN-9).
+   *
+   * The displayed price includes the tax, so the pot to split is what remains
+   * after the state's portion is taken — not the price. Feeding the gross to
+   * the commission engine would hand the engineer a share of money that was
+   * never the platform's to give.
+   *
+   * At rate zero `netMinor === price`, so this is an exact identity and the
+   * split is bit-for-bit what it was before tax existed.
+   */
+  const tax = extractTax(price, taxRateBp);
+  const taxable = money(tax.netMinor, priceRow.currency);
+
   const snapshot = computeCommissionSnapshot({
-    listPrice: price,
+    listPrice: taxable,
     agreement: toAgreement(agreementRow),
   });
 
@@ -173,6 +204,8 @@ export async function resolveTermsForSale(
 
   return {
     snapshot,
+    grossMinor: priceRow.amountMinor,
+    tax,
     agreementId: agreementRow.id,
     priceRowId: priceRow.id,
     distribution: distribution.map((d) => ({

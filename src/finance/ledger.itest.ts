@@ -520,8 +520,13 @@ describe('6. what each party may read (§12, §49)', () => {
       // Internal consistency of every reported month: what customers paid is
       // what the two sides of the SALE split add up to. Adjustments are
       // excluded from both sides, which is why they are reported on their own.
-      expect(period.engineerShareMinor + period.platformRevenueMinor)
-        .toBe(period.grossSalesMinor);
+      // Tax is a third party to every sale (OPEN-9): what the customer paid
+      // is the engineer's share, plus the platform's, plus the state's. This
+      // assertion named only the first two until tax existed, and was the
+      // thing that caught the report not reporting it.
+      expect(
+        period.engineerShareMinor + period.platformRevenueMinor + period.taxCollectedMinor,
+      ).toBe(period.grossSalesMinor);
       expect(period.netPlatformMinor).toBe(
         period.platformRevenueMinor
         + period.platformAdjustmentsMinor

@@ -2,7 +2,7 @@ import 'server-only';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import {
   entitlements, orderEvents, orderItemContributors, orderItems, orders,
-  payments, productPrices, products,
+  payments, productPrices, products, users,
 } from '@/db/schema';
 import { withActor, type Transaction } from '@/db/actor-context';
 import { recordAudit } from '@/audit/log';
@@ -10,6 +10,8 @@ import { notifyContributor, notifyUser } from '@/notifications/notify';
 import { isOwner, type Actor } from '@/authz/actor';
 import { NotFoundError, RuleViolationError, UnauthenticatedError } from '@/lib/errors';
 import { resolveTermsForSale } from '@/finance/commission-resolver';
+import { readTaxPolicy } from '@/finance/tax-policy';
+import { issueInvoice } from '@/finance/invoices';
 import { postLedgerTransaction } from '@/ledger/post';
 import { saleEntry, type ContributorShare } from '@/ledger/entries';
 import { assertOrderTransition, orderActorOf, type OrderStatus } from './order-status';
@@ -296,15 +298,33 @@ export async function approvePayment(
     const sharesByContributor = new Map<string, bigint>();
     let platformTotal = 0n;
     let grossTotal = 0n;
+    /** Collected per line, because the rounding happens per line (OPEN-9). */
+    let taxTotal = 0n;
+    const invoiceLines: Array<{
+      title: string; grossMinor: bigint; taxMinor: bigint; netMinor: bigint;
+    }> = [];
+
+    /**
+     * ONE READ, BEFORE THE LOOP.
+     *
+     * Every line of one order is taxed at the same rate — the rate in force
+     * when the owner approved the payment. Reading it inside the loop would
+     * let a settings change land between two lines of the same invoice, and an
+     * invoice whose lines disagree about the rate is not a document anyone can
+     * defend.
+     */
+    const { tax: taxPolicy, invoice: invoiceIdentity } = await readTaxPolicy(tx);
 
     for (const item of items) {
       if (item.snapshotTakenAt !== null) {
         throw new RuleViolationError('هذا البند يحمل لقطة مالية مسبقاً', { itemId: item.id });
       }
 
-      const terms = await resolveTermsForSale(tx, item.productId);
+      const terms = await resolveTermsForSale(tx, item.productId, taxPolicy.rateBp);
 
-      if (terms.snapshot.netPriceMinor !== item.unitPriceMinor) {
+      // Compared on the GROSS: that is the number the customer saw and agreed
+      // to. The tax split happens inside that number and cannot move it.
+      if (terms.grossMinor !== item.unitPriceMinor) {
         // The price moved between placing the order and approving payment.
         // The customer agreed to the price they saw, so that price stands and
         // the owner is told rather than the difference being absorbed silently.
@@ -313,7 +333,7 @@ export async function approvePayment(
           {
             itemId: item.id,
             orderedPriceMinor: item.unitPriceMinor.toString(),
-            currentPriceMinor: terms.snapshot.netPriceMinor.toString(),
+            currentPriceMinor: terms.grossMinor.toString(),
           },
         );
       }
@@ -325,6 +345,9 @@ export async function approvePayment(
           engineerBp: terms.snapshot.engineerBp,
           engineerAmountMinor: terms.snapshot.engineerAmountMinor,
           platformAmountMinor: terms.snapshot.platformAmountMinor,
+          taxBp: terms.tax.rateBp,
+          taxMinor: terms.tax.taxMinor,
+          netMinor: terms.tax.netMinor,
           agreementId: terms.agreementId,
           priceRowId: terms.priceRowId,
           commissionClamped: terms.snapshot.clamped,
@@ -348,7 +371,16 @@ export async function approvePayment(
         );
       }
       platformTotal += terms.snapshot.platformAmountMinor;
+      taxTotal += terms.tax.taxMinor;
       grossTotal += item.unitPriceMinor;
+
+      invoiceLines.push({
+        // The title as it was at the moment of sale, not as it reads today.
+        title: item.titleSnapshot,
+        grossMinor: item.unitPriceMinor,
+        taxMinor: terms.tax.taxMinor,
+        netMinor: terms.tax.netMinor,
+      });
 
       // §41: ownership is a row, not a success message.
       await tx
@@ -425,11 +457,53 @@ export async function approvePayment(
         currency: order.currency,
         grossMinor: grossTotal,
         platformMinor: platformTotal,
+        taxMinor: taxTotal,
         contributorShares,
         occurredAt: new Date(),
         itemCount: items.length,
       }),
     );
+
+    /**
+     * THE DOCUMENT, IN THE SAME TRANSACTION AS THE MONEY (OPEN-9).
+     *
+     * A sale that booked but produced no invoice, or an invoice with no sale
+     * behind it, are both states this system must not be able to reach — so
+     * neither is written without the other. It also keeps the number series
+     * gapless: a rollback here returns the number instead of burning it.
+     */
+    const buyer = await tx
+      .select({ displayName: users.displayName, email: users.email })
+      .from(users)
+      .where(eq(users.id, order.customerId))
+      .limit(1);
+
+    const invoice = await issueInvoice(tx, {
+      orderId: order.id,
+      customerId: order.customerId,
+      buyerName: buyer[0]?.displayName ?? '',
+      buyerEmail: buyer[0]?.email ?? '',
+      currency: order.currency,
+      grossMinor: grossTotal,
+      taxMinor: taxTotal,
+      netMinor: grossTotal - taxTotal,
+      tax: taxPolicy,
+      identity: invoiceIdentity,
+      lines: invoiceLines,
+    });
+
+    await recordAudit(tx, actor, {
+      action: 'INVOICE_ISSUED',
+      entityType: 'invoice',
+      entityId: invoice.id,
+      after: {
+        invoiceNumber: invoice.invoiceNumber,
+        orderNumber: order.orderNumber,
+        grossMinor: grossTotal.toString(),
+        taxMinor: taxTotal.toString(),
+        taxBp: taxPolicy.rateBp,
+      },
+    });
 
     await tx
       .update(payments)

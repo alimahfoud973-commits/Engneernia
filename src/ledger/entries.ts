@@ -36,6 +36,12 @@ export interface SettledSale {
   readonly grossMinor: bigint;
   /** The platform's frozen share across all lines. */
   readonly platformMinor: bigint;
+  /**
+   * Tax contained in `grossMinor` (owner decision on OPEN-9). The displayed
+   * price includes it, so this is money that was never anybody's share.
+   * Zero when the owner has not set a rate, and a zero produces no line.
+   */
+  readonly taxMinor: bigint;
   /** Frozen per-contributor shares, already aggregated across lines. */
   readonly contributorShares: readonly ContributorShare[];
   readonly occurredAt: Date;
@@ -49,7 +55,17 @@ function sumShares(shares: readonly ContributorShare[]): bigint {
 function assertArithmetic(sale: SettledSale): void {
   const engineers = sumShares(sale.contributorShares);
 
-  if (engineers + sale.platformMinor !== sale.grossMinor) {
+  if (sale.taxMinor < 0n) {
+    throw new MoneyInvariantError('Tax on a sale cannot be negative', {
+      orderId: sale.orderId,
+      taxMinor: sale.taxMinor.toString(),
+    });
+  }
+
+  // Tax is part of what the customer paid and no part of what was divided, so
+  // it belongs on THIS side of the equation. At rate zero the term is 0 and
+  // the check is exactly the one that stood before tax existed.
+  if (engineers + sale.platformMinor + sale.taxMinor !== sale.grossMinor) {
     // Reaching here means the snapshot itself is inconsistent, which no
     // amount of careful posting can repair. Refuse rather than book it.
     throw new MoneyInvariantError(
@@ -58,6 +74,7 @@ function assertArithmetic(sale: SettledSale): void {
         orderId: sale.orderId,
         grossMinor: sale.grossMinor.toString(),
         platformMinor: sale.platformMinor.toString(),
+        taxMinor: sale.taxMinor.toString(),
         engineersMinor: engineers.toString(),
       },
     );
@@ -82,8 +99,14 @@ function assertArithmetic(sale: SettledSale): void {
  * A completed sale (specification §14).
  *
  *   DR  PLATFORM_CASH        the whole amount paid
+ *   CR  TAX_PAYABLE          the tax inside that amount, owed to the state
  *   CR  ENGINEER_PAYABLE     each contributor's frozen share
  *   CR  PLATFORM_REVENUE     the platform's frozen share
+ *
+ * The tax line comes first among the credits because that is the order the
+ * money is divided in: the state's portion is taken out before anything is
+ * anybody's share (owner decision on OPEN-9). At rate zero it is absent and
+ * the entry is identical to every sale booked before tax existed.
  *
  * A contributor whose frozen share is zero — a fixed-platform agreement that
  * consumed the whole price — produces no line, because a zero line carries no
@@ -99,6 +122,14 @@ export function saleEntry(sale: SettledSale): LedgerEntryInput {
       memo: `طلب ${sale.orderNumber}`,
     },
   ];
+
+  if (sale.taxMinor !== 0n) {
+    lines.push({
+      account: LEDGER_ACCOUNTS.TAX_PAYABLE,
+      amountMinor: -sale.taxMinor,
+      memo: `ضريبة — طلب ${sale.orderNumber}`,
+    });
+  }
 
   for (const share of sale.contributorShares) {
     if (share.amountMinor === 0n) continue;

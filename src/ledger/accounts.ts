@@ -24,6 +24,15 @@ export const LEDGER_ACCOUNTS = {
   CUSTOMER_REFUNDS_PAYABLE: 'CUSTOMER_REFUNDS_PAYABLE',
   /** Transfer costs. Who bears them is OPEN-2. */
   PAYMENT_FEES: 'PAYMENT_FEES',
+  /**
+   * Tax collected from customers and owed onward (owner decision on OPEN-9).
+   *
+   * A LIABILITY, deliberately — not income. This money is held on behalf of
+   * the state; booking it as revenue would overstate what the platform earned
+   * in every report the owner reads, and would put it in the pot that gets
+   * divided with the engineer.
+   */
+  TAX_PAYABLE: 'TAX_PAYABLE',
 } as const;
 
 export type LedgerAccount = (typeof LEDGER_ACCOUNTS)[keyof typeof LEDGER_ACCOUNTS];

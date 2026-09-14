@@ -66,4 +66,6 @@ export const auditActionEnum = pgEnum('audit_action', [
   // ordering rather than a tidier one.
   'USER_REGISTERED',
   'USER_EMAIL_VERIFIED',
+  // tax and legal invoicing — added by migration 0042 (OPEN-9)
+  'INVOICE_ISSUED',
 ]);

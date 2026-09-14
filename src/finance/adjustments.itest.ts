@@ -347,9 +347,12 @@ describe('4 & 5 — it reaches the balances', () => {
     );
 
     expect(current).toBeDefined();
-    // The identity that adjustments used to break.
-    expect(current!.engineerShareMinor + current!.platformRevenueMinor)
-      .toBe(current!.grossSalesMinor);
+    // The identity that adjustments used to break — and that tax broke next,
+    // in exactly the same way and for the same reason: a third party to the
+    // sale whose money was not named on either side of the equation (OPEN-9).
+    expect(
+      current!.engineerShareMinor + current!.platformRevenueMinor + current!.taxCollectedMinor,
+    ).toBe(current!.grossSalesMinor);
     expect(current!.platformAdjustmentsMinor).not.toBe(0n);
   });
 });

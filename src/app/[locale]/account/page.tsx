@@ -4,6 +4,7 @@ import { SiteHeader, SiteFooter } from '@/components/site-chrome';
 import { formatPrice } from '@/components/product-card';
 import { requireActor } from '@/auth/current';
 import { myPurchases } from '@/commerce/queries';
+import { myInvoices } from '@/finance/invoice-queries';
 import { activeContributorId } from '@/authz/actor';
 import { ORDER_STATUS_LABELS } from '@/lib/labels';
 import { logoutAction } from '@/auth/actions';
@@ -17,6 +18,7 @@ export default async function AccountPage({ params }: { params: Promise<{ locale
 
   const actor = await requireActor('/account');
   const { owned, orders } = await myPurchases(actor);
+  const invoices = await myInvoices(actor);
   const isContributor = activeContributorId(actor) !== null;
 
   return (
@@ -119,6 +121,52 @@ export default async function AccountPage({ params }: { params: Promise<{ locale
                         >
                           عرض
                         </Link>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
+        <section className="flex flex-col gap-4">
+          <h2 className="text-sm font-semibold text-[var(--color-ink-soft)]">فواتيري</h2>
+          {invoices.length === 0 ? (
+            <p className="text-sm text-[var(--color-ink-faint)]">لا توجد فواتير بعد.</p>
+          ) : (
+            <div className="overflow-x-auto rounded-[var(--radius-card)] border border-[var(--color-line)]">
+              <table className="w-full text-sm">
+                <thead className="bg-[var(--color-surface-muted)] text-xs text-[var(--color-ink-faint)]">
+                  <tr>
+                    <th className="p-3 text-start font-medium">رقم الفاتورة</th>
+                    <th className="p-3 text-start font-medium">التاريخ</th>
+                    <th className="p-3 text-start font-medium">الإجمالي</th>
+                    <th className="p-3 text-start font-medium"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {invoices.map((invoice) => (
+                    <tr key={invoice.id} className="border-t border-[var(--color-line)]">
+                      <td className="technical-term p-3">{invoice.invoiceNumber}</td>
+                      <td className="technical-term p-3">
+                        {invoice.issuedAt.toISOString().slice(0, 10)}
+                      </td>
+                      <td className="technical-term p-3">
+                        {formatPrice(String(invoice.grossMinor), invoice.currency, false)}
+                      </td>
+                      <td className="p-3">
+                        {/*
+                          A plain link, not a fetch: the PDF is generated on
+                          demand behind the same row-level policy that guards
+                          the record, so the browser can simply ask for it.
+                        */}
+                        <a
+                          href={`/api/invoices/${invoice.id}`}
+                          className="text-[var(--color-accent-ink)] hover:underline"
+                        >
+                          تنزيل PDF
+                        </a>
                       </td>
                     </tr>
                   ))}

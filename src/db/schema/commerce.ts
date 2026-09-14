@@ -216,6 +216,18 @@ export const orderItems = pgTable(
     engineerBp: integer('engineer_bp'),
     engineerAmountMinor: bigint('engineer_amount_minor', { mode: 'bigint' }),
     platformAmountMinor: bigint('platform_amount_minor', { mode: 'bigint' }),
+    /**
+     * The tax taken out of `unit_price_minor`, frozen with everything else
+     * (owner decision on OPEN-9). The displayed price INCLUDES the tax, so:
+     *   tax_minor + net_minor === unit_price_minor, always — a database CHECK
+     * says so, and the commission was computed on `net_minor`, never on the
+     * gross. `tax_bp` is the rate at the moment of sale: changing the setting
+     * next year cannot rewrite what was charged this year.
+     */
+    taxBp: integer('tax_bp'),
+    taxMinor: bigint('tax_minor', { mode: 'bigint' }),
+    netMinor: bigint('net_minor', { mode: 'bigint' }),
+
     agreementId: uuid('agreement_id'),
     priceRowId: uuid('price_row_id'),
     /** True when a fixed agreement exceeded the price and had to be capped. */
@@ -414,3 +426,67 @@ export const orderItemsRelations = relations(orderItems, ({ one, many }) => ({
   product: one(products, { fields: [orderItems.productId], references: [products.id] }),
   contributors: many(orderItemContributors),
 }));
+
+/**
+ * Invoices (owner decision on OPEN-9).
+ *
+ * APPEND-ONLY, enforced by triggers in migration 0042, for the same reason the
+ * ledger is: a document that can be edited after it was handed to a customer
+ * records nothing. A correction is a new invoice, never a rewrite of an old one.
+ *
+ * Every field that came from a setting is COPIED here at issue: the rate, the
+ * tax's legal name, the seller's details, the buyer's, and the lines as they
+ * read. Rendering this document in five years must not depend on a settings
+ * row somebody edited, or on a product that has since been renamed.
+ */
+export const invoices = pgTable(
+  'invoices',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** Gapless per year — see the note on numbering in migration 0042. */
+    invoiceNumber: text('invoice_number').notNull(),
+    /**
+     * Ids without foreign keys — the project's rule for append-only records.
+     * A permanent document must not be the reason an account can never be
+     * deleted; the reference is checked when the row is written instead.
+     */
+    orderId: uuid('order_id').notNull(),
+    customerId: uuid('customer_id').notNull(),
+
+    issuedAt: utcTimestamp('issued_at').notNull().defaultNow(),
+    currency: text('currency').notNull(),
+
+    grossMinor: bigint('gross_minor', { mode: 'bigint' }).notNull(),
+    taxMinor: bigint('tax_minor', { mode: 'bigint' }).notNull(),
+    netMinor: bigint('net_minor', { mode: 'bigint' }).notNull(),
+    taxBp: integer('tax_bp').notNull(),
+
+    taxNameAr: text('tax_name_ar').notNull(),
+    taxRegistration: text('tax_registration'),
+    sellerNameAr: text('seller_name_ar').notNull(),
+    sellerAddressAr: text('seller_address_ar'),
+    buyerName: text('buyer_name').notNull(),
+    buyerEmail: text('buyer_email').notNull(),
+
+    lines: jsonb('lines').notNull(),
+
+    createdAt: createdAt(),
+  },
+  (table) => [
+    uniqueIndex('invoices_number_unique').on(table.invoiceNumber),
+    uniqueIndex('invoices_order_unique').on(table.orderId),
+    index('invoices_customer_idx').on(table.customerId, table.issuedAt),
+    index('invoices_issued_idx').on(table.issuedAt),
+  ],
+);
+
+/**
+ * The per-year invoice counter. Never read or written through Drizzle — RLS
+ * denies it to the application outright and `app_next_invoice_number()` is the
+ * only way in. Declared so the schema stays the single description of the
+ * database.
+ */
+export const invoiceCounters = pgTable('invoice_counters', {
+  year: integer('year').primaryKey(),
+  nextNumber: integer('next_number').notNull().default(1),
+});

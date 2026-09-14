@@ -46,6 +46,19 @@ export interface PeriodRevenue {
   readonly platformAdjustmentsMinor: bigint;
   /** Commission handed back on approved refunds. */
   readonly revenueReversedMinor: bigint;
+  /**
+   * Tax collected from customers in this period (owner decision on OPEN-9).
+   *
+   * THE NUMBER THE OWNER FILES. It is not revenue and it is not anybody's
+   * share — it is money held for the state — so it is reported on its own
+   * line and excluded from `netPlatformMinor`.
+   *
+   * It is also what makes the report's own identity true again:
+   *   engineerShare + platformRevenue + taxCollected === grossSales
+   * Before tax existed the first two summed to the gross on their own, and a
+   * sale at any real rate quietly broke that. The integration suite caught it.
+   */
+  readonly taxCollectedMinor: bigint;
   /** Owed to engineers from this period's sales. */
   readonly engineerShareMinor: bigint;
   /** Clawed back from engineers by this period's refunds. */
@@ -88,6 +101,9 @@ export async function revenueByPeriod(
                WHERE account_code = ${LEDGER_ACCOUNTS.PLATFORM_REVENUE_REVERSED}
              ), 0)::text AS revenue_reversed,
              COALESCE(SUM(-amount_minor) FILTER (
+               WHERE account_code = ${LEDGER_ACCOUNTS.TAX_PAYABLE} AND kind = 'SALE'
+             ), 0)::text AS tax_collected,
+             COALESCE(SUM(-amount_minor) FILTER (
                WHERE account_code = ${LEDGER_ACCOUNTS.ENGINEER_PAYABLE} AND kind = 'SALE'
              ), 0)::text AS engineer_share,
              COALESCE(SUM(amount_minor) FILTER (
@@ -114,6 +130,7 @@ export async function revenueByPeriod(
         platformRevenueMinor,
         platformAdjustmentsMinor: BigInt(row.platform_adjustments as string),
         revenueReversedMinor,
+        taxCollectedMinor: BigInt(row.tax_collected as string),
         engineerShareMinor: BigInt(row.engineer_share as string),
         engineerReversedMinor: BigInt(row.engineer_reversed as string),
         refundsMinor: BigInt(row.refunds as string),
