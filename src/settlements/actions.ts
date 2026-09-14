@@ -5,8 +5,7 @@ import { z } from 'zod';
 import { requireOwner } from '@/auth/current';
 import { generateSettlements } from './generate';
 import { approveSettlement, cancelSettlement, markSettlementPaid } from './lifecycle';
-import { AppError } from '@/lib/errors';
-import { logger } from '@/lib/logger';
+import { toUserMessage } from '@/lib/action-errors';
 
 /**
  * Server actions for the settlement run.
@@ -19,9 +18,7 @@ import { logger } from '@/lib/logger';
 export type ActionState = { error: string | null; ok?: boolean; message?: string };
 
 function toMessage(error: unknown): string {
-  if (error instanceof AppError) return error.message;
-  logger.error({ err: error }, 'Settlement action failed');
-  return 'تعذّر إتمام العملية';
+  return toUserMessage(error, 'Settlement action failed');
 }
 
 const periodSchema = z.object({

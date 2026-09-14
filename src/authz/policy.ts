@@ -138,7 +138,7 @@ export function authorize(actor: Actor, action: Action, resource: ResourceRef = 
   if (actor.kind === 'GUEST') {
     throw new UnauthenticatedError();
   }
-  throw new NotFoundError('Resource not found', { action });
+  throw new NotFoundError(undefined, { action });
 }
 
 /**

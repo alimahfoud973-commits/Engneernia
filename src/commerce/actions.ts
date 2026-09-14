@@ -6,8 +6,7 @@ import { z } from 'zod';
 import { currentActor, requireActor, requireOwner } from '@/auth/current';
 import { createOrder, placeOrder, approvePayment, rejectPayment } from './orders';
 import { submitPaymentProof } from './proofs';
-import { AppError } from '@/lib/errors';
-import { logger } from '@/lib/logger';
+import { toUserMessage } from '@/lib/action-errors';
 
 /**
  * Server actions for the purchase flow.
@@ -20,9 +19,7 @@ import { logger } from '@/lib/logger';
 export type ActionState = { error: string | null; ok?: boolean };
 
 function toMessage(error: unknown): string {
-  if (error instanceof AppError) return error.message;
-  logger.error({ err: error }, 'Commerce action failed');
-  return 'تعذّر إتمام العملية';
+  return toUserMessage(error, 'Commerce action failed');
 }
 
 const buySchema = z.object({ slug: z.string().min(1).max(200) });

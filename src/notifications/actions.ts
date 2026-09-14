@@ -4,8 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { requireActor } from '@/auth/current';
 import { markNotificationsRead } from './queries';
-import { AppError } from '@/lib/errors';
-import { logger } from '@/lib/logger';
+import { toUserMessage } from '@/lib/action-errors';
 
 export type ActionState = { error: string | null; ok?: boolean };
 
@@ -36,9 +35,9 @@ export async function markReadAction(
       parsed.data.notificationId ? { notificationId: parsed.data.notificationId } : {},
     );
   } catch (error) {
-    if (error instanceof AppError) return { error: error.message };
-    logger.error({ err: error }, 'Marking notifications read failed');
-    return { error: 'تعذّر تحديث الإشعارات' };
+    return {
+      error: toUserMessage(error, 'Marking notifications read failed', 'تعذّر تحديث الإشعارات'),
+    };
   }
 
   revalidatePath('/account/notifications');

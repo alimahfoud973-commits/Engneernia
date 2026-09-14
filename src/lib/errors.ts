@@ -43,7 +43,11 @@ export class ValidationError extends AppError {
 
 /** Also used for "exists but you may not see it". See rule 2 above. */
 export class NotFoundError extends AppError {
-  constructor(message = 'Resource not found', details: Record<string, unknown> = {}) {
+  // The default is Arabic because it reaches people: the policy layer raises
+  // this for "not yours" as well as "not there", and a server action shows an
+  // AppError's message as written. "Resource not found" was English text in an
+  // Arabic interface, on the most common refusal in the platform.
+  constructor(message = 'العنصر غير موجود', details: Record<string, unknown> = {}) {
     super('NOT_FOUND', message, 404, details);
   }
 }

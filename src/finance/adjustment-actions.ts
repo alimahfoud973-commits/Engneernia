@@ -9,8 +9,8 @@ import {
   type AdjustmentInput, type AdjustmentPreview,
 } from './adjustments';
 import { parseMajorUnits } from '@/lib/money/money';
-import { AppError, ValidationError } from '@/lib/errors';
-import { logger } from '@/lib/logger';
+import { ValidationError } from '@/lib/errors';
+import { toUserMessage } from '@/lib/action-errors';
 
 /**
  * Server actions for financial adjustments (OPEN-21).
@@ -43,9 +43,7 @@ export type AdjustmentState = {
  */
 
 function toMessage(error: unknown): string {
-  if (error instanceof AppError) return error.message;
-  logger.error({ err: error }, 'Adjustment action failed');
-  return 'تعذّر إتمام العملية';
+  return toUserMessage(error, 'Adjustment action failed');
 }
 
 const REASONS = [
