@@ -72,6 +72,12 @@ services:
       STORAGE_SECRET_ACCESS_KEY: ${STORAGE_SECRET_ACCESS_KEY:?}
       STORAGE_BUCKET_ORIGINALS: ${STORAGE_BUCKET_ORIGINALS:-em-originals}
       STORAGE_BUCKET_DERIVATIVES: ${STORAGE_BUCKET_DERIVATIVES:-em-derivatives}
+      # Registration verification mail. Without these two the process does
+      # not start at all — which is the point: a customer cannot buy before
+      # confirming an address (OPEN-23), so a site that cannot send mail is a
+      # site that cannot sell. `log://` is refused here as well.
+      MAIL_TRANSPORT_URL: ${MAIL_TRANSPORT_URL:?set MAIL_TRANSPORT_URL (smtp:// or smtps://)}
+      MAIL_FROM: ${MAIL_FROM:?set MAIL_FROM, on a domain whose SPF and DKIM you control}
       PLATFORM_TIMEZONE: ${PLATFORM_TIMEZONE:-Asia/Damascus}
       PLATFORM_BASE_CURRENCY: ${PLATFORM_BASE_CURRENCY:-USD}
       MALWARE_SCANNER: ${MALWARE_SCANNER:-none}

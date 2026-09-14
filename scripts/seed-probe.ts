@@ -19,7 +19,7 @@
  * =============================================================================
  */
 import postgres from 'postgres';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { hash as argonHash } from '@node-rs/argon2';
 
 const url = process.env.DATABASE_MIGRATION_URL ?? process.env.DATABASE_SUPERUSER_URL;
@@ -41,7 +41,20 @@ if (process.env.NODE_ENV === 'production' || process.env.ALLOW_PROBE_SEED !== 'y
   process.exit(1);
 }
 
-const PASSWORD = 'probe-password-that-is-long-enough';
+/**
+ * GENERATED, NEVER COMMITTED.
+ *
+ * This was a fixed string in the file, and the repository's own secret scanner
+ * caught it (`src/lib/security/no-committed-secrets.test.ts`) — correctly. A
+ * constant password that creates ACTIVE accounts is a back door published to
+ * anyone who can read the repository, and a staging database outlives the
+ * afternoon it was seeded for.
+ *
+ * A fresh one per run costs nothing: the probe reads it from the environment
+ * this script prints, and the accounts left behind by an earlier run are no
+ * longer reachable with anything written down.
+ */
+const PASSWORD = `probe-${randomBytes(24).toString('base64url')}`;
 const sql = postgres(url, { max: 1 });
 const stamp = Date.now();
 
@@ -177,6 +190,7 @@ try {
   foreignInvoiceId = invoice?.id ?? '';
 
   console.log('\nProbe fixtures created. Export these, then run the probe:\n');
+  console.log('# The password is generated per run and is printed ONLY here.');
   console.log(`export PROBE_OWNER_EMAIL='${ownerEmail}'`);
   console.log(`export PROBE_OWNER_PASSWORD='${PASSWORD}'`);
   console.log(`export PROBE_ENGINEER_EMAIL='${engineerEmail}'`);

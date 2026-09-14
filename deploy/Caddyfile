@@ -1,0 +1,82 @@
+# =============================================================================
+# TLS TERMINATION FOR THE SINGLE-SERVER STACK
+# =============================================================================
+#   caddy run --config deploy/Caddyfile
+#
+# docker-compose.prod.yml deliberately serves plain HTTP on 127.0.0.1:3000 and
+# nothing else. This file is the other half: the public listener, the
+# certificate, and the three headers the application depends on receiving.
+#
+# HTTPS IS NOT OPTIONAL HERE. The session cookie is `Secure` and carries the
+# `__Host-` prefix, so over plain HTTP the browser discards it and NOBODY CAN
+# SIGN IN — not the customer, not the owner. That is the cookie doing its job.
+#
+# NOT VERIFIED IN THE DEVELOPMENT ENVIRONMENT: no Caddy binary is installed
+# there and the network policy blocks fetching one, so this file has never been
+# started. Its directives are ordinary and small on purpose. Run
+# `caddy validate --config deploy/Caddyfile` on the server before relying on it,
+# and `node scripts/csp-check.mjs https://enginora.com` immediately after, which
+# is what actually proves the proxy did not break the page.
+# =============================================================================
+
+# www redirects rather than serving. The session cookie carries the `__Host-`
+# prefix, which locks it to one exact hostname: a customer who signs in on
+# www.enginora.com and then follows a link to enginora.com is signed out, with
+# no error anywhere to explain it. One origin, and APP_URL must be that origin.
+www.enginora.com {
+	redir https://enginora.com{uri} permanent
+}
+
+enginora.com {
+	# Automatic Let's Encrypt certificate and renewal. Requires port 80 and 443
+	# reachable from the internet and the A record already pointing here —
+	# issuance fails otherwise, and it fails at startup rather than silently.
+	encode {
+		zstd
+		gzip
+		match {
+			header Content-Type text/*
+			header Content-Type application/json*
+			header Content-Type application/javascript*
+			header Content-Type image/svg+xml*
+			# Next does not compress the sitemap, and it is 819 KB.
+			header Content-Type application/xml*
+		}
+	}
+
+	reverse_proxy 127.0.0.1:3000 {
+		# X-Forwarded-For, -Proto and -Host are set by this directive already.
+		# Rate limiting and the download log read the first of them; behind a
+		# proxy that drops it, every visitor counts as one IP and a single
+		# brute-force attempt locks out the whole site.
+
+		# An original may be 1 GB (REVIT_BIM, ARCHIVE, PROJECT in
+		# src/media/file-types.ts). Uploads and downloads stream, so they are
+		# slow rather than large in memory — but a default read timeout will
+		# cut them. These are generous on purpose.
+		transport http {
+			response_header_timeout 120s
+			read_timeout 30m
+			write_timeout 30m
+		}
+	}
+
+	# DO NOT ADD A Content-Security-Policy HEADER HERE.
+	# The application emits one per response with a fresh nonce (src/proxy.ts).
+	# A policy set at this layer replaces it, the nonce goes with it, and every
+	# script on the page is refused — a site that renders and does nothing.
+	# The same applies to any header the application already sets; adding a
+	# second one here does not harden anything, it overwrites a considered value
+	# with an unconsidered one.
+
+	# No `request_body { max_size ... }`. A cautious-looking limit here rejects
+	# legitimate Revit models with a proxy-level error the application never
+	# sees, so the upload page cannot explain it. The ceiling is enforced in the
+	# application, per file type, where it can say which limit was exceeded.
+
+	log {
+		output file /var/log/caddy/enginora.log
+		# The site logs its own requests with actor context. This log exists for
+		# what never reaches the application: TLS failures and refused requests.
+	}
+}
