@@ -81,6 +81,12 @@ services:
       PLATFORM_TIMEZONE: ${PLATFORM_TIMEZONE:-Asia/Damascus}
       PLATFORM_BASE_CURRENCY: ${PLATFORM_BASE_CURRENCY:-USD}
       MALWARE_SCANNER: ${MALWARE_SCANNER:-none}
+      # Only read when MALWARE_SCANNER is `clamav`. Forwarded anyway so that
+      # turning the scanner on later is one value in .env.production, not an
+      # edit to this file — which is the whole point of declaring them.
+      CLAMAV_HOST: ${CLAMAV_HOST:-127.0.0.1}
+      CLAMAV_PORT: ${CLAMAV_PORT:-3310}
+      LOG_LEVEL: ${LOG_LEVEL:-}
       # Off until the site is really live, on the real domain. See docs/SEO.md.
       SEO_INDEXABLE: ${SEO_INDEXABLE:-false}
     ports:

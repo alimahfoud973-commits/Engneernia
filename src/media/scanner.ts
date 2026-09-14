@@ -1,5 +1,6 @@
 import 'server-only';
 import { connect } from 'node:net';
+import { serverEnv } from '@/lib/config/env';
 
 /**
  * ===========================================================================
@@ -136,12 +137,19 @@ let cached: ScannerPort | undefined;
 export function getScanner(): ScannerPort {
   if (cached) return cached;
 
-  const setting = (process.env.MALWARE_SCANNER ?? 'none').trim().toLowerCase();
+  /**
+   * Through `serverEnv()`, not `process.env`.
+   *
+   * The host and port were read raw here, which put two variables in the code
+   * and in nothing else — no template, no schema, no runbook. Connecting a
+   * scanner later would have meant reading this file to learn their names, and
+   * `Number('331O')` is NaN, so a typo produced a scanner that simply never
+   * answered rather than a process that refused to start.
+   */
+  const env = serverEnv();
 
-  if (setting === 'clamav') {
-    const host = process.env.CLAMAV_HOST ?? '127.0.0.1';
-    const port = Number(process.env.CLAMAV_PORT ?? 3310);
-    cached = new ClamAvScanner(host, port);
+  if (env.MALWARE_SCANNER === 'clamav') {
+    cached = new ClamAvScanner(env.CLAMAV_HOST, env.CLAMAV_PORT);
     return cached;
   }
 

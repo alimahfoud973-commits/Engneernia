@@ -81,6 +81,23 @@ const schema = z.object({
 
   // Explicit: running without a scanner must be a recorded decision.
   MALWARE_SCANNER: z.enum(['none', 'clamav']).default('none'),
+  /**
+   * Where the scanner listens, when MALWARE_SCANNER is `clamav`.
+   *
+   * Declared here even though the defaults are almost always right, because a
+   * variable that lives only inside `scanner.ts` cannot be found by whoever
+   * connects ClamAV later: it is in no template and in no runbook, and a typo
+   * in the port used to become `NaN` and a scanner that never answered.
+   *
+   * FUTURE DEPLOYMENT TASK — a scanner is a service to run, not code to write.
+   * Until one is running, MALWARE_SCANNER stays `none` and uploads are marked
+   * SKIPPED, which `isServable` refuses to serve in production.
+   */
+  CLAMAV_HOST: nonEmpty('CLAMAV_HOST').default('127.0.0.1'),
+  CLAMAV_PORT: z.coerce.number().int().min(1).max(65_535).default(3310),
+
+  /** Pino level. Declared so it is documented and rejected early if misspelt. */
+  LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal', 'silent']).optional(),
 
   /**
    * May search engines index this deployment?
