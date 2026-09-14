@@ -46,6 +46,24 @@ export interface StoragePort {
   grantDelivery(
     bucket: BucketName,
     key: string,
-    options: { readonly ttlSeconds: number; readonly downloadFilename?: string; readonly contentType?: string },
+    options: {
+      readonly ttlSeconds: number;
+      /**
+       * REQUIRED, and deliberately not defaulted.
+       *
+       * It was implicit — `S3Storage` always said `attachment` — and that is
+       * correct for an original and wrong for a preview. In development every
+       * grant is a stream and the route sets the header itself, so the mistake
+       * was invisible; in production every grant is a redirect and the signed
+       * URL carries the header instead, so every product page would have
+       * downloaded a file where it meant to show a preview.
+       *
+       * Having no default means a new caller has to decide, rather than
+       * inheriting whichever answer happened to be written first.
+       */
+      readonly disposition: 'attachment' | 'inline';
+      readonly downloadFilename?: string;
+      readonly contentType?: string;
+    },
   ): Promise<DeliveryGrant>;
 }

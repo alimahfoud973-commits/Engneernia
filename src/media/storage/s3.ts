@@ -117,15 +117,33 @@ export class S3Storage implements StoragePort {
   async grantDelivery(
     bucket: BucketName,
     key: string,
-    options: { ttlSeconds: number; downloadFilename?: string; contentType?: string },
+    options: {
+      ttlSeconds: number;
+      disposition: 'attachment' | 'inline';
+      downloadFilename?: string;
+      contentType?: string;
+    },
   ): Promise<DeliveryGrant> {
     assertSafeKey(key);
 
     const filename = options.downloadFilename ?? 'download';
+    /**
+     * `inline` carries no filename.
+     *
+     * A preview is rendered in an iframe and never saved, so a name serves no
+     * purpose there — and the preview row's name is derived from the original's
+     * (`preview-<original>`), which is not something to put in a URL that the
+     * product page hands to every visitor.
+     */
+    const disposition =
+      options.disposition === 'inline'
+        ? 'inline'
+        : `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`;
+
     const command = new GetObjectCommand({
       Bucket: this.bucketFor(bucket),
       Key: key,
-      ResponseContentDisposition: `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`,
+      ResponseContentDisposition: disposition,
       ...(options.contentType ? { ResponseContentType: options.contentType } : {}),
     });
 

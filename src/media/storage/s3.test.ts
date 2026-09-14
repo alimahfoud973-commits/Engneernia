@@ -181,6 +181,7 @@ describe('S3Storage', () => {
     it('mints a signed URL that expires and forces a download', async () => {
       const grant = await storage.grantDelivery('originals', ORIGINAL_KEY, {
         ttlSeconds: 120,
+        disposition: 'attachment',
         downloadFilename: 'حساب الأحمال.pdf',
         contentType: 'application/pdf',
       });
@@ -208,11 +209,35 @@ describe('S3Storage', () => {
       expect(disposition).toContain(encodeURIComponent('حساب الأحمال.pdf'));
     });
 
+    it('renders a preview inline, and names no file while doing it', async () => {
+      /**
+       * The defect this exists for: `attachment` was hard-coded for every role.
+       * In development every grant is a stream and the route writes the header
+       * itself, so nothing showed. In production every grant is a redirect and
+       * the signed URL carries the header — so the preview iframe on every
+       * product page would have offered a download instead of showing a page.
+       *
+       * The filename matters too: a preview row is named `preview-<original>`,
+       * and the product page hands this URL to every visitor.
+       */
+      const grant = await storage.grantDelivery('derivatives', PREVIEW_KEY, {
+        ttlSeconds: 600,
+        disposition: 'inline',
+        contentType: 'application/pdf',
+      });
+      if (grant.kind !== 'redirect') throw new Error('unreachable');
+
+      const disposition = new URL(grant.url).searchParams.get('response-content-disposition');
+      expect(disposition).toBe('inline');
+      expect(disposition).not.toContain('filename');
+    });
+
     it('produces a URL that actually fetches the object', async () => {
       // The strongest statement available without a real service: the URL the
       // download route hands the browser resolves to these bytes.
       const grant = await storage.grantDelivery('originals', ORIGINAL_KEY, {
         ttlSeconds: 60,
+        disposition: 'attachment',
       });
       if (grant.kind !== 'redirect') throw new Error('unreachable');
 

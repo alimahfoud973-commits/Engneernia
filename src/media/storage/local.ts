@@ -70,7 +70,10 @@ export class LocalFilesystemStorage implements StoragePort {
   async grantDelivery(
     bucket: BucketName,
     key: string,
-    options: { ttlSeconds: number; contentType?: string },
+    // `disposition` is accepted and unused: this adapter always streams, so the
+    // route sets the header on the response it builds. Kept in the signature so
+    // both adapters satisfy one port and a caller cannot forget to decide.
+    options: { ttlSeconds: number; disposition: 'attachment' | 'inline'; contentType?: string },
   ): Promise<DeliveryGrant> {
     return {
       kind: 'stream',

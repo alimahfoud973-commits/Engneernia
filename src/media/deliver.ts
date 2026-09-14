@@ -113,7 +113,7 @@ export async function deliverProductFile(
         }
       }
 
-      await tx.insert(downloadEvents).values({
+      const recorded = await tx.insert(downloadEvents).values({
         productFileId: row.id,
         // Denormalised so the record still identifies what was taken after the
         // product or its file row has been removed.
@@ -126,15 +126,40 @@ export async function deliverProductFile(
         ipHash: hashIp(request.ip),
         userAgent: request.userAgent ?? null,
         byteSize: row.byteSize,
-      });
+      }).returning({ id: downloadEvents.id });
+
+      /**
+       * A refused write returns no rows; it does not raise.
+       *
+       * The insert policy is `WITH CHECK (true)` today, so this cannot fire —
+       * which is exactly why it is worth writing now rather than after someone
+       * narrows that policy. Without it, a delivery whose record was silently
+       * dropped would still hand over the bytes, and the trail this route
+       * exists to keep would have a hole in it that nothing reports.
+       */
+      if (recorded.length === 0) {
+        throw new Error('download event was not recorded — refusing to release the file');
+      }
     }
 
     return row;
   });
 
+  const isOriginal = file.role === 'ORIGINAL';
+
   const grant = await getStorage().grantDelivery(file.bucket as BucketName, file.storageKey, {
-    ttlSeconds: file.role === 'ORIGINAL' ? ORIGINAL_URL_TTL_SECONDS : PREVIEW_URL_TTL_SECONDS,
-    downloadFilename: file.originalFilename,
+    ttlSeconds: isOriginal ? ORIGINAL_URL_TTL_SECONDS : PREVIEW_URL_TTL_SECONDS,
+    /**
+     * An original is saved; a preview is looked at.
+     *
+     * The product page renders the preview in an iframe, so `attachment` there
+     * makes the page offer a download instead of showing anything. That is what
+     * production would have done on every product page, because the S3 adapter
+     * said `attachment` for every role while development never reached the
+     * signed-URL path at all.
+     */
+    disposition: isOriginal ? 'attachment' : 'inline',
+    ...(isOriginal ? { downloadFilename: file.originalFilename } : {}),
     contentType: file.contentType,
   });
 
