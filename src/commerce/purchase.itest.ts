@@ -1,4 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { readdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { serverEnv } from '@/lib/config/env';
 import { eq, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
@@ -228,6 +231,40 @@ describe('2. the manual purchase, end to end (specification §24)', () => {
         body: Uint8Array.from([0x4d, 0x5a, 0x90, 0x00, ...new Array(64).fill(0)]),
       }),
     ).rejects.toThrow();
+  });
+
+  it('writes nothing to storage when the payment is not the caller\'s', async () => {
+    /**
+     * The bytes used to be scanned and written to the originals bucket BEFORE
+     * anything checked that the payment exists or belongs to the caller. The
+     * transaction then threw NotFound and the object stayed behind with no row
+     * pointing at it — so any account could fill the bucket, one 10 MB
+     * "receipt" at a time, against a payment id it made up. Nothing would
+     * report it: every call returns an error, which is what it looks like when
+     * the platform is working.
+     */
+    const root = serverEnv().STORAGE_ENDPOINT.replace(/^file:\/\//, '');
+    const count = () => {
+      let total = 0;
+      const walk = (dir: string) => {
+        for (const entry of readdirSync(dir, { withFileTypes: true })) {
+          if (entry.isDirectory()) walk(join(dir, entry.name));
+          else total += 1;
+        }
+      };
+      walk(join(root, 'originals'));
+      return total;
+    };
+
+    const before = count();
+
+    await expect(
+      submitPaymentProof(customer, {
+        paymentId: randomUUID(), filename: 'receipt.png', body: PNG_PROOF,
+      }),
+    ).rejects.toThrow(NotFoundError);
+
+    expect(count()).toBe(before);
   });
 
   it('refuses to let the customer approve their own payment', async () => {

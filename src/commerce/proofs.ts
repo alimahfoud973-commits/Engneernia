@@ -84,6 +84,37 @@ export async function submitPaymentProof(
     });
   }
 
+  /**
+   * WHO THIS PAYMENT BELONGS TO IS SETTLED BEFORE ANY BYTE IS STORED.
+   *
+   * The scan and the upload used to run first, and the ownership check only
+   * afterwards inside the transaction. A payment id that resolves to nothing —
+   * invented, or somebody else's, which row-level security makes
+   * indistinguishable — therefore left a scanned object in the originals
+   * bucket with no row pointing at it. Any account could fill the bucket that
+   * way, one receipt at a time, and every call would return an error, which is
+   * exactly what a working platform looks like.
+   *
+   * This read costs one round trip and resolves under the caller's own
+   * context, so it answers the ownership question with the same authority the
+   * write below would have.
+   */
+  await withActor(actor, async (tx) => {
+    const [payment] = await tx
+      .select({ id: payments.id, orderId: payments.orderId })
+      .from(payments)
+      .where(eq(payments.id, input.paymentId))
+      .limit(1);
+    if (!payment) throw new NotFoundError('الدفعة غير موجودة');
+
+    const [order] = await tx
+      .select({ id: orders.id })
+      .from(orders)
+      .where(eq(orders.id, payment.orderId))
+      .limit(1);
+    if (!order) throw new NotFoundError('الطلب غير موجود');
+  });
+
   // The extension is a claim; the bytes are the evidence.
   const contentType = detectProofType(input.body.subarray(0, 32), extension);
 
@@ -99,6 +130,11 @@ export async function submitPaymentProof(
   await getStorage().put('originals', storageKey, input.body, contentType);
 
   return withActor(actor, async (tx) => {
+    /**
+     * Checked again here, not instead of above: the pre-flight closes the
+     * storage hole, and this is still the check that governs the write. A
+     * payment revoked between the two reads must not produce a proof row.
+     */
     const [payment] = await tx
       .select()
       .from(payments)

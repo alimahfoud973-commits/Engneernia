@@ -9,8 +9,8 @@ import {
   paymentMethods, payments, productContributors, productPrices, products, settings, users,
 } from '@/db/schema';
 import { approvePayment, createOrder, placeOrder } from '@/commerce/orders';
-import type { Actor } from '@/authz/actor';
-import { invoiceDocument } from './invoice-queries';
+import { GUEST, type Actor } from '@/authz/actor';
+import { invoiceDocument, myInvoices } from './invoice-queries';
 import { renderInvoicePdf } from './invoice-pdf';
 
 /**
@@ -279,6 +279,42 @@ describe('the document the customer receives', () => {
     // Not 403 and not an error: nothing at all, decided by the row policy
     // rather than by a comparison in the route (§36).
     expect(await invoiceDocument(stranger, invoice!.id)).toBeNull();
+  });
+
+  /**
+   * `myInvoices` issues no WHERE clause at all — the scoping is entirely the
+   * row policy's. That is the architecture working as designed, and it is also
+   * the query where a policy mistake would be worst: it returns MANY rows, and
+   * every one carries a buyer's name and email address. `invoiceDocument`
+   * leaks one invoice to someone who guessed an id; this would hand over the
+   * customer list.
+   */
+  it('lists the buyer their own invoices', async () => {
+    const mine = await myInvoices(customer);
+    expect(mine.length).toBeGreaterThan(0);
+    expect(mine.every((row) => row.invoiceNumber.length > 0)).toBe(true);
+  });
+
+  it('lists a stranger nothing, with no filter in the query to help it', async () => {
+    const stranger: Actor = {
+      ...base, userId: randomUUID(), role: 'CUSTOMER',
+      contributorId: null, contributorActive: false,
+    };
+    expect(await myInvoices(stranger)).toEqual([]);
+  });
+
+  it('lists a contributor nothing — selling is not buying', async () => {
+    // The engineer whose product was sold has no claim on the buyer's invoice:
+    // it carries the customer's name and address, and §12 keeps those apart.
+    const engineer: Actor = {
+      ...base, userId: ids.engineerUser, role: 'CONTRIBUTOR',
+      contributorId: ids.contributor, contributorActive: true,
+    };
+    expect(await myInvoices(engineer)).toEqual([]);
+  });
+
+  it('lists a guest nothing, before any query runs', async () => {
+    expect(await myInvoices(GUEST)).toEqual([]);
   });
 });
 
