@@ -316,6 +316,27 @@
       "when": 1789420215167,
       "tag": "0044_lookup_user_by_id",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1789421353345,
+      "tag": "0045_product_ratings",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1789421607895,
+      "tag": "0046_product_rating_aggregate",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1789421636766,
+      "tag": "0047_ratings_flag",
+      "breakpoints": true
     }
   ]
 }

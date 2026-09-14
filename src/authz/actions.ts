@@ -25,6 +25,10 @@ export const ACTIONS = [
   'session.revokeAny',
 
   // Contributors
+  // OPEN-14. The capability is "may submit a rating at all"; WHICH product a
+  // person may rate is a resource question, answered by the entitlement in the
+  // row policy rather than by a role here.
+  'product.rate',
   'contributor.readPublic',
   'contributor.readPrivate',
   'contributor.create',

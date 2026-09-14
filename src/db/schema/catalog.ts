@@ -5,6 +5,7 @@ import {
   integer,
   pgEnum,
   pgTable,
+  smallint,
   text,
   uniqueIndex,
   uuid,
@@ -251,3 +252,38 @@ export const productContributorsRelations = relations(productContributors, ({ on
     references: [contributors.id],
   }),
 }));
+
+/**
+ * Product ratings (OPEN-14 — behind `catalog.ratingsEnabled`).
+ *
+ * A score and nothing else, by the owner's decision: a single owner cannot
+ * moderate written reviews daily, and an unmoderated one lands on an engineer's
+ * page before anybody reads it. A text column can be added later without
+ * touching a row that already exists.
+ *
+ * NOTHING PUBLIC READS THIS TABLE. Row-level security admits the owner and the
+ * author of the row, and the catalogue reaches an average through
+ * `app_product_rating` — because a visitor who can list a product's ratings can
+ * list who bought it, which OPEN-4 settled must never happen.
+ */
+export const productRatings = pgTable(
+  'product_ratings',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    productId: uuid('product_id')
+      .notNull()
+      .references(() => products.id, { onDelete: 'cascade' }),
+    customerId: uuid('customer_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** 1–5. Constrained in the database as well; see migration 0045. */
+    score: smallint('score').notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    // One voice per buyer per product: re-rating updates rather than stacks.
+    uniqueIndex('product_ratings_one_per_customer').on(table.productId, table.customerId),
+    index('product_ratings_product_idx').on(table.productId),
+  ],
+);

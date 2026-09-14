@@ -108,6 +108,20 @@ const EXPECTATIONS: Record<Action, Expectation> = {
   'session.revokeAny': { ...DENY_ALL_BUT_OWNER },
 
   // --- contributors ---
+  /**
+   * OPEN-14. A capability every signed-in person has and no guest has — the
+   * question of WHICH product is answered by the entitlement in the row
+   * policy, which is why this row is uniform across the signed-in columns.
+   */
+  'product.rate': {
+    owner: true,
+    customerOwn: true,
+    customerOther: true,
+    contributorOwn: true,
+    contributorOther: true,
+    inactiveOwn: true,
+    guest: false,
+  },
   'contributor.readPublic': {
     owner: true,
     customerOwn: false, // a non-public profile, acting as a plain user

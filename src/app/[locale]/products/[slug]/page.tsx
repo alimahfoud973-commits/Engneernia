@@ -5,6 +5,9 @@ import { SiteHeader, SiteFooter } from '@/components/site-chrome';
 import { FILE_TYPE_LABELS, LEVEL_LABELS, formatPrice } from '@/components/product-card';
 import { BuyButton } from '@/components/commerce-forms';
 import { productBySlug } from '@/catalog/public-queries';
+import { canRate, myRating, ratingCountLabel, ratingSummary } from '@/catalog/ratings';
+import { RatingForm } from '@/components/rating-form';
+import { currentActor } from '@/auth/current';
 import type { Metadata } from 'next';
 import { JsonLd } from '@/components/json-ld';
 import { metaDescription, productJsonLd } from '@/seo/structured-data';
@@ -72,6 +75,22 @@ export default async function ProductPage({
   const product = await productBySlug(slug);
   if (!product) notFound();
 
+  /**
+   * Ratings (OPEN-14), behind `catalog.ratingsEnabled`.
+   *
+   * `ratingSummary` answers null while the flag is off, so everything below is
+   * absent rather than hidden — and `myRating` returns null for anyone who has
+   * not rated, including every guest. The form appears only for someone who
+   * already has a score OR is about to be refused by the row policy anyway;
+   * showing it is a courtesy, never the control.
+   */
+  const actor = await currentActor();
+  const [rating, mine, mayRate] = await Promise.all([
+    ratingSummary(actor, product.id),
+    myRating(actor, product.id),
+    canRate(actor, product.id),
+  ]);
+
   const facts: ReadonlyArray<readonly [string, string]> = [
     ['التخصص', product.disciplineNameAr],
     ...(product.categoryNameAr ? ([['القسم', product.categoryNameAr]] as const) : []),
@@ -110,6 +129,24 @@ export default async function ProductPage({
               <section className="flex flex-col gap-2">
                 <h2 className="text-sm font-semibold text-[var(--color-ink-soft)]">الوصف</h2>
                 <p className="max-w-prose text-base leading-loose">{product.descriptionAr}</p>
+              </section>
+            ) : null}
+
+            {rating ? (
+              <section className="flex flex-col gap-2">
+                <h2 className="text-sm font-semibold text-[var(--color-ink-soft)]">التقييم</h2>
+                {rating.count === 0 ? (
+                  <p className="text-sm text-[var(--color-ink-faint)]">لا تقييمات بعد.</p>
+                ) : (
+                  <p className="text-sm">
+                    <span className="text-lg font-bold">{rating.average}</span>
+                    <span className="text-[var(--color-ink-soft)]"> من ٥ </span>
+                    <span className="text-[var(--color-ink-faint)]">
+                      ({ratingCountLabel(rating.count)})
+                    </span>
+                  </p>
+                )}
+                {mayRate ? <RatingForm productId={product.id} current={mine} /> : null}
               </section>
             ) : null}
 

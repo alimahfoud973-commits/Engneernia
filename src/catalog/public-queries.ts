@@ -40,6 +40,13 @@ export interface PublicAuthor {
 }
 
 export interface PublicProductDetail extends PublicProductCard {
+  /**
+   * Declared because the query already selects it and the ratings block needs
+   * it. Not a disclosure: the row it names is the public product the visitor
+   * is looking at, and nothing is reachable by holding the id that is not
+   * reachable by holding the slug.
+   */
+  readonly id: string;
   readonly descriptionAr: string | null;
   readonly language: string;
   readonly softwareTags: readonly string[];
@@ -342,6 +349,7 @@ export async function productBySlug(slug: string): Promise<PublicProductDetail |
 
     return {
       ...toCard(row),
+      id: row.id,
       descriptionAr: row.descriptionAr,
       language: row.language,
       softwareTags: row.softwareTags ?? [],

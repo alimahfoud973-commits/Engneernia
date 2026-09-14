@@ -23,6 +23,8 @@ export interface PublicSettings {
   readonly tagline: string;
   readonly previewPageCount: number;
   readonly showSalesCount: boolean;
+  /** OPEN-14: ratings are off until the owner turns this row on. */
+  readonly ratingsEnabled: boolean;
   readonly whatsapp: string;
 }
 
@@ -36,6 +38,7 @@ const DEFAULTS: PublicSettings = {
   tagline: 'المعرفة الهندسية والموارد الرقمية',
   previewPageCount: 5,
   showSalesCount: false,
+  ratingsEnabled: false,
   whatsapp: '',
 };
 
@@ -45,6 +48,7 @@ const KEYS = [
   'platform.tagline',
   'preview.pageCount',
   'catalog.showSalesCount',
+  'catalog.ratingsEnabled',
   'support.whatsapp',
 ] as const;
 
@@ -71,6 +75,7 @@ export const getPublicSettings = cache(async (): Promise<PublicSettings> => {
       tagline: str('platform.tagline', DEFAULTS.tagline),
       previewPageCount: num('preview.pageCount', DEFAULTS.previewPageCount),
       showSalesCount: bool('catalog.showSalesCount', DEFAULTS.showSalesCount),
+      ratingsEnabled: bool('catalog.ratingsEnabled', DEFAULTS.ratingsEnabled),
       whatsapp: str('support.whatsapp', DEFAULTS.whatsapp),
     };
   } catch {

@@ -96,6 +96,15 @@ export function can(actor: Actor, action: Action, resource: ResourceRef = {}): b
     case 'session.revokeAny':
       return false;
 
+    // --- ratings (OPEN-14) --------------------------------------------------
+    case 'product.rate':
+      /**
+       * Any signed-in person MAY rate; WHICH product they may rate is not a
+       * role question. The entitlement decides that, in the row policy from
+       * migration 0045, where it cannot be forgotten by a caller.
+       */
+      return actor.kind === 'USER';
+
     // --- contributors ------------------------------------------------------
     case 'contributor.readPublic':
       // Specification §31: active profiles are public. Inactive ones are
