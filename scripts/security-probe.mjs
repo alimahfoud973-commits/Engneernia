@@ -234,6 +234,139 @@ console.log('\n6. A SERVER ACTION REFUSES A FOREIGN ORIGIN');
   await ctx.close();
 }
 
+// ---------------------------------------------------------------------------
+// Added after the review was first written, because these surfaces did not
+// exist then. Self-registration (0039) and invoices (0042) are the two things
+// that changed what an anonymous stranger can touch.
+console.log('\n7. REGISTRATION DOES NOT ANSWER "DOES THIS PERSON HAVE AN ACCOUNT?"');
+{
+  /**
+   * THE POINT OF THIS SECTION.
+   *
+   * The registration form takes an email and says something back. If it says
+   * anything different for an address that already has an account, it becomes
+   * a way to ask, one address at a time, who buys from this platform — which
+   * is the §36 rule applied to a form instead of an API.
+   *
+   * A FRESH CONTEXT PER ATTEMPT, and the comparison is of <main> rather than
+   * the whole document. Written the other way first, it reported a difference
+   * that turned out to be the probe's own carry-over between two submissions
+   * in one page — a false alarm, which in a security check is as costly as a
+   * miss: it is the report nobody believes the second time.
+   */
+  const register = async (email) => {
+    const ctx = await browser.newContext({ locale: 'ar' });
+    const page = await ctx.newPage();
+    await page.goto(`${BASE}/register`, { waitUntil: 'domcontentloaded' });
+    await page.fill('#displayName', 'Probe');
+    await page.fill('#email', email);
+    await page.fill('#password', 'probe-password-that-is-long-enough');
+    await page.click('button[type="submit"]');
+    await page.waitForTimeout(2500);
+    const main = (await page.textContent('main')) ?? '';
+    await ctx.close();
+    return main.replace(/\s+/g, ' ').trim();
+  };
+
+  const knownAnswer = await register(env.PROBE_ENGINEER_EMAIL);
+  const unknownAnswer = await register(`nobody-${Date.now()}@test.local`);
+  /**
+   * A CONTROL, because this check has a second way to differ.
+   *
+   * Registration is rate limited per IP. Once the limit is crossed the form
+   * answers differently — and if one of the two attempts above straddles that
+   * boundary, they differ for a reason that has nothing to do with whether an
+   * address exists. That happened on the first run of this section and looked
+   * exactly like a leak.
+   *
+   * Two UNKNOWN addresses must always agree. When they do not, the
+   * environment is what is noisy, and the check says so instead of crying
+   * wolf. Run the probe against a database whose registration buckets are
+   * fresh — `DELETE FROM rate_limit_buckets WHERE key LIKE 'register%'`.
+   */
+  const controlAnswer = await register(`nobody-${Date.now()}-b@test.local`);
+
+  if (unknownAnswer !== controlAnswer) {
+    console.log('  SKIP  registration is rate limited right now — enumeration check not conclusive');
+    console.log('        clear the buckets and re-run: DELETE FROM rate_limit_buckets WHERE key LIKE \'register%\'');
+  } else {
+    check(
+      knownAnswer === unknownAnswer,
+      'a known address and an unknown one get the SAME answer',
+    );
+    check(
+      /تحقّق من بريدك/.test(knownAnswer),
+      'and that answer is the neutral one',
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n8. A VERIFICATION LINK CANNOT BE GUESSED OR REPLAYED BLINDLY');
+{
+  const ctx = await browser.newContext({ locale: 'ar' });
+  const page = await ctx.newPage();
+
+  for (const token of ['', 'not-a-token', 'a'.repeat(43), '../../etc/passwd']) {
+    const res = await page.goto(
+      `${BASE}/verify-email?token=${encodeURIComponent(token)}`,
+      { waitUntil: 'domcontentloaded' },
+    );
+    const body = (await page.textContent('body')) ?? '';
+    // It must answer, and it must not confirm anything.
+    check(
+      res.status() < 500 && !/تم تأكيد بريدك/.test(body),
+      `a forged token verifies nothing`,
+      JSON.stringify(token.slice(0, 16)),
+    );
+  }
+  await ctx.close();
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n9. AN INVOICE REACHES ONLY ITS BUYER');
+{
+  // Invoices carry the buyer's name, address and what they bought. They are
+  // the newest financial document on the platform and the probe had nothing
+  // about them.
+  const ctx = await browser.newContext({ locale: 'ar' });
+  const page = await ctx.newPage();
+
+  if (env.PROBE_FOREIGN_INVOICE_ID) {
+    const anonymous = await get(page, `/api/invoices/${env.PROBE_FOREIGN_INVOICE_ID}`);
+    check(anonymous.status === 404, "a visitor cannot fetch somebody's invoice", String(anonymous.status));
+
+    const malformed = await get(page, '/api/invoices/not-a-uuid');
+    check(malformed.status === 404, 'a malformed invoice id is 404, not a server error', String(malformed.status));
+
+    const { page: enginPage } = await signIn(ctx, env.PROBE_ENGINEER_EMAIL, env.PROBE_ENGINEER_PASSWORD);
+    const asEngineer = await get(enginPage, `/api/invoices/${env.PROBE_FOREIGN_INVOICE_ID}`);
+    // A contributor sells the product and still may not see who bought it.
+    check(asEngineer.status === 404, "an engineer cannot fetch a customer's invoice", String(asEngineer.status));
+  } else {
+    console.log('  SKIP  PROBE_FOREIGN_INVOICE_ID not set — invoice checks not run');
+  }
+  await ctx.close();
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n10. PRIVATE SETTINGS STAY PRIVATE');
+{
+  // `tax.*` and `invoice.*` are marked is_public = false. A page that leaked
+  // the platform's tax registration number would be disclosing a business
+  // identifier nobody asked it to publish.
+  const ctx = await browser.newContext({ locale: 'ar' });
+  const page = await ctx.newPage();
+  for (const path of ['/', '/search', '/register', '/login']) {
+    const res = await get(page, path);
+    check(
+      !/tax\.rateBp|tax\.registration|invoice\.sellerAddressAr/.test(res.body),
+      `${path} does not disclose a private setting key`,
+    );
+  }
+  await ctx.close();
+}
+
 await browser.close();
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED'}`);
 process.exit(failures ? 1 : 0);
