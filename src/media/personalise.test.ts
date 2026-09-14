@@ -42,6 +42,40 @@ describe('stampPdfForBuyer', () => {
     expect(Buffer.from(master).equals(Buffer.from(copy))).toBe(true);
   });
 
+  it('builds from a copy, so a view into a pooled buffer works the same', async () => {
+    /**
+     * The owner's condition, as a property of this code rather than of the PDF
+     * library's current behaviour: the parser is handed bytes this function
+     * owns, never the buffer the master was read into.
+     *
+     * A view is how that shows up in practice. Bytes arriving from storage are
+     * frequently a Node Buffer pointing into a shared pool at a non-zero
+     * offset — so anything that reached past the view, to `.buffer`, would
+     * read a neighbour's memory into a customer's file. Stamping a view must
+     * give exactly what stamping the standalone bytes gives.
+     */
+    const master = await makePdf([{ width: 595, height: 842 }]);
+
+    const pool = Buffer.alloc(master.byteLength + 128, 0xab);
+    pool.set(master, 64);
+    const view = pool.subarray(64, 64 + master.byteLength);
+    expect(view.byteOffset).toBe(64);
+
+    const fromView = await stampPdfForBuyer(view, STAMP);
+    const fromStandalone = await stampPdfForBuyer(master, STAMP);
+
+    // Same page count and same extractable content: the view was read as the
+    // document it is, and nothing around it came along.
+    const a = await PDFDocument.load(fromView);
+    expect(a.getPageCount()).toBe(1);
+    expect(mupdf.Document.openDocument(fromView, 'application/pdf')
+      .loadPage(0).toStructuredText('preserve-whitespace').asText())
+      .toContain('ORIGINAL CONTENT PAGE 1');
+
+    expect(Buffer.from(pool.subarray(0, 64)).every((b) => b === 0xab)).toBe(true);
+    expect(fromStandalone.byteLength).toBeGreaterThan(0);
+  });
+
   it('returns different bytes from the master', async () => {
     const master = await makePdf([{ width: 595, height: 842 }]);
     const stamped = await stampPdfForBuyer(master, STAMP);

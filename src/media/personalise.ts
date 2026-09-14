@@ -113,7 +113,7 @@ function renderStrip(text: string, widthPt: number): Uint8Array {
 }
 
 /**
- * Returns a personalised copy. The input is not modified.
+ * Returns a personalised copy, built from a COPY of the master's bytes.
  *
  * Throws rather than falling back to the plain master: an unstamped copy that
  * looks stamped is worse than a failed download, because the whole point is
@@ -126,9 +126,37 @@ export async function stampPdfForBuyer(
   master: Uint8Array,
   stamp: BuyerStamp,
 ): Promise<Uint8Array> {
+  /**
+   * THE PARSER IS NEVER GIVEN THE MASTER'S OWN BUFFER.
+   *
+   * `master` is what came back from storage. Copying it here means the PDF
+   * library, and everything it calls, operates on bytes that belong to this
+   * function and to nothing else — so no future version of it, and no library
+   * upgrade that decides to parse in place, can reach the buffer the original
+   * was read into.
+   *
+   * The copy costs one allocation on a path that is already rewriting the
+   * whole document, and it turns "we checked that it does not modify the
+   * input" into "it is not holding the input" — the first is a property of
+   * today's dependency, the second is a property of this code.
+   *
+   * BE HONEST ABOUT WHAT IT BUYS: no test fails if this line is removed, and
+   * none can, because `pdf-lib` does not parse in place. It is insurance
+   * against a future version or a replacement library that does, on the one
+   * path where the cost of being wrong is a corrupted master. Kept for that
+   * reason alone, and written down so nobody deletes it as dead weight or
+   * trusts it as a tested guarantee.
+   *
+   * `new Uint8Array(view)` copies the VIEW, not its pool — which matters: the
+   * bytes arriving here are routinely a Node Buffer pointing into a shared
+   * pool at a non-zero offset, and reaching past the view would read a
+   * neighbour's memory into a customer's file. That part IS tested.
+   */
+  const working = new Uint8Array(master);
+
   let document: PDFDocument;
   try {
-    document = await PDFDocument.load(master, { ignoreEncryption: false });
+    document = await PDFDocument.load(working, { ignoreEncryption: false });
   } catch {
     throw new RuleViolationError('تعذّر تخصيص نسخة من هذا الملف', {
       reason: 'the master PDF could not be opened for stamping',
