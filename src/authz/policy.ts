@@ -23,6 +23,15 @@ import type { Action, ResourceRef } from './actions';
  */
 
 export function can(actor: Actor, action: Action, resource: ResourceRef = {}): boolean {
+  /**
+   * An unfinished login decides nothing — before any rule is consulted.
+   *
+   * Written as its own exit rather than folded into each rule, because the
+   * property must hold for every action including the ones not written yet.
+   * `matrix.test.ts` enumerates it over the whole action list for that reason.
+   */
+  if (actor.kind === 'USER' && !actor.twoFactorSatisfied) return false;
+
   // The owner is the platform (specification §2.1). One explicit early exit,
   // rather than repeating an owner branch in twenty rules.
   if (isOwner(actor)) return true;

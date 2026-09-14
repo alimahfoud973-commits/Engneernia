@@ -5,8 +5,8 @@ import { attemptLogin } from './login';
 import { hashPassword } from './password';
 import { encryptSecret } from './crypto';
 import { generateTotp, generateTotpSecret } from './totp';
-import { resolveActor, revokeAllSessions } from './session';
-import { withRawActorContext } from '@/db/actor-context';
+import { markTwoFactorVerified, resolveActor, revokeAllSessions } from './session';
+import { withActor, withRawActorContext } from '@/db/actor-context';
 import { TEST_OWNER_EMAIL, ensureTestOwner } from '@/db/testing/single-owner';
 import { closeDb, getSql } from '@/db';
 import { users } from '@/db/schema';
@@ -153,8 +153,45 @@ describe('two-factor', () => {
     expect(actor.kind).toBe('USER');
     if (actor.kind !== 'USER') return;
     expect(actor.role).toBe('OWNER');
-    // The gate the route checks: an owner session that has not passed 2FA.
     expect(actor.twoFactorSatisfied).toBe(false);
+  });
+
+  it('is not an owner to PostgreSQL until the factor is answered', async () => {
+    /**
+     * THE CONSEQUENCE, not the flag.
+     *
+     * The test above asserts `twoFactorSatisfied` is false, and for a long time
+     * that was the whole story: nothing in the application read the flag, and
+     * `isOwner()` compared a role alone — so a session holding the password and
+     * no second factor passed `requireOwner` and reached /admin/finance,
+     * /admin/payments, /admin/settlements and /admin/adjustments.
+     *
+     * A flag nobody reads is not a control. This asks the layer underneath the
+     * application instead: `app_is_owner()` is what every owner-only row policy
+     * is built on, and it answers from the context `withActor` announces. If
+     * that says false while the login is unfinished, then no policy anywhere
+     * can hand this session an owner's row, whatever the code above it does.
+     */
+    const result = await attemptLogin({ email: emails.twoFactor, password: PASSWORD, ip: nextIp() });
+    if (result.status !== 'TWO_FACTOR_REQUIRED') throw new Error('expected a challenge');
+
+    const pending = await resolveActor(result.session.rawToken);
+    const seenAsOwnerWhilePending = await withActor(pending, async (tx) => {
+      const rows = await tx.execute(sql`SELECT app_is_owner() AS owner`);
+      return (rows as unknown as Array<{ owner: boolean }>)[0]?.owner;
+    });
+    expect(seenAsOwnerWhilePending).toBe(false);
+
+    // And the same session, once the challenge is answered, is the owner.
+    await markTwoFactorVerified(result.session.sessionId);
+    const completed = await resolveActor(result.session.rawToken);
+    expect(completed.kind === 'USER' && completed.twoFactorSatisfied).toBe(true);
+
+    const seenAsOwnerAfter = await withActor(completed, async (tx) => {
+      const rows = await tx.execute(sql`SELECT app_is_owner() AS owner`);
+      return (rows as unknown as Array<{ owner: boolean }>)[0]?.owner;
+    });
+    expect(seenAsOwnerAfter).toBe(true);
   });
 
   it('the enrolled secret round-trips through encryption and verifies', async () => {

@@ -280,3 +280,55 @@ describe('query scoping', () => {
     expect(contributorScopeFor(inactiveContributor)).toEqual({ kind: 'NONE' });
   });
 });
+
+/**
+ * ===========================================================================
+ * A SESSION THAT HAS NOT ANSWERED ITS SECOND FACTOR AUTHORISES NOTHING
+ * ===========================================================================
+ * The login flow issues the session cookie as soon as the password is
+ * accepted — the `TWO_FACTOR_REQUIRED` branch sets it exactly like `SUCCESS`
+ * does — and `twoFactorSatisfied` is false until the challenge is answered.
+ *
+ * Nothing read that flag. `isOwner()` compares a role and nothing else, so
+ * `requireOwner` admitted a session that had shown a password and no more,
+ * and a comment in login.ts said "the route gate refuses it" about a gate
+ * that was never written. Password alone reached /admin/finance,
+ * /admin/settlements, /admin/payments and /admin/adjustments — the account
+ * that approves payments, pays engineers and writes ledger corrections.
+ *
+ * Enumerated here rather than asserted once, because the property has to hold
+ * for EVERY action: a rule added later must not be able to forget it.
+ * ===========================================================================
+ */
+describe('a pending second factor', () => {
+  const pendingOwner: Actor = {
+    ...base,
+    twoFactorSatisfied: false,
+    userId: OWNER_USER,
+    role: 'OWNER',
+    contributorId: null,
+    contributorActive: false,
+  };
+  const pendingContributor: Actor = {
+    ...base,
+    twoFactorSatisfied: false,
+    userId: CONTRIB_A_USER,
+    role: 'CONTRIBUTOR',
+    contributorId: CONTRIB_A,
+    contributorActive: true,
+  };
+
+  it.each(ACTIONS)('refuses %s to an owner who has not completed it', (action) => {
+    expect(can(pendingOwner, action, { ownerUserId: OWNER_USER, contributorId: CONTRIB_A, isPublic: true }))
+      .toBe(false);
+  });
+
+  it.each(ACTIONS)('refuses %s to a contributor who has not completed it', (action) => {
+    expect(can(pendingContributor, action, { ownerUserId: CONTRIB_A_USER, contributorId: CONTRIB_A, isPublic: true }))
+      .toBe(false);
+  });
+
+  it('scopes such a session to nothing, so no query can widen it', () => {
+    expect(contributorScopeFor(pendingOwner)).toEqual({ kind: 'NONE' });
+  });
+});

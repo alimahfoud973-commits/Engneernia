@@ -19,11 +19,22 @@ export const currentActor = cache(async (): Promise<Actor> => {
   return resolveActor(store.get(SESSION_COOKIE_NAME)?.value);
 });
 
-/** For pages that require a signed-in user. Sends guests to sign in. */
+/**
+ * For pages that require a signed-in user. Sends guests to sign in — and sends
+ * a session that still owes its second factor to the challenge.
+ *
+ * Without that second branch the page would render for a half-authenticated
+ * session and then show nothing, because the policy layer and RLS both refuse
+ * it: the person would see an empty console with no way to understand why.
+ * The redirect turns a dead end into the step they actually have to take.
+ */
 export async function requireActor(returnTo: string): Promise<Actor> {
   const actor = await currentActor();
   if (actor.kind !== 'USER') {
     redirect(`/login?next=${encodeURIComponent(returnTo)}`);
+  }
+  if (!actor.twoFactorSatisfied) {
+    redirect(`/login/two-factor?next=${encodeURIComponent(returnTo)}`);
   }
   return actor;
 }

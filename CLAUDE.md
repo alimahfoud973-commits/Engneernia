@@ -148,6 +148,14 @@ docker compose up -d   # PostgreSQL + MinIO محلياً
 - ترويسة CSP تُبنى في `src/lib/security/csp.ts` وتُرسل من `src/proxy.ts` مع
   nonce لكل استجابة. **الـnonce يُوضع على الطلب أيضاً** وإلا لن يختم Next به
   نصوصه. لا تُضف `'unsafe-inline'` إلى `script-src` لتُصلح شيئاً.
+- **العامل الثاني جزء من كون الفاعل مالكاً، لا فحص منفصل.** الكعكة تُصدر عند
+  قبول **كلمة المرور**، لا عند اكتمال الدخول — فرع `TWO_FACTOR_REQUIRED` يضعها
+  كما يضعها `SUCCESS`. لذلك `isOwner()` يشترط `twoFactorSatisfied`، و
+  `actorDatabaseContext` يعلن الجلسة المعلّقة **ضيفاً** لـRLS، و`can()` يرفض
+  كل إجراء قبل استشارة أي قاعدة. لا تُضف بوابة تقرأ `actor.role` مباشرة.
+  (كان `twoFactorSatisfied` لا يقرأه أي كود إنتاجي، وكلمة المرور وحدها تصل إلى
+  `/admin/finance` و`/admin/adjustments`. يحرسه `matrix.test.ts` بتعداد كل
+  إجراء، و`login.itest.ts` بسؤال `app_is_owner()` في القاعدة نفسها.)
 - الوجهة بعد تسجيل الدخول تمرّ حصراً عبر `safeReturnPath` — `startsWith('/')`
   وحده يسمح بـ`//evil.com`.
 - كل معرّف في مسار يُفحص بـ`isUuid` عند حافة الطلب: معرّف مشوَّه يجب أن يكون

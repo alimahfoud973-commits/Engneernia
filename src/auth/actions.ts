@@ -4,10 +4,11 @@ import { cookies, headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { safeReturnPath } from './return-path';
 import { z } from 'zod';
-import { attemptLogin } from './login';
+import { attemptLogin, verifyLoginTotp } from './login';
 import { registerCustomer, resendVerification } from './register';
 import {
-  SESSION_COOKIE_NAME, resolveActor, revokeAllSessions, sessionCookieOptions,
+  SESSION_COOKIE_NAME, markTwoFactorVerified, resolveActor, revokeAllSessions,
+  sessionCookieOptions,
 } from './session';
 import { RateLimitedError } from '@/lib/rate-limit';
 import { ValidationError } from '@/lib/errors';
@@ -101,6 +102,19 @@ export async function loginAction(
   // Validated, never merely prefix-checked: `//evil.com` starts with a slash
   // and is a protocol-relative URL. See src/auth/return-path.ts.
   const destination = safeReturnPath(parsed.data.next);
+
+  /**
+   * A session that still owes a factor goes to the challenge, not onward.
+   *
+   * The cookie is set for both outcomes because the challenge needs to know
+   * which session is being completed — but the session authorises nothing
+   * until it is answered (`isFullyAuthenticated` in src/authz/actor.ts), so
+   * what the cookie carries here is an unfinished login, not access.
+   */
+  if (outcome.status === 'TWO_FACTOR_REQUIRED') {
+    redirect(`/login/two-factor?next=${encodeURIComponent(destination)}`);
+  }
+
   redirect(destination);
 }
 
@@ -264,4 +278,79 @@ export async function resendVerificationAction(
   }
 
   return { error: null, done: true };
+}
+
+
+const twoFactorSchema = z.object({
+  // Six digits. Trimmed and stripped of spaces because authenticator apps
+  // display the code as "123 456" and people copy what they see.
+  code: z.string().trim().transform((value) => value.replace(/\s+/g, '')).pipe(z.string().regex(/^\d{6}$/)),
+  next: z.string().optional(),
+});
+
+export type TwoFactorState = { error: string | null };
+
+/**
+ * The second step of signing in.
+ *
+ * WHICH SESSION IS BEING COMPLETED COMES FROM THE COOKIE, never from the form.
+ * A user id in a form field would let anyone who knows an id — or guesses one —
+ * attempt codes against another person's account, and the rate limiter would
+ * count those attempts against the victim, locking them out. The cookie
+ * already names exactly one session, and that session is the only thing this
+ * can finish.
+ */
+export async function verifyTwoFactorAction(
+  _previous: TwoFactorState,
+  formData: FormData,
+): Promise<TwoFactorState> {
+  const parsed = twoFactorSchema.safeParse({
+    code: formData.get('code'),
+    next: formData.get('next') ?? undefined,
+  });
+
+  if (!parsed.success) {
+    return { error: 'الرمز ستة أرقام.' };
+  }
+
+  const cookieStore = await cookies();
+  const actor = await resolveActor(cookieStore.get(SESSION_COOKIE_NAME)?.value);
+
+  // No session, or one that expired while the code was being typed.
+  if (actor.kind !== 'USER') {
+    redirect('/login');
+  }
+
+  // Already satisfied: nothing to do, and re-running the check would let a
+  // completed session be used to grind codes.
+  if (actor.twoFactorSatisfied) {
+    redirect(safeReturnPath(parsed.data.next));
+  }
+
+  const headerStore = await headers();
+
+  let ok: boolean;
+  try {
+    ok = await verifyLoginTotp({
+      userId: actor.userId,
+      code: parsed.data.code,
+      ip: headerStore.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null,
+      userAgent: headerStore.get('user-agent'),
+    });
+  } catch (error) {
+    if (error instanceof RateLimitedError) {
+      return { error: `محاولات كثيرة. أعد المحاولة بعد ${waitLabelAr(error.retryAfterSeconds)}.` };
+    }
+    logger.error({ err: error }, 'Two-factor verification failed unexpectedly');
+    return { error: 'تعذّر التحقق من الرمز' };
+  }
+
+  if (!ok) {
+    // One message for a wrong code and for a code that has already rolled
+    // over. Distinguishing them tells an attacker how close their clock is.
+    return { error: 'رمز غير صحيح. تحقّق من التطبيق وأعد المحاولة.' };
+  }
+
+  await markTwoFactorVerified(actor.sessionId);
+  redirect(safeReturnPath(parsed.data.next));
 }

@@ -32,7 +32,15 @@ export default async function LoginPage({
   const { next } = await searchParams;
 
   const actor = await currentActor();
-  if (actor.kind === 'USER') redirect(safeReturnPath(next));
+  if (actor.kind === 'USER') {
+    // A session mid-login belongs on the challenge, not back at the start and
+    // not at the destination it has not earned yet.
+    redirect(
+      actor.twoFactorSatisfied
+        ? safeReturnPath(next)
+        : `/login/two-factor?next=${encodeURIComponent(safeReturnPath(next))}`,
+    );
+  }
 
   return (
     <>

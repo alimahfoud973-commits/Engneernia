@@ -37,8 +37,34 @@ export function isAuthenticated(actor: Actor): actor is AuthenticatedActor {
   return actor.kind === 'USER';
 }
 
+/**
+ * Has this session finished authenticating?
+ *
+ * The cookie is issued when the PASSWORD is accepted, not when the login is
+ * complete: `TWO_FACTOR_REQUIRED` sets it exactly as `SUCCESS` does. So a
+ * session can be real, resolvable, and still owe a factor.
+ */
+export function isFullyAuthenticated(actor: Actor): actor is AuthenticatedActor {
+  return actor.kind === 'USER' && actor.twoFactorSatisfied;
+}
+
+/**
+ * THE SECOND FACTOR IS PART OF BEING THE OWNER, not a separate check.
+ *
+ * This compared a role and nothing else, and it is the gate in eight places —
+ * settlements, adjustments, product writes, the balance report, the admin
+ * console. A session holding the owner's password and no second factor passed
+ * every one of them: /admin/finance, /admin/payments, /admin/settlements,
+ * /admin/adjustments, all of it, on a password alone. A comment in login.ts
+ * claimed a route gate refused such a session; no such gate existed, and
+ * `twoFactorSatisfied` was read by no code outside tests.
+ *
+ * Folding the requirement in here closes all eight at once, and closes the
+ * ones nobody has written yet — which is the point: the next `if (isOwner…)`
+ * inherits it without its author having to know this happened.
+ */
 export function isOwner(actor: Actor): boolean {
-  return actor.kind === 'USER' && actor.role === 'OWNER';
+  return isFullyAuthenticated(actor) && actor.role === 'OWNER';
 }
 
 /**
@@ -47,7 +73,8 @@ export function isOwner(actor: Actor): boolean {
  * their account, but resolves to no contributor scope.
  */
 export function activeContributorId(actor: Actor): string | null {
-  if (actor.kind !== 'USER') return null;
+  // An unfinished login is not an identity to scope anything by.
+  if (!isFullyAuthenticated(actor)) return null;
   if (!actor.contributorActive) return null;
   return actor.contributorId;
 }
@@ -58,7 +85,17 @@ export function actorDatabaseContext(actor: Actor): {
   actorRole: string;
   contributorId: string;
 } {
-  if (actor.kind !== 'USER') {
+  /**
+   * A pending session is announced to PostgreSQL as a guest.
+   *
+   * The policy layer already refuses it, and this is the layer underneath: row
+   * policies read these three settings, so a half-authenticated session sees
+   * what an anonymous visitor sees even if some future code path skips the
+   * policy check entirely. Defence in depth means the layers do not share an
+   * assumption — so this one is written from `isFullyAuthenticated`, not from
+   * a caller having remembered.
+   */
+  if (!isFullyAuthenticated(actor)) {
     return { actorId: '', actorRole: 'GUEST', contributorId: '' };
   }
   return {
