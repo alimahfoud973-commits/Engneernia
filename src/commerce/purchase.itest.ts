@@ -363,12 +363,33 @@ describe('4. the owner controls availability without a deploy (§21)', () => {
 });
 
 describe('5. what each party can see (§12, §49)', () => {
-  it('the contributor sees their sale line', async () => {
-    const rows = await withRawActorContext(ctxOf(engineer), (tx) =>
+  it('the contributor sees their share, and not the order item it came from', async () => {
+    /**
+     * The engineer reads their own credited line, which is exactly their share.
+     *
+     * They do NOT read `order_items`. That row carries the platform's cut
+     * beside the net, and on a co-authored product those two numbers give away
+     * a colleague's pay by subtraction:
+     *
+     *     engineer pot      = net_minor - platform_amount_minor
+     *     colleagues' total = engineer pot - my own share
+     *
+     * The owner's decision in §6 is that an engineer never learns another
+     * engineer's share, and TD-29 records the same rule for the screen. This
+     * asserts it where it actually has to hold — hiding the column in the
+     * interface would not be protection (CLAUDE.md, rule 4). Migration 0043.
+     */
+    const mine = await withRawActorContext(ctxOf(engineer), (tx) =>
+      tx.select().from(orderItemContributors),
+    );
+    expect(mine).toHaveLength(1);
+    expect(mine[0]!.contributorId).toBe(ids.contributor);
+    expect(mine[0]!.amountMinor).toBe(1600n);
+
+    const items = await withRawActorContext(ctxOf(engineer), (tx) =>
       tx.select().from(orderItems).where(eq(orderItems.productId, ids.product)),
     );
-    expect(rows).toHaveLength(1);
-    expect(rows[0]!.engineerAmountMinor).toBe(1600n);
+    expect(items).toHaveLength(0);
   });
 
   it('the contributor CANNOT see the order, so never the buyer', async () => {
