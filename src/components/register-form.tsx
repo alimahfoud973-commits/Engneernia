@@ -86,8 +86,21 @@ export function RegisterForm() {
         Hidden from people, visible to form-filling bots. `aria-hidden` and
         `tabIndex={-1}` keep it away from screen readers and the tab order, so
         it is invisible to assistive technology rather than merely invisible.
+
+        `sr-only`, NOT `left-[-9999px]`.
+
+        The off-screen idiom is written for a left-to-right page, where content
+        pushed past the left edge is unreachable and the browser discards it.
+        This document is right-to-left, so leftward IS the scrolling direction:
+        the same rule made the register page 10,389 pixels wide on a phone,
+        scrollable sideways into ten thousand pixels of nothing. Every other
+        page measured exactly one viewport.
+
+        `sr-only` clips the field where it already sits, so it takes part in no
+        overflow at all. Guarded by scripts/layout-check.mjs, because no unit
+        test can see this — it is a property of a laid-out page in a browser.
       */}
-      <div aria-hidden className="absolute left-[-9999px] top-auto h-px w-px overflow-hidden">
+      <div aria-hidden className="sr-only">
         <label htmlFor="company">لا تملأ هذا الحقل</label>
         <input id="company" name="company" type="text" tabIndex={-1} autoComplete="off" />
       </div>
