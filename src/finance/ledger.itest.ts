@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { eq, sql } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { withRawActorContext } from '@/db/actor-context';
 import { ensureTestOwner } from '@/db/testing/single-owner';
@@ -82,10 +82,50 @@ const engineer: Actor = {
 
 const PRICE = 2000n; // $20.00 — 80/20 gives $16.00 / $4.00
 
+/**
+ * Every buyer this file has created, so the cleanup can find them all. The
+ * first is `ids.customer`, who stays fixed because the read-permission cases
+ * below name them.
+ */
+const buyers: string[] = [ids.customer];
+
+/**
+ * A FRESH BUYER PER SALE (owner decision on OPEN-11).
+ *
+ * A product is bought once. "Three sales" therefore means three customers —
+ * not one customer buying the same file three times, which is what this file
+ * used to simulate and what the platform now refuses outright.
+ *
+ * Every figure asserted below is unchanged by this: an engineer's share is
+ * computed from the price and the agreement, and neither knows who bought.
+ * That the totals still come out to the same numbers is itself worth having —
+ * it says the new rule constrained who may buy and moved no money.
+ */
+let salesMade = 0;
+
+async function nextBuyer(): Promise<Actor> {
+  salesMade += 1;
+  if (salesMade === 1) {
+    return customer;  // the first sale of the run belongs to the named customer
+  }
+  const id = randomUUID();
+  buyers.push(id);
+  await withRawActorContext(OWNER_RAW, (tx) =>
+    tx.insert(users).values({
+      id,
+      email: `p6-cust${salesMade}+${suffix}@test.local`,
+      passwordHash: 'x', role: 'CUSTOMER', status: 'ACTIVE',
+      displayName: `Customer ${salesMade}`, countryCode: 'SY',
+    }),
+  );
+  return { ...base, userId: id, role: 'CUSTOMER', contributorId: null, contributorActive: false };
+}
+
 /** Buy the product and have the owner approve it. Returns the order id. */
 async function completeAPurchase(productSlug = slug): Promise<string> {
-  const order = await createOrder(customer, { productSlugs: [productSlug] });
-  await placeOrder(customer, { orderId: order.orderId, paymentMethodId: ids.method });
+  const buyer = await nextBuyer();
+  const order = await createOrder(buyer, { productSlugs: [productSlug] });
+  await placeOrder(buyer, { orderId: order.orderId, paymentMethodId: ids.method });
 
   const payment = await withRawActorContext(OWNER_RAW, (tx) =>
     tx.select({ id: payments.id }).from(payments).where(eq(payments.orderId, order.orderId)),
@@ -147,8 +187,9 @@ afterAll(async () => {
      * this cleanup delete them. The books keep this run's entries forever,
      * which is the behaviour under test.
      */
-    await tx.delete(entitlements).where(eq(entitlements.customerId, ids.customer));
-    await tx.delete(orders).where(eq(orders.customerId, ids.customer));
+    const buyerIds = buyers;
+    await tx.delete(entitlements).where(inArray(entitlements.customerId, buyerIds));
+    await tx.delete(orders).where(inArray(orders.customerId, buyerIds));
     await tx.delete(paymentMethods).where(eq(paymentMethods.id, ids.method));
     await tx.delete(commissionAgreements).where(
       sql`contributor_id IN (${ids.contributor}, ${ids.otherContributor})`,
@@ -162,7 +203,7 @@ afterAll(async () => {
       sql`id IN (${ids.contributor}, ${ids.otherContributor})`,
     );
     await tx.delete(users).where(
-      sql`id IN (${ids.customer}, ${ids.engineerUser}, ${ids.otherEngineerUser})`,
+      inArray(users.id, [...buyerIds, ids.engineerUser, ids.otherEngineerUser]),
     );
   });
   await closeDb();

@@ -1,5 +1,5 @@
 import 'server-only';
-import { desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
 import {
   entitlements, orderItems, orders, paymentMethods, paymentProofs, payments, products,
 } from '@/db/schema';
@@ -72,6 +72,81 @@ export async function checkoutView(actor: Actor, orderId: string) {
         requiresProof: m.config.requiresProof,
       })),
     };
+  });
+}
+
+/**
+ * ===========================================================================
+ * WHAT THIS VISITOR CAN DO WITH THIS PRODUCT (owner decision on OPEN-11)
+ * ===========================================================================
+ * A product is bought once, so the product page has three states to show and
+ * not one: buy it, open it because you own it, or finish the order you already
+ * started for it.
+ *
+ * FOR RENDERING ONLY. Showing a disabled button is not what stops a second
+ * purchase — the trigger and the unique index in migration 0048 are, and
+ * `createOrder` refuses before either. This exists so that a buyer who already
+ * owns a file is offered the file instead of being offered a purchase that is
+ * going to be refused after they click it. (CLAUDE.md rule 4: hiding something
+ * in the interface is not protection. It is still courtesy.)
+ *
+ * A guest gets `BUYABLE`: they may not have an entitlement, and the page must
+ * not imply otherwise. The purchase itself sends them to log in.
+ * ===========================================================================
+ */
+export type PurchaseState =
+  | { readonly kind: 'BUYABLE' }
+  | { readonly kind: 'OWNED' }
+  | { readonly kind: 'IN_ORDER'; readonly orderId: string };
+
+export async function purchaseState(actor: Actor, productId: string): Promise<PurchaseState> {
+  if (actor.kind !== 'USER') return { kind: 'BUYABLE' };
+
+  const me = actor.userId;
+
+  return withActor(actor, async (tx) => {
+    /*
+     * BOTH QUERIES NAME THE CUSTOMER EXPLICITLY, and that is not belt and
+     * braces — it is the whole correctness of this function for one actor.
+     *
+     * The policies on `entitlements` and `orders` both read
+     * `app_is_owner() OR customer_id = app_actor_id()`. For every customer
+     * that narrows to their own rows and an unfiltered query would be right.
+     * For the PLATFORM OWNER it resolves everyone's, so the same query would
+     * report that the owner personally owns any product a single customer has
+     * ever bought — and offer them a download link for it on a public page.
+     *
+     * The first version of this function leaned on RLS and carried a comment
+     * saying so. Filtering here is the fix; RLS still decides what the query
+     * may see at all.
+     */
+    const [owned] = await tx
+      .select({ id: entitlements.id })
+      .from(entitlements)
+      .where(and(
+        eq(entitlements.productId, productId),
+        eq(entitlements.customerId, me),
+        isNull(entitlements.revokedAt),
+      ))
+      .limit(1);
+
+    if (owned) return { kind: 'OWNED' } as const;
+
+    const [pending] = await tx
+      .select({ orderId: orders.id })
+      .from(orderItems)
+      .innerJoin(orders, eq(orders.id, orderItems.orderId))
+      .where(and(
+        eq(orderItems.productId, productId),
+        eq(orders.customerId, me),
+        ne(orders.status, 'CANCELLED'),
+      ))
+      .orderBy(desc(orders.createdAt))
+      .limit(1);
+
+    if (pending) return { kind: 'IN_ORDER', orderId: pending.orderId } as const;
+
+    return { kind: 'BUYABLE' } as const;
   });
 }
 

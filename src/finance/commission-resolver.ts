@@ -3,8 +3,8 @@ import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import { commissionAgreements, productContributors, productPrices } from '@/db/schema';
 import type { Transaction } from '@/db/actor-context';
 import { extractTax, type TaxBreakdown } from '@/lib/money/tax';
-import { RuleViolationError } from '@/lib/errors';
-import { money, type Money } from '@/lib/money/money';
+import { MoneyInvariantError, RuleViolationError } from '@/lib/errors';
+import { money, subtract, type Money } from '@/lib/money/money';
 import {
   computeCommissionSnapshot, type CommissionAgreement, type CommissionSnapshot,
 } from '@/lib/money/commission';
@@ -26,13 +26,27 @@ import { distributeEngineerAmount, type ContributorShare } from '@/lib/money/dis
 export interface ResolvedTerms {
   readonly snapshot: CommissionSnapshot;
   /**
-   * What the customer pays: the price as displayed, tax included.
+   * The catalogue price as displayed, tax included and BEFORE any discount.
    *
-   * Distinct from `snapshot.netPriceMinor`, which is list-minus-discount and
-   * has nothing to do with tax. The commission was computed on
-   * `tax.netMinor` — the amount left after the state's portion came out.
+   * This is the number compared against the price frozen on the order line, so
+   * that a price moved between placing an order and approving its payment is
+   * caught. A discount must not look like a price change, which is why the
+   * comparison uses this and not `payableMinor`.
    */
   readonly grossMinor: bigint;
+  /** Taken off the displayed price. Zero unless the order line carries one. */
+  readonly discountMinor: bigint;
+  /**
+   * What the customer actually pays: `grossMinor - discountMinor`, tax still
+   * included. This — not the list price — is what the ledger books, what the
+   * invoice totals, and what `tax` was extracted from.
+   */
+  readonly payableMinor: bigint;
+  /**
+   * The tax inside `payableMinor`, never inside the list price. A discount
+   * reduces the tax with everything else: the state's portion is a share of
+   * what changed hands, not of a price nobody paid.
+   */
   readonly tax: TaxBreakdown;
   readonly agreementId: string;
   readonly priceRowId: string;
@@ -135,6 +149,16 @@ export async function resolveTermsForSale(
    * and a default of zero would let it compile.
    */
   taxRateBp: number,
+  /**
+   * What comes off this line's displayed price (owner decision on OPEN-1).
+   *
+   * REQUIRED for the same reason `taxRateBp` is. A default of zero would let a
+   * future sale path drop a discount the customer was granted and book the
+   * full price against it — the discount would vanish into the platform's
+   * share, and every figure downstream would still re-add correctly, so
+   * nothing would notice.
+   */
+  discountMinor: bigint,
 ): Promise<ResolvedTerms> {
   // 1. The price in force: the single open row.
   const [priceRow] = await tx
@@ -170,7 +194,35 @@ export async function resolveTermsForSale(
   )[0]!;
 
   const agreementRow = await findAgreement(tx, primary.contributorId, productId);
-  const price: Money = money(priceRow.amountMinor, priceRow.currency);
+  const currency = priceRow.currency;
+  const price: Money = money(priceRow.amountMinor, currency);
+
+  /**
+   * THE DISCOUNT COMES OFF FIRST, AND IT COMES OFF THE DISPLAYED PRICE
+   * (owner decision on OPEN-1).
+   *
+   * A discount is a customer-facing number: it is quoted against the price on
+   * the page, which includes tax. So the order is the order in which the money
+   * actually moves —
+   *
+   *     list price  →  less the discount  →  less the tax  →  split
+   *
+   * and every step below divides only what is still there after the one above.
+   */
+  if (discountMinor < 0n) {
+    throw new RuleViolationError('الخصم لا يمكن أن يكون سالباً', {
+      productId,
+      discountMinor: discountMinor.toString(),
+    });
+  }
+  if (discountMinor > priceRow.amountMinor) {
+    throw new RuleViolationError('الخصم يتجاوز سعر المنتج', {
+      productId,
+      discountMinor: discountMinor.toString(),
+      priceMinor: priceRow.amountMinor.toString(),
+    });
+  }
+  const payable = subtract(price, money(discountMinor, currency));
 
   /**
    * TAX COMES OUT BEFORE ANYTHING IS DIVIDED (owner decision on OPEN-9).
@@ -180,16 +232,66 @@ export async function resolveTermsForSale(
    * the commission engine would hand the engineer a share of money that was
    * never the platform's to give.
    *
-   * At rate zero `netMinor === price`, so this is an exact identity and the
+   * Extracted from what was PAID, not from the list price. Tax on money the
+   * customer never handed over would be remitted to the state out of the
+   * platform's own pocket.
+   *
+   * At rate zero `netMinor === payable`, so this is an exact identity and the
    * split is bit-for-bit what it was before tax existed.
    */
-  const tax = extractTax(price, taxRateBp);
-  const taxable = money(tax.netMinor, priceRow.currency);
+  const tax = extractTax(payable, taxRateBp);
+
+  /**
+   * THE SNAPSHOT RECORDS THE DISCOUNT IN THE ENGINE'S OWN TERMS.
+   *
+   * `listPriceMinor` on a snapshot has always meant the tax-free pot BEFORE a
+   * discount, so the discount handed to the engine has to be tax-free too —
+   * otherwise `listPrice - discount` would not equal the pot the split is
+   * actually computed on, and the snapshot would describe a sale that did not
+   * happen.
+   *
+   * Derived by SUBTRACTION rather than by taxing the discount separately. Two
+   * independent roundings of the same rate disagree on odd amounts, and the
+   * disagreement would land in the one place it must never land: the identity
+   * `engineer + platform + tax = paid`. Taking the difference of two extracted
+   * nets makes `netList - discountNet === tax.netMinor` true by construction,
+   * for every price, every discount and every rate.
+   */
+  const netList = extractTax(price, taxRateBp).netMinor;
+  const discountNet = netList - tax.netMinor;
+
+  /**
+   * Asserted rather than assumed. Extracting tax is monotonic — a smaller
+   * gross never leaves a larger net — so this cannot fire today. It is here
+   * because the day it does fire, the alternative is a negative discount
+   * silently inflating an engineer's share.
+   */
+  if (discountNet < 0n) {
+    throw new MoneyInvariantError('الخصم بعد الضريبة خرج سالباً', {
+      productId,
+      netListMinor: netList.toString(),
+      netPayableMinor: tax.netMinor.toString(),
+    });
+  }
 
   const snapshot = computeCommissionSnapshot({
-    listPrice: taxable,
+    listPrice: money(netList, currency),
+    discount: money(discountNet, currency),
     agreement: toAgreement(agreementRow),
   });
+
+  /**
+   * The seam between the two modules, checked at the seam. `computeCommission
+   * Snapshot` guarantees its own split re-adds to its own net; this is the
+   * separate claim that its net is the amount tax left behind.
+   */
+  if (snapshot.netPriceMinor !== tax.netMinor) {
+    throw new MoneyInvariantError('صافي العمولة لا يطابق الصافي بعد الضريبة', {
+      productId,
+      snapshotNetMinor: snapshot.netPriceMinor.toString(),
+      taxNetMinor: tax.netMinor.toString(),
+    });
+  }
 
   // 4. Divide the engineer's side, losing nothing to rounding.
   const shares: ContributorShare[] = credits.map((c) => ({
@@ -205,6 +307,8 @@ export async function resolveTermsForSale(
   return {
     snapshot,
     grossMinor: priceRow.amountMinor,
+    discountMinor,
+    payableMinor: payable.amountMinor,
     tax,
     agreementId: agreementRow.id,
     priceRowId: priceRow.id,

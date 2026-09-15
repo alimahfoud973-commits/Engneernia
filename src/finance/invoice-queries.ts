@@ -19,6 +19,8 @@ import type { InvoiceDocument, InvoiceLine } from './invoice-pdf';
 
 interface StoredLine {
   readonly title?: unknown;
+  readonly listMinor?: unknown;
+  readonly discountMinor?: unknown;
   readonly grossMinor?: unknown;
   readonly taxMinor?: unknown;
   readonly netMinor?: unknown;
@@ -40,9 +42,15 @@ function toLines(value: unknown): InvoiceLine[] {
         return 0n;
       }
     };
+    const grossMinor = big(line.grossMinor);
     return {
       title: typeof line.title === 'string' ? line.title : '—',
-      grossMinor: big(line.grossMinor),
+      // An invoice written before OPEN-1 carries neither field, and for it
+      // `list = gross` is not a fallback but the truth: no discount could
+      // exist when it was issued.
+      listMinor: line.listMinor === undefined ? grossMinor : big(line.listMinor),
+      discountMinor: big(line.discountMinor),
+      grossMinor,
       taxMinor: big(line.taxMinor),
       netMinor: big(line.netMinor),
     };
@@ -108,6 +116,8 @@ export async function invoiceDocument(
       invoiceNumber: row.invoiceNumber,
       issuedAt: toDate(row.issuedAt) ?? new Date(),
       currency: row.currency,
+      listMinor: row.listMinor,
+      discountMinor: row.discountMinor,
       grossMinor: row.grossMinor,
       taxMinor: row.taxMinor,
       netMinor: row.netMinor,

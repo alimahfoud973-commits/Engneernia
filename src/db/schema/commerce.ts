@@ -209,6 +209,20 @@ export const orderItems = pgTable(
     titleSnapshot: text('title_snapshot').notNull(),
 
     unitPriceMinor: bigint('unit_price_minor', { mode: 'bigint' }).notNull(),
+    /**
+     * What came off this line's price (owner decision on OPEN-1).
+     *
+     * ON THE LINE, NOT ONLY ON THE ORDER. An order-level discount would have
+     * to be apportioned across lines before any line could be split between a
+     * platform and an engineer, and an apportionment recomputed at settlement
+     * time is an apportionment that can disagree with the one that was booked.
+     * Frozen with the rest of the snapshot, so it cannot.
+     *
+     * Always zero today: nothing in the platform grants a discount yet (§43).
+     * The pipeline, the constraints and the tests carry a non-zero one so that
+     * whatever grants one later plugs in without touching money code.
+     */
+    discountMinor: bigint('discount_minor', { mode: 'bigint' }).notNull().default(sql`0`),
     currency: text('currency').notNull(),
 
     // --- the snapshot ---
@@ -379,7 +393,22 @@ export const entitlements = pgTable(
   (table) => [
     index('entitlements_customer_idx').on(table.customerId, table.grantedAt),
     index('entitlements_product_idx').on(table.productId),
-    uniqueIndex('entitlements_live_unique').on(table.customerId, table.productId, table.orderItemId),
+    /**
+     * ONE LIVE ENTITLEMENT PER PERSON PER PRODUCT (owner decision on OPEN-11).
+     *
+     * The index this replaces also named `order_item_id`, which made it no
+     * constraint at all for the case it looks like it covers: a second order
+     * carries a different order item, so a second row for the same person and
+     * the same product satisfied it — and `onConflictDoNothing` on the grant
+     * therefore never conflicted. A buyer could pay twice for one file.
+     *
+     * Declared here and created as a PARTIAL index in migration 0048, over
+     * `revoked_at IS NULL`: a revoked purchase must not block re-buying, and a
+     * plain unique index cannot express that.
+     */
+    uniqueIndex('entitlements_live_unique')
+      .on(table.customerId, table.productId)
+      .where(sql`${table.revokedAt} IS NULL`),
   ],
 );
 
@@ -456,6 +485,10 @@ export const invoices = pgTable(
     issuedAt: utcTimestamp('issued_at').notNull().defaultNow(),
     currency: text('currency').notNull(),
 
+    /** The catalogue total before any discount (OPEN-1). */
+    listMinor: bigint('list_minor', { mode: 'bigint' }).notNull(),
+    discountMinor: bigint('discount_minor', { mode: 'bigint' }).notNull().default(sql`0`),
+    /** What was actually charged: `list_minor - discount_minor`. */
     grossMinor: bigint('gross_minor', { mode: 'bigint' }).notNull(),
     taxMinor: bigint('tax_minor', { mode: 'bigint' }).notNull(),
     netMinor: bigint('net_minor', { mode: 'bigint' }).notNull(),

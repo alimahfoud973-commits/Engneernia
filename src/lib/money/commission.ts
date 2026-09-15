@@ -59,11 +59,29 @@ export interface CommissionSnapshot {
 export interface SplitInput {
   readonly listPrice: Money;
   /**
-   * Reserved for the future discount/coupon feature (spec §43). It is part of
-   * the snapshot shape from day one so enabling discounts later needs no
-   * migration of historical rows — but see OPEN-1: whether commission is
-   * computed before or after a discount is an undecided business rule, so a
-   * non-zero discount is rejected rather than guessed at.
+   * THE OWNER'S DECISION ON OPEN-1: COMMISSION IS COMPUTED AFTER THE DISCOUNT.
+   *
+   * The pot to divide is what the customer actually paid, so a discount is
+   * borne by both sides in the proportion their agreement already names. On an
+   * 80/20 agreement a price of 100 discounted by 20 pays the engineer 64 and
+   * the platform 16 — not 80 and 0, and not 60 and 20.
+   *
+   * That is the same shape as the decision on OPEN-9: tax comes out of the
+   * price before anything is anybody's share, and so does a discount. Both
+   * answer the same question — what is actually there to divide — and a
+   * platform that answered them differently would owe two explanations.
+   *
+   * THE CODE BELOW DID NOT CHANGE WHEN THIS WAS DECIDED. `netPrice` was always
+   * `listPrice - discount` and the split was always computed on it; the only
+   * thing standing in the path was the refusal this replaces. That is what
+   * "refuse rather than guess" buys: the undecided rule left no wrong
+   * behaviour behind to unpick.
+   *
+   * A DISCOUNT IS NEVER A NEGATIVE PRICE. It may equal the list price — the
+   * sale is then worth nothing and the ledger refuses to book it, which is the
+   * correct place for that refusal — but it may not exceed it. A discount
+   * larger than the price would produce a negative pot, and the only way to
+   * divide a negative pot is to invoice the engineer.
    */
   readonly discount?: Money | undefined;
   readonly agreement: CommissionAgreement;
@@ -91,11 +109,18 @@ export function computeCommissionSnapshot(input: SplitInput): CommissionSnapshot
       saleCurrency: currency,
     });
   }
-  if (discount.amountMinor !== 0n) {
-    throw new RuleViolationError(
-      'Discounts are not enabled: the commission base policy (OPEN-1) is undecided',
-      { discountMinor: discount.amountMinor.toString() },
-    );
+  if (discount.amountMinor < 0n) {
+    // A negative discount is a surcharge wearing a discount's name, and it
+    // would raise the pot above the price the customer agreed to.
+    throw new ValidationError('Discount cannot be negative', {
+      discountMinor: discount.amountMinor.toString(),
+    });
+  }
+  if (discount.amountMinor > listPrice.amountMinor) {
+    throw new ValidationError('Discount cannot exceed the price', {
+      discountMinor: discount.amountMinor.toString(),
+      listPriceMinor: listPrice.amountMinor.toString(),
+    });
   }
 
   const netPrice = subtract(listPrice, discount);

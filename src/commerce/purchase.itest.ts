@@ -476,17 +476,24 @@ describe('5. what each party can see (§12, §49)', () => {
 });
 
 describe('6. rejection lets the customer try again', () => {
+  /*
+   * A DIFFERENT BUYER, because of OPEN-11. `customer` completed a purchase of
+   * this product earlier in the file, and a product is bought once — so they
+   * can no longer place a second order for it, which is the behaviour proved
+   * two describes below. Rejection has nothing to do with who is buying, so
+   * the scenario moves to someone who does not own the file yet.
+   */
   it('moves a rejected order back into the customer’s hands', async () => {
-    const order = await createOrder(customer, { productSlugs: [slug], buyerCountry: 'SY' });
-    await placeOrder(customer, { orderId: order.orderId, paymentMethodId: ids.bankMethod });
+    const order = await createOrder(stranger, { productSlugs: [slug], buyerCountry: 'SY' });
+    await placeOrder(stranger, { orderId: order.orderId, paymentMethodId: ids.bankMethod });
 
-    const [payment] = await withRawActorContext(ctxOf(customer), (tx) =>
+    const [payment] = await withRawActorContext(ctxOf(stranger), (tx) =>
       tx.select().from(payments).where(eq(payments.orderId, order.orderId)),
     );
 
     await rejectPayment(owner, { paymentId: payment!.id, reason: 'المبلغ غير مطابق' });
 
-    const [after] = await withRawActorContext(ctxOf(customer), (tx) =>
+    const [after] = await withRawActorContext(ctxOf(stranger), (tx) =>
       tx.select().from(orders).where(eq(orders.id, order.orderId)),
     );
     expect(after!.status).toBe('PAYMENT_ISSUE');

@@ -40,6 +40,9 @@ const LINE = '#d8dde3';
 
 export interface InvoiceLine {
   readonly title: string;
+  /** The catalogue price before any discount (OPEN-1). */
+  readonly listMinor: bigint;
+  readonly discountMinor: bigint;
   readonly grossMinor: bigint;
   readonly taxMinor: bigint;
   readonly netMinor: bigint;
@@ -49,6 +52,9 @@ export interface InvoiceDocument {
   readonly invoiceNumber: string;
   readonly issuedAt: Date;
   readonly currency: string;
+  /** Sum of the lines' list prices, before any discount (OPEN-1). */
+  readonly listMinor: bigint;
+  readonly discountMinor: bigint;
   readonly grossMinor: bigint;
   readonly taxMinor: bigint;
   readonly netMinor: bigint;
@@ -187,6 +193,20 @@ export async function renderInvoicePdf(doc: InvoiceDocument): Promise<Uint8Array
     ctx.font = `18px ${ARABIC_FONT}`;
     latin(ctx, money(line.grossMinor, doc.currency), left, y);
     y += 34;
+
+    /*
+     * The line's own discount, under the line it belongs to. A customer
+     * checking a total against the prices they remember needs to see where the
+     * difference came from on the line that carries it — an aggregate at the
+     * foot of a multi-line invoice does not tell them that.
+     */
+    if (line.discountMinor > 0n) {
+      ctx.fillStyle = INK_FAINT;
+      ctx.font = `15px ${ARABIC_FONT}`;
+      rtl(ctx, `السعر ${ltr(money(line.listMinor, doc.currency))} — بعد الخصم`, right, y);
+      latin(ctx, `−${money(line.discountMinor, doc.currency)}`, left, y);
+      y += 28;
+    }
   }
 
   const omitted = doc.lines.length - shown;
@@ -207,6 +227,18 @@ export async function renderInvoicePdf(doc: InvoiceDocument): Promise<Uint8Array
   // Spelled out, because a total alone is not a tax invoice: the base, the
   // rate and the tax have to be readable separately.
   const rows: Array<[string, string, boolean]> = [
+    /*
+     * The list total and the discount appear only when there IS one (OPEN-1).
+     * On every invoice this platform has issued so far the discount is zero,
+     * and a row reading "الخصم — 0.00" on each of them would be noise that
+     * makes the document look like it is hiding a promotion.
+     */
+    ...(doc.discountMinor > 0n
+      ? ([
+          ['المجموع قبل الخصم', money(doc.listMinor, doc.currency), false],
+          ['الخصم', `−${money(doc.discountMinor, doc.currency)}`, false],
+        ] as Array<[string, string, boolean]>)
+      : []),
     ['المجموع قبل الضريبة', money(doc.netMinor, doc.currency), false],
     [
       doc.taxBp > 0

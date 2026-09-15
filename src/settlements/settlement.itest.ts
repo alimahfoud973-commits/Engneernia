@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import { eq, sql } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { withRawActorContext } from '@/db/actor-context';
 import { ensureTestOwner } from '@/db/testing/single-owner';
@@ -91,8 +91,45 @@ const ENGINEER_SHARE = 1600n;   // 80%
  */
 const MINIMUM = 5000n;          // $50.00, set by this suite for its own run
 
+/**
+ * Every buyer this file has created, so the cleanup can find them all. The
+ * first is `ids.customer`, who stays fixed because the read-permission cases
+ * below name them.
+ */
+const buyers: string[] = [ids.customer];
+let salesMade = 0;
+
+/**
+ * A FRESH BUYER PER SALE (owner decision on OPEN-11).
+ *
+ * A product is bought once, so a month with four sales is four customers. This
+ * file used to sell the same product to the same person repeatedly — one case
+ * even said so in its own comment, "the customer buys again; a second
+ * entitlement is granted" — which the platform now refuses.
+ *
+ * A settlement is computed from ledger lines that carry a contributor and an
+ * amount and nothing about the buyer, so every total below is unchanged.
+ */
+async function nextBuyer(): Promise<Actor> {
+  salesMade += 1;
+  if (salesMade === 1) return customer;
+
+  const id = randomUUID();
+  buyers.push(id);
+  await withRawActorContext(OWNER_RAW, (tx) =>
+    tx.insert(users).values({
+      id,
+      email: `p7-cust${salesMade}+${suffix}@test.local`,
+      passwordHash: 'x', role: 'CUSTOMER', status: 'ACTIVE',
+      displayName: `Customer ${salesMade}`, countryCode: 'SY',
+    }),
+  );
+  return { ...base, userId: id, role: 'CUSTOMER', contributorId: null, contributorActive: false };
+}
+
 /** Buy one product and have the owner approve it, at the current fake time. */
 async function sell(productIndex: number): Promise<string> {
+  const customer = await nextBuyer();
   const order = await createOrder(customer, { productSlugs: [slugs[productIndex]!] });
   await placeOrder(customer, { orderId: order.orderId, paymentMethodId: ids.method });
   const [payment] = await withRawActorContext(OWNER_RAW, (tx) =>
@@ -211,8 +248,8 @@ afterAll(async () => {
       (SELECT id FROM settlements WHERE contributor_id = ${ids.contributor})`);
     await tx.delete(settlements).where(eq(settlements.contributorId, ids.contributor));
 
-    await tx.delete(entitlements).where(eq(entitlements.customerId, ids.customer));
-    await tx.delete(orders).where(eq(orders.customerId, ids.customer));
+    await tx.delete(entitlements).where(inArray(entitlements.customerId, buyers));
+    await tx.delete(orders).where(inArray(orders.customerId, buyers));
     await tx.delete(paymentMethods).where(eq(paymentMethods.id, ids.method));
     await tx.delete(commissionAgreements)
       .where(eq(commissionAgreements.contributorId, ids.contributor));
@@ -221,7 +258,7 @@ afterAll(async () => {
     await tx.delete(disciplines).where(eq(disciplines.id, ids.discipline));
     await tx.delete(contributors).where(eq(contributors.id, ids.contributor));
     await tx.delete(users).where(
-      sql`id IN (${ids.customer}, ${ids.engineerUser})`,
+      inArray(users.id, [...buyers, ids.engineerUser]),
     );
   });
   await closeDb();
@@ -455,7 +492,7 @@ describe('SEPTEMBER — a debit lands after its month was settled', () => {
 
   it('the debt rolls into October rather than disappearing', async () => {
     vi.setSystemTime(new Date('2026-10-20T09:00:00Z'));
-    await sell(0); // the customer buys again; a second entitlement is granted
+    await sell(0); // another customer buys the same product (OPEN-11)
     expect(await balanceOf()).toBe(0n); // −1600 + 1600
 
     vi.setSystemTime(new Date('2026-11-01T06:00:00Z'));

@@ -8,6 +8,7 @@ import { productBySlug } from '@/catalog/public-queries';
 import { canRate, myRating, ratingCountLabel, ratingSummary } from '@/catalog/ratings';
 import { RatingForm } from '@/components/rating-form';
 import { currentActor } from '@/auth/current';
+import { purchaseState } from '@/commerce/queries';
 import type { Metadata } from 'next';
 import { JsonLd } from '@/components/json-ld';
 import { metaDescription, productJsonLd } from '@/seo/structured-data';
@@ -85,10 +86,12 @@ export default async function ProductPage({
    * showing it is a courtesy, never the control.
    */
   const actor = await currentActor();
-  const [rating, mine, mayRate] = await Promise.all([
+  const [rating, mine, mayRate, purchase] = await Promise.all([
     ratingSummary(actor, product.id),
     myRating(actor, product.id),
     canRate(actor, product.id),
+    // OPEN-11: a product is bought once, so this page has three states.
+    purchaseState(actor, product.id),
   ]);
 
   const facts: ReadonlyArray<readonly [string, string]> = [
@@ -225,10 +228,48 @@ export default async function ProductPage({
               </span>
             </div>
 
-            <BuyButton
-              slug={product.slug}
-              label={product.isFree ? 'الحصول عليه مجاناً' : 'شراء الآن'}
-            />
+            {/*
+              OPEN-11 — A PRODUCT IS BOUGHT ONCE.
+
+              The buy button is not merely hidden for someone who already owns
+              the file: it is replaced by the thing they actually want, which
+              is the file. An owner shown a greyed-out "شراء" learns only that
+              the platform knows something they do not.
+
+              None of this is the control. `createOrder` refuses, and beneath
+              it a trigger and a unique index refuse (migration 0048). This is
+              what stops a buyer meeting that refusal by surprise.
+            */}
+            {purchase.kind === 'OWNED' ? (
+              <div className="flex flex-col gap-2">
+                <p className="rounded-[var(--radius-card)] border border-[var(--color-ok)] bg-[var(--color-ok-soft)] px-3 py-2 text-sm text-[var(--color-ok)]">
+                  هذا المنتج ضمن مشترياتك.
+                </p>
+                <Link
+                  href="/account"
+                  className="rounded-[var(--radius-card)] bg-[var(--color-accent)] px-4 py-2.5 text-center text-sm font-semibold text-[var(--color-accent-contrast)] transition-opacity hover:opacity-90"
+                >
+                  انتقل إلى مشترياتي للتنزيل
+                </Link>
+              </div>
+            ) : purchase.kind === 'IN_ORDER' ? (
+              <div className="flex flex-col gap-2">
+                <p className="rounded-[var(--radius-card)] border border-[var(--color-warn)] bg-[var(--color-warn-soft)] px-3 py-2 text-sm text-[var(--color-warn)]">
+                  لديك طلب قائم على هذا المنتج.
+                </p>
+                <Link
+                  href={`/checkout/${purchase.orderId}`}
+                  className="rounded-[var(--radius-card)] bg-[var(--color-accent)] px-4 py-2.5 text-center text-sm font-semibold text-[var(--color-accent-contrast)] transition-opacity hover:opacity-90"
+                >
+                  أكمِل الطلب
+                </Link>
+              </div>
+            ) : (
+              <BuyButton
+                slug={product.slug}
+                label={product.isFree ? 'الحصول عليه مجاناً' : 'شراء الآن'}
+              />
+            )}
 
             <dl className="flex flex-col gap-3 border-t border-[var(--color-line)] pt-4">
               {facts.map(([label, value]) => (

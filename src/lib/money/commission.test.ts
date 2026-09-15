@@ -96,14 +96,24 @@ describe('guards', () => {
     ).toThrow(ValidationError);
   });
 
-  it('refuses a non-zero discount until the commission base policy is decided (OPEN-1)', () => {
+  it('rejects a negative discount — a surcharge is not a discount (OPEN-1)', () => {
     expect(() =>
       computeCommissionSnapshot({
         listPrice: usd(1000n),
-        discount: usd(100n),
+        discount: usd(-100n),
         agreement: { model: 'PERCENTAGE', engineerBp: 8000, currency: 'USD' },
       }),
-    ).toThrow(RuleViolationError);
+    ).toThrow(ValidationError);
+  });
+
+  it('rejects a discount larger than the price — the pot cannot go negative', () => {
+    expect(() =>
+      computeCommissionSnapshot({
+        listPrice: usd(1000n),
+        discount: usd(1001n),
+        agreement: { model: 'PERCENTAGE', engineerBp: 8000, currency: 'USD' },
+      }),
+    ).toThrow(ValidationError);
   });
 
   it('rejects a negative fixed share', () => {
@@ -238,6 +248,126 @@ describe('split invariants hold for every price and every rate', () => {
               agreement: { model: 'PERCENTAGE', engineerBp: bp, currency: 'USD' },
             }),
           ).not.toThrow(MoneyInvariantError);
+        },
+      ),
+      { numRuns: 500 },
+    );
+  });
+});
+
+
+/**
+ * ===========================================================================
+ * OPEN-1 — THE COMMISSION BASE WHEN A DISCOUNT EXISTS
+ * ===========================================================================
+ * The owner's decision: COMMISSION IS COMPUTED AFTER THE DISCOUNT. The pot to
+ * divide is what the customer actually paid, so both sides bear the discount
+ * in the proportion their agreement already names.
+ *
+ * These cases are written as the two rejected answers as much as the accepted
+ * one: each states not only the number the decision produces but the numbers
+ * it does NOT produce, so that a future edit that quietly switches the base
+ * fails here with the wrong answer named rather than merely with a mismatch.
+ * ===========================================================================
+ */
+describe('OPEN-1 — commission is computed after the discount', () => {
+  const eightyTwenty: CommissionAgreement = {
+    model: 'PERCENTAGE', engineerBp: 8000, currency: 'USD',
+  };
+
+  it('the owner\u2019s worked example: 100 less 20 pays the engineer 64 and the platform 16', () => {
+    const snapshot = computeCommissionSnapshot({
+      listPrice: usd(10_000n),
+      discount: usd(2_000n),
+      agreement: eightyTwenty,
+    });
+
+    expect(snapshot.netPriceMinor).toBe(8_000n);
+    expect(snapshot.engineerAmountMinor).toBe(6_400n);
+    expect(snapshot.platformAmountMinor).toBe(1_600n);
+
+    // NOT the rejected answers:
+    //   commission on the list price would be 8000 / 0 (engineer bears it all)
+    //   the platform absorbing it would be 8000 / 0 the other way round
+    expect(snapshot.engineerAmountMinor).not.toBe(8_000n);
+    expect(snapshot.platformAmountMinor).not.toBe(2_000n);
+  });
+
+  it('records the discount on the snapshot rather than folding it into the price', () => {
+    const snapshot = computeCommissionSnapshot({
+      listPrice: usd(10_000n),
+      discount: usd(2_000n),
+      agreement: eightyTwenty,
+    });
+
+    // The price the customer was quoted survives the sale. A snapshot that
+    // stored only the discounted figure could not answer "what was it worth?"
+    expect(snapshot.listPriceMinor).toBe(10_000n);
+    expect(snapshot.discountMinor).toBe(2_000n);
+    expect(snapshot.listPriceMinor - snapshot.discountMinor).toBe(snapshot.netPriceMinor);
+  });
+
+  it('a fixed engineer share is capped by the DISCOUNTED price, not the list price', () => {
+    // The agreement promises the engineer 90; the sale only fetched 80. The
+    // platform cannot pay out more than came in, so the share is clamped and
+    // the owner is told the agreement needs revisiting.
+    const snapshot = computeCommissionSnapshot({
+      listPrice: usd(10_000n),
+      discount: usd(2_000n),
+      agreement: { model: 'FIXED_ENGINEER', engineerFixedMinor: 9_000n, currency: 'USD' },
+    });
+
+    expect(snapshot.clamped).toBe(true);
+    expect(snapshot.engineerAmountMinor).toBe(8_000n);
+    expect(snapshot.platformAmountMinor).toBe(0n);
+  });
+
+  it('a discount equal to the price splits nothing, and splits it correctly', () => {
+    // Permitted here and refused where it belongs: the ledger will not book a
+    // sale of zero. The engine's job is to be total, not to hold that opinion.
+    const snapshot = computeCommissionSnapshot({
+      listPrice: usd(10_000n),
+      discount: usd(10_000n),
+      agreement: eightyTwenty,
+    });
+
+    expect(snapshot.netPriceMinor).toBe(0n);
+    expect(snapshot.engineerAmountMinor).toBe(0n);
+    expect(snapshot.platformAmountMinor).toBe(0n);
+  });
+
+  it('a zero discount is bit-for-bit the sale that was made before OPEN-1', () => {
+    const withZero = computeCommissionSnapshot({
+      listPrice: usd(16_500n), discount: usd(0n), agreement: eightyTwenty,
+    });
+    const without = computeCommissionSnapshot({
+      listPrice: usd(16_500n), agreement: eightyTwenty,
+    });
+    expect(withZero).toEqual(without);
+  });
+
+  it('the split re-sums to what was PAID for every price and every discount', () => {
+    fc.assert(
+      fc.property(
+        fc.bigInt({ min: 0n, max: 10n ** 9n }),
+        fc.bigInt({ min: 0n, max: 10n ** 9n }),
+        fc.integer({ min: 0, max: 10_000 }),
+        (listPrice, rawDiscount, engineerBp) => {
+          // A discount can never exceed the price, so the generator is folded
+          // into the valid range rather than filtered — filtering would quietly
+          // discard most of the large-price cases.
+          const discount = listPrice === 0n ? 0n : rawDiscount % (listPrice + 1n);
+          const snapshot = computeCommissionSnapshot({
+            listPrice: usd(listPrice),
+            discount: usd(discount),
+            agreement: { model: 'PERCENTAGE', engineerBp, currency: 'USD' },
+          });
+
+          expect(snapshot.engineerAmountMinor + snapshot.platformAmountMinor).toBe(
+            listPrice - discount,
+          );
+          expect(snapshot.engineerAmountMinor).toBeGreaterThanOrEqual(0n);
+          expect(snapshot.platformAmountMinor).toBeGreaterThanOrEqual(0n);
         },
       ),
       { numRuns: 500 },

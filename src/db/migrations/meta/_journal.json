@@ -337,6 +337,13 @@
       "when": 1789421636766,
       "tag": "0047_ratings_flag",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1789421696766,
+      "tag": "0048_discount_base_and_single_purchase",
+      "breakpoints": true
     }
   ]
 }

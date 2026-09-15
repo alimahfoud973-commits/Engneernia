@@ -1,5 +1,5 @@
 import 'server-only';
-import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
 import {
   entitlements, orderEvents, orderItemContributors, orderItems, orders,
   payments, productPrices, products, users,
@@ -72,6 +72,84 @@ async function moveOrder(
   });
 }
 
+/**
+ * ===========================================================================
+ * A PRODUCT IS BOUGHT ONCE (owner decision on OPEN-11)
+ * ===========================================================================
+ * What is sold here is a file and a permanent right to download it. A second
+ * purchase of the same file buys the buyer nothing they do not already have,
+ * so it is not a sale — it is a mistake that happens to take money, and the
+ * platform has no refund with which to undo it (owner decision, §7 revoked).
+ *
+ * TWO CONDITIONS, BECAUSE A PURCHASE IS NOT INSTANT. Payment here is manual:
+ * an order can sit awaiting the owner's approval for a day. Checking only for
+ * an entitlement would let a buyer place a second order in that window and pay
+ * twice before the first was approved — and both approvals would look
+ * perfectly legitimate to everything downstream.
+ *
+ *   1. a live entitlement — they already own it;
+ *   2. an order line on any order of theirs that is not CANCELLED — they are
+ *      already in the middle of buying it.
+ *
+ * THIS IS NOT THE CONTROL. The refusal that cannot be forgotten is in the
+ * database: a trigger on `order_items` and a partial unique index on
+ * `entitlements` (migration 0048). This runs first only so that a person gets
+ * a sentence in Arabic instead of a constraint violation.
+ *
+ * A REVOKED entitlement does not count as owning. Nothing revokes one today —
+ * there are no refunds — but if the owner ever takes access away, taking away
+ * the ability to buy it again with it would be a second punishment nobody
+ * decided on.
+ * ===========================================================================
+ */
+async function assertNotAlreadyBought(
+  tx: Transaction,
+  customerId: string,
+  rows: ReadonlyArray<{ id: string; titleAr: string }>,
+): Promise<void> {
+  const productIds = rows.map((row) => row.id);
+  const titleOf = (productId: string) =>
+    rows.find((row) => row.id === productId)?.titleAr ?? 'هذا المنتج';
+
+  const owned = await tx
+    .select({ productId: entitlements.productId })
+    .from(entitlements)
+    .where(
+      and(
+        eq(entitlements.customerId, customerId),
+        inArray(entitlements.productId, productIds),
+        isNull(entitlements.revokedAt),
+      ),
+    );
+
+  if (owned.length > 0) {
+    throw new RuleViolationError(
+      `«${titleOf(owned[0]!.productId)}» ضمن مشترياتك بالفعل — يمكنك تنزيله من صفحة مشترياتي.`,
+      { productId: owned[0]!.productId },
+    );
+  }
+
+  const pending = await tx
+    .select({ productId: orderItems.productId, orderId: orders.id })
+    .from(orderItems)
+    .innerJoin(orders, eq(orders.id, orderItems.orderId))
+    .where(
+      and(
+        eq(orders.customerId, customerId),
+        inArray(orderItems.productId, productIds),
+        ne(orders.status, 'CANCELLED'),
+      ),
+    )
+    .limit(1);
+
+  if (pending.length > 0) {
+    throw new RuleViolationError(
+      `لديك طلب قائم على «${titleOf(pending[0]!.productId)}» — أكمِل ذلك الطلب أو ألغِه قبل إنشاء طلب جديد.`,
+      { productId: pending[0]!.productId, orderId: pending[0]!.orderId },
+    );
+  }
+}
+
 /** Build a draft order from a set of products, priced at today's price. */
 export async function createOrder(
   actor: Actor,
@@ -81,6 +159,14 @@ export async function createOrder(
 
   if (input.productSlugs.length === 0) {
     throw new RuleViolationError('لا يمكن إنشاء طلب بلا منتجات');
+  }
+
+  // The same product twice in one order is the same mistake as buying it
+  // twice in two orders (OPEN-11), and it is worth its own sentence: without
+  // this the duplicate is caught further down by a row count that does not
+  // match, and reported as "one of the products is unavailable".
+  if (new Set(input.productSlugs).size !== input.productSlugs.length) {
+    throw new RuleViolationError('لا يمكن إضافة المنتج نفسه أكثر من مرة إلى الطلب');
   }
 
   return withActor(actor, async (tx) => {
@@ -108,6 +194,8 @@ export async function createOrder(
       throw new NotFoundError('أحد المنتجات غير متاح للشراء');
     }
 
+    await assertNotAlreadyBought(tx, customerId, rows);
+
     const currencies = new Set(rows.map((r) => r.priceCurrency ?? r.currency));
     if (currencies.size > 1) {
       // Mixing currencies in one order would make a single payment ambiguous.
@@ -129,6 +217,21 @@ export async function createOrder(
       sql`SELECT app_next_order_number() AS number`,
     )) as unknown as Array<{ number: string }>;
 
+    /**
+     * NO DISCOUNT IS APPLIED HERE, AND NONE CAN BE (OPEN-1).
+     *
+     * The commission base for a discount is decided — it is computed after the
+     * discount — and the whole pipeline below carries one correctly. What does
+     * not exist yet is anything that GRANTS one: coupons, promotions and
+     * limited-time offers are §43, deliberately not in the first release.
+     *
+     * So the three money columns are written as three separate statements of
+     * fact rather than one value reused. `totalMinor: subtotal` would be true
+     * today and silently wrong the day a discount arrives; `subtotal - discount`
+     * is the definition, and the database checks it holds.
+     */
+    const discount = 0n;
+
     const [order] = await tx
       .insert(orders)
       .values({
@@ -137,7 +240,8 @@ export async function createOrder(
         status: 'DRAFT',
         currency,
         subtotalMinor: subtotal,
-        totalMinor: subtotal,
+        discountMinor: discount,
+        totalMinor: subtotal - discount,
         buyerCountry: input.buyerCountry ?? null,
       })
       .returning({ id: orders.id, orderNumber: orders.orderNumber });
@@ -166,7 +270,7 @@ export async function createOrder(
     return {
       orderId: order.id,
       orderNumber: order.orderNumber,
-      totalMinor: subtotal,
+      totalMinor: subtotal - discount,
       currency,
     };
   });
@@ -297,11 +401,16 @@ export async function approvePayment(
     // lives in order_item_contributors; the ledger carries the money.
     const sharesByContributor = new Map<string, bigint>();
     let platformTotal = 0n;
+    /** What the customer paid across every line: list less discount. */
     let grossTotal = 0n;
+    /** Before any discount — checked against the order's own subtotal. */
+    let listTotal = 0n;
+    let discountTotal = 0n;
     /** Collected per line, because the rounding happens per line (OPEN-9). */
     let taxTotal = 0n;
     const invoiceLines: Array<{
-      title: string; grossMinor: bigint; taxMinor: bigint; netMinor: bigint;
+      title: string; listMinor: bigint; discountMinor: bigint;
+      grossMinor: bigint; taxMinor: bigint; netMinor: bigint;
     }> = [];
 
     /**
@@ -320,10 +429,19 @@ export async function approvePayment(
         throw new RuleViolationError('هذا البند يحمل لقطة مالية مسبقاً', { itemId: item.id });
       }
 
-      const terms = await resolveTermsForSale(tx, item.productId, taxPolicy.rateBp);
+      const terms = await resolveTermsForSale(
+        tx,
+        item.productId,
+        taxPolicy.rateBp,
+        // The discount frozen on the LINE when the order was built, never one
+        // recomputed now. A promotion that ended between placing the order and
+        // approving the payment must not retroactively raise the bill.
+        item.discountMinor,
+      );
 
-      // Compared on the GROSS: that is the number the customer saw and agreed
-      // to. The tax split happens inside that number and cannot move it.
+      // Compared on the LIST price: that is the number the customer saw and
+      // agreed to. Neither the tax split nor the discount happens outside it,
+      // so neither can make an unchanged price look changed.
       if (terms.grossMinor !== item.unitPriceMinor) {
         // The price moved between placing the order and approving payment.
         // The customer agreed to the price they saw, so that price stands and
@@ -348,6 +466,10 @@ export async function approvePayment(
           taxBp: terms.tax.rateBp,
           taxMinor: terms.tax.taxMinor,
           netMinor: terms.tax.netMinor,
+          // Written back although the line already carries it: the column is
+          // part of the snapshot from this moment on, and re-stating it here
+          // keeps every frozen figure written by one statement.
+          discountMinor: terms.discountMinor,
           agreementId: terms.agreementId,
           priceRowId: terms.priceRowId,
           commissionClamped: terms.snapshot.clamped,
@@ -372,25 +494,52 @@ export async function approvePayment(
       }
       platformTotal += terms.snapshot.platformAmountMinor;
       taxTotal += terms.tax.taxMinor;
-      grossTotal += item.unitPriceMinor;
+      // What the customer PAID for this line, which is what the books record.
+      // Accumulating the list price here would balance against a total nobody
+      // was charged the moment a discount existed.
+      grossTotal += terms.payableMinor;
+      listTotal += item.unitPriceMinor;
+      discountTotal += terms.discountMinor;
 
       invoiceLines.push({
         // The title as it was at the moment of sale, not as it reads today.
         title: item.titleSnapshot,
-        grossMinor: item.unitPriceMinor,
+        listMinor: item.unitPriceMinor,
+        discountMinor: terms.discountMinor,
+        grossMinor: terms.payableMinor,
         taxMinor: terms.tax.taxMinor,
         netMinor: terms.tax.netMinor,
       });
 
-      // §41: ownership is a row, not a success message.
-      await tx
+      /**
+       * §41: ownership is a row, not a success message.
+       *
+       * NO `onConflictDoNothing` HERE ANY MORE (OPEN-11). It was there to make
+       * the grant idempotent, and it did something quite different: with a
+       * unique index that included `order_item_id`, a second order for the
+       * same product never collided, so nothing was ever suppressed — and
+       * after migration 0048 tightened the index, suppressing a collision is
+       * precisely the wrong answer. A customer whose payment was approved for
+       * a product they already own has paid twice for one file, and the only
+       * correct response is to take the whole approval down: no ledger entry,
+       * no invoice, no second charge recorded.
+       *
+       * The owner sees the refusal in the approval screen and can cancel the
+       * duplicate order, which is the state the money is already in.
+       */
+      const granted = await tx
         .insert(entitlements)
         .values({
           customerId: order.customerId,
           productId: item.productId,
           orderItemId: item.id,
         })
-        .onConflictDoNothing();
+        .returning({ id: entitlements.id });
+
+      if (granted.length === 0) {
+        // RLS refuses a write by returning no rows rather than raising.
+        throw new RuleViolationError('رُفض منح الوصول لهذا المنتج', { itemId: item.id });
+      }
       entitlementsGranted += 1;
 
       await tx
@@ -412,7 +561,10 @@ export async function approvePayment(
         await notifyContributor(tx, share.contributorId, 'PRODUCT_SOLD', {
           productTitle: item.titleSnapshot,
           currency: item.currency,
-          grossMinor: item.unitPriceMinor.toString(),
+          // What the sale actually fetched, not the list price. Their share was
+          // computed from this number (OPEN-1), and a message pairing a full
+          // price with a discounted share reads as an underpayment.
+          grossMinor: terms.payableMinor.toString(),
           engineerMinor: share.amountMinor.toString(),
           soldAt: new Date().toISOString(),
         });
@@ -428,13 +580,33 @@ export async function approvePayment(
      * takes the whole approval down with it, snapshot and entitlements
      * included. A half-booked sale is not a state this system can reach.
      */
-    if (order.discountMinor !== 0n) {
-      // A discount would have to be apportioned between the parties before it
-      // could be booked, and OPEN-1 has not decided how. Refuse, loudly.
-      throw new RuleViolationError(
-        'الخصومات غير مدعومة بعد — القرار المعلّق OPEN-1 يحدد أساس احتساب العمولة عند وجود خصم',
-        { orderId: order.id, discountMinor: order.discountMinor.toString() },
-      );
+    /**
+     * THE ORDER HEADER AND ITS LINES MUST TELL THE SAME STORY (OPEN-1).
+     *
+     * Three equations, not one. The old single check compared the lines to the
+     * order total and was sufficient only while no discount could exist:
+     * with one, a line discount and a header discount that disagree still
+     * produce a matching total, because the same amount appears on both sides.
+     *
+     * So the subtotal and the discount are reconciled separately, and the
+     * total is then the difference of two numbers that have each been checked.
+     * The database enforces the third equation as a CHECK on the row; this
+     * names the problem while the figures are still in hand.
+     */
+    if (listTotal !== order.subtotalMinor) {
+      throw new RuleViolationError('مجموع أسعار بنود الطلب لا يساوي المجموع الفرعي', {
+        orderId: order.id,
+        itemsListMinor: listTotal.toString(),
+        orderSubtotalMinor: order.subtotalMinor.toString(),
+      });
+    }
+
+    if (discountTotal !== order.discountMinor) {
+      throw new RuleViolationError('مجموع خصومات البنود لا يساوي خصم الطلب', {
+        orderId: order.id,
+        itemsDiscountMinor: discountTotal.toString(),
+        orderDiscountMinor: order.discountMinor.toString(),
+      });
     }
 
     if (grossTotal !== order.totalMinor) {
@@ -484,6 +656,12 @@ export async function approvePayment(
       buyerName: buyer[0]?.displayName ?? '',
       buyerEmail: buyer[0]?.email ?? '',
       currency: order.currency,
+      // A tax invoice states what was charged, so `grossMinor` is the amount
+      // paid. The list price and the discount are stated beside it rather than
+      // folded into it: a document that shows only the discounted figure
+      // cannot be reconciled against the catalogue by whoever audits it.
+      listMinor: listTotal,
+      discountMinor: discountTotal,
       grossMinor: grossTotal,
       taxMinor: taxTotal,
       netMinor: grossTotal - taxTotal,
@@ -499,6 +677,8 @@ export async function approvePayment(
       after: {
         invoiceNumber: invoice.invoiceNumber,
         orderNumber: order.orderNumber,
+        listMinor: listTotal.toString(),
+        discountMinor: discountTotal.toString(),
         grossMinor: grossTotal.toString(),
         taxMinor: taxTotal.toString(),
         taxBp: taxPolicy.rateBp,
