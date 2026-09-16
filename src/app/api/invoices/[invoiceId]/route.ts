@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { resolveActor, SESSION_COOKIE_NAME } from '@/auth/session';
+import { resolveActor, sessionCookie } from '@/auth/session';
 import { invoiceDocument } from '@/finance/invoice-queries';
 import { renderInvoicePdf } from '@/finance/invoice-pdf';
 import { logger } from '@/lib/logger';
@@ -32,7 +32,7 @@ export async function GET(
 
   try {
     const cookieStore = await cookies();
-    const actor = await resolveActor(cookieStore.get(SESSION_COOKIE_NAME)?.value);
+    const actor = await resolveActor(cookieStore.get(sessionCookie().name)?.value);
 
     if (actor.kind !== 'USER') {
       return NextResponse.json({ error: 'NOT_FOUND' }, { status: 404 });

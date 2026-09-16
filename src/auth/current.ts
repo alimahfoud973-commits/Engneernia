@@ -3,7 +3,7 @@ import { cache } from 'react';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { GUEST, isOwner, type Actor } from '@/authz/actor';
-import { SESSION_COOKIE_NAME, resolveActor } from './session';
+import { resolveActor, sessionCookie } from './session';
 
 /**
  * The current actor, resolved from the session cookie.
@@ -16,7 +16,7 @@ import { SESSION_COOKIE_NAME, resolveActor } from './session';
  */
 export const currentActor = cache(async (): Promise<Actor> => {
   const store = await cookies();
-  return resolveActor(store.get(SESSION_COOKIE_NAME)?.value);
+  return resolveActor(store.get(sessionCookie().name)?.value);
 });
 
 /**

@@ -1,5 +1,6 @@
 import 'server-only';
 import { getSql, toDate } from '@/db';
+import { serverEnv } from '@/lib/config/env';
 import { sql as drizzleSql } from 'drizzle-orm';
 import type { Actor, AuthenticatedActor, Role } from '@/authz/actor';
 import { GUEST } from '@/authz/actor';
@@ -23,9 +24,41 @@ export const SESSION_ABSOLUTE_LIFETIME_MS = 14 * 24 * 60 * 60 * 1000;
 /** Idle lifetime: an untouched session expires sooner. */
 export const SESSION_IDLE_TIMEOUT_MS = 3 * 24 * 60 * 60 * 1000;
 
-export const SESSION_COOKIE_NAME = '__Host-em_session';
+/**
+ * ===========================================================================
+ * THE COOKIE'S NAME AND ITS `Secure` FLAG ARE ONE DECISION, NOT TWO
+ * ===========================================================================
+ * The `__Host-` prefix is a browser-enforced promise: a cookie carrying it is
+ * accepted ONLY when it is `Secure`, `Path=/` and carries no `Domain`. Miss any
+ * of those and the browser does not warn, does not error, and does not store
+ * the cookie. The request simply arrives without it.
+ *
+ * THAT IS EXACTLY WHAT HAPPENED. The name was a constant carrying the prefix
+ * while `secure` was `isProduction`, so in development every login sent
+ * `__Host-em_session` WITHOUT `Secure` and every browser dropped it on the
+ * floor. The page after login rendered correctly — Next renders the redirect
+ * target in the same request, where the cookie is still in the jar — and the
+ * NEXT navigation was a guest again. No error anywhere, in the one flow that
+ * every other flow depends on.
+ *
+ * So the two are now derived from one boolean and cannot drift. Development
+ * drops the prefix instead of dropping the guarantee: a plain name over plain
+ * HTTP is honest about what it is, and it keeps working on a LAN address where
+ * `Secure` would be refused all over again — which is how a developer tests on
+ * a phone.
+ *
+ * `sessionCookieInvariant` below states the rule as code, and
+ * `session-cookie.test.ts` runs it over both environments.
+ * ===========================================================================
+ */
+const HOST_PREFIXED_NAME = '__Host-em_session';
+const DEVELOPMENT_NAME = 'em_session';
 
-/** Cookie attributes. `__Host-` prefix requires Secure, path=/ and no Domain. */
+export function sessionCookieName(isProduction: boolean): string {
+  return isProduction ? HOST_PREFIXED_NAME : DEVELOPMENT_NAME;
+}
+
+/** Cookie attributes. `__Host-` requires Secure, Path=/ and no Domain. */
 export function sessionCookieOptions(isProduction: boolean) {
   return {
     httpOnly: true,
@@ -34,6 +67,31 @@ export function sessionCookieOptions(isProduction: boolean) {
     path: '/',
     maxAge: Math.floor(SESSION_ABSOLUTE_LIFETIME_MS / 1000),
   };
+}
+
+/**
+ * The rule the browser enforces silently, stated where it can be tested.
+ * Returns the reason it is broken, or null when the pair is coherent.
+ */
+export function sessionCookieInvariant(isProduction: boolean): string | null {
+  const name = sessionCookieName(isProduction);
+  const options = sessionCookieOptions(isProduction);
+
+  if (name.startsWith('__Host-')) {
+    if (!options.secure) return '__Host- prefix requires Secure';
+    if (options.path !== '/') return '__Host- prefix requires Path=/';
+    if ('domain' in options) return '__Host- prefix forbids a Domain attribute';
+  }
+  return null;
+}
+
+/**
+ * The cookie the CURRENT environment uses, name and attributes together.
+ * Every caller goes through this so neither half can be chosen on its own.
+ */
+export function sessionCookie(): { name: string; options: ReturnType<typeof sessionCookieOptions> } {
+  const isProduction = serverEnv().NODE_ENV === 'production';
+  return { name: sessionCookieName(isProduction), options: sessionCookieOptions(isProduction) };
 }
 
 export interface CreatedSession {

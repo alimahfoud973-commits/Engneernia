@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { cookies, headers } from 'next/headers';
-import { resolveActor, SESSION_COOKIE_NAME } from '@/auth/session';
+import { resolveActor, sessionCookie } from '@/auth/session';
 import { deliverProductFile } from '@/media/deliver';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
@@ -30,7 +30,7 @@ export async function GET(
   try {
     const cookieStore = await cookies();
     const headerStore = await headers();
-    const actor = await resolveActor(cookieStore.get(SESSION_COOKIE_NAME)?.value);
+    const actor = await resolveActor(cookieStore.get(sessionCookie().name)?.value);
 
     const result = await deliverProductFile(actor, {
       productSlug: slug,

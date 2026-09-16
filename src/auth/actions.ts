@@ -14,12 +14,11 @@ import { toUserMessage } from '@/lib/action-errors';
 import { revalidatePath } from 'next/cache';
 import { registerCustomer, resendVerification } from './register';
 import {
-  SESSION_COOKIE_NAME, createSession, markTwoFactorVerified, resolveActor,
-  revokeAllSessions, sessionCookieOptions,
+  createSession, markTwoFactorVerified, resolveActor,
+  revokeAllSessions, sessionCookie,
 } from './session';
 import { RateLimitedError } from '@/lib/rate-limit';
 import { ValidationError } from '@/lib/errors';
-import { serverEnv } from '@/lib/config/env';
 import { logger } from '@/lib/logger';
 import { waitLabelAr } from '@/lib/duration-ar';
 
@@ -98,9 +97,9 @@ export async function loginAction(
     case 'SUCCESS': {
       const cookieStore = await cookies();
       cookieStore.set(
-        SESSION_COOKIE_NAME,
+        sessionCookie().name,
         outcome.session.rawToken,
-        sessionCookieOptions(serverEnv().NODE_ENV === 'production'),
+        sessionCookie().options,
       );
       break;
     }
@@ -127,7 +126,7 @@ export async function loginAction(
 
 export async function logoutAction(): Promise<void> {
   const cookieStore = await cookies();
-  const token = cookieStore.get(SESSION_COOKIE_NAME)?.value;
+  const token = cookieStore.get(sessionCookie().name)?.value;
 
   if (token) {
     const actor = await resolveActor(token);
@@ -136,7 +135,7 @@ export async function logoutAction(): Promise<void> {
     }
   }
 
-  cookieStore.delete(SESSION_COOKIE_NAME);
+  cookieStore.delete(sessionCookie().name);
   redirect('/');
 }
 
@@ -321,7 +320,7 @@ export async function verifyTwoFactorAction(
   }
 
   const cookieStore = await cookies();
-  const actor = await resolveActor(cookieStore.get(SESSION_COOKIE_NAME)?.value);
+  const actor = await resolveActor(cookieStore.get(sessionCookie().name)?.value);
 
   // No session, or one that expired while the code was being typed.
   if (actor.kind !== 'USER') {
@@ -452,9 +451,9 @@ export async function confirmTotpAction(
 
   const cookieStore = await cookies();
   cookieStore.set(
-    SESSION_COOKIE_NAME,
+    sessionCookie().name,
     session.rawToken,
-    sessionCookieOptions(serverEnv().NODE_ENV === 'production'),
+    sessionCookie().options,
   );
 
   revalidatePath('/account/security');
