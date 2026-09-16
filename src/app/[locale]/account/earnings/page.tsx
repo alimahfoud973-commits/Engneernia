@@ -19,9 +19,15 @@ export const dynamic = 'force-dynamic';
  * policy layer refuses, and the row-level policy on ledger_lines returns
  * nothing for another contributor's rows.
  *
- * What is deliberately ABSENT: any platform-wide total, any other
- * contributor's figure, and the platform's share of a CO-AUTHORED sale — see
- * `contributorSales` for why that last one is a disclosure.
+ * What is deliberately ABSENT: any platform-wide total and any other
+ * contributor's figure.
+ *
+ * The platform's share IS shown on every sale, co-authored or not. Under
+ * OPEN-15 it is the platform's cut of THIS engineer's slice at THIS engineer's
+ * rate, so subtracting it reaches their own slice and nothing about anybody
+ * else. It used to be withheld on co-authored sales because one rate governed
+ * the whole line and the subtraction reached a colleague's pay; per-engineer
+ * terms removed the reason rather than the symptom.
  */
 export default async function EarningsPage({
   params,
@@ -284,9 +290,10 @@ export default async function EarningsPage({
                   </div>
                   <p className="text-xs text-[var(--color-ink-soft)]">
                     حصتي {formatMinor(row.engineerMinor, row.currency)}
-                    {row.coAuthoredUnits === 0
-                      ? ` · عمولة المنصة ${formatMinor(row.platformMinor, row.currency)}`
-                      : ` · عمولة المنصة تُعرض فقط للمنتجات المنفردة (${row.coAuthoredUnits} عملية مشتركة مستبعدة)`}
+                    {` · عمولة المنصة ${formatMinor(row.platformMinor, row.currency)}`}
+                    {row.coAuthoredUnits > 0
+                      ? ` · منها ${row.coAuthoredUnits} عملية على منتج مشترك، والأرقام أعلاه حصتك أنت منها`
+                      : ''}
                   </p>
                 </li>
               ))}

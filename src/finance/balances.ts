@@ -194,31 +194,37 @@ export interface ContributorSalesSummary {
   readonly grossMinor: bigint;
   readonly engineerMinor: bigint;
   /**
-   * The platform's share — counted ONLY over sales where this contributor is
-   * the sole credited author. See the query for why.
+   * The platform's cut of THIS engineer's slice, at THIS engineer's rate.
+   * Safe on every sale under OPEN-15 — see the query for why it was not before.
    */
   readonly platformMinor: bigint;
-  /** How many of `unitsSold` are excluded from `platformMinor`. */
+  /** How many of `unitsSold` were shared with another engineer. */
   readonly coAuthoredUnits: number;
 }
 
 /**
- * The sales behind the balance (§18): what sold, for how much, and how the
- * price split.
+ * The sales behind the balance (§18): what sold, when, and how it split.
  *
- * ON SHOWING THE PLATFORM'S SHARE. Specification §18 puts "Platform Share" on
- * the engineer's own dashboard, and for a product they wrote alone that
- * discloses nothing: they know the price and their own share, so the
- * remainder is arithmetic they can already do.
+ * ONE TABLE, AND IT IS THE ENGINEER'S OWN. `order_item_contributors` holds one
+ * row per engineer per sale, and the policy on it resolves exactly their own.
+ * Nothing here joins `orders` or `order_items`: both are invisible to a
+ * contributor by policy since migration 0043, and an INNER JOIN through an
+ * invisible table returns nothing rather than failing — which is how this
+ * screen came to render an empty table for every engineer, silently, for as
+ * long as 0043 had been in place. The date and currency live on the row
+ * itself (migration 0051) for that reason.
  *
- * A CO-AUTHORED product is different. There, price minus platform share minus
- * their own share equals what the OTHER authors were paid — and decisions §6
- * says a contributor must not learn the other contributors' shares. Showing
- * the platform's share on a co-authored sale would hand them that subtraction.
+ * ON SHOWING THE PLATFORM'S SHARE. Specification §18 puts it on the engineer's
+ * dashboard, and under OPEN-15 it is safe to show on EVERY sale, co-authored
+ * or not: the figure is the platform's cut of THIS engineer's slice, computed
+ * at THIS engineer's rate. Subtracting it yields their own slice and nothing
+ * about anybody else — a colleague's pay needs a colleague's rate, which §12
+ * keeps private.
  *
- * So the platform's share is summed only over sales where this contributor is
- * the sole credited author, and `coAuthoredUnits` says how many sales were
- * left out, so the figure explains itself instead of looking like an error.
+ * That is why the `author_count = 1` filter this function used to carry is
+ * gone. It existed because one rate governed the whole line, so the platform's
+ * share on a co-authored sale WAS the subtraction that reached a colleague's
+ * pay. Per-engineer terms removed the reason rather than the symptom.
  */
 export async function contributorSales(
   actor: Actor,
@@ -228,28 +234,18 @@ export async function contributorSales(
 
   return withActor(actor, async (tx) => {
     const rows = (await tx.execute(sql`
-      WITH mine AS (
-        SELECT oi.id, oi.currency, oi.unit_price_minor, oi.platform_amount_minor,
-               o.paid_at, oic.amount_minor AS my_share,
-               -- Counted with the owner's reach, not the contributor's: the
-               -- contributor's own policy hides the other authors' rows, which
-               -- would make every co-authored sale look sole-authored.
-               app_order_item_author_count(oi.id) AS author_count
-          FROM order_item_contributors oic
-          JOIN order_items oi ON oi.id = oic.order_item_id
-          JOIN orders o       ON o.id = oi.order_id
-         WHERE oic.contributor_id = ${scope}
-           AND o.paid_at IS NOT NULL
-      )
-      SELECT to_char(timezone(app_accounting_timezone(), paid_at), 'YYYY-MM') AS period_key,
-             currency,
-             COUNT(*)::int                                           AS units_sold,
-             COALESCE(SUM(unit_price_minor), 0)::text                AS gross,
-             COALESCE(SUM(my_share), 0)::text                        AS engineer,
-             COALESCE(SUM(platform_amount_minor)
-                        FILTER (WHERE author_count = 1), 0)::text    AS platform,
-             COUNT(*) FILTER (WHERE author_count > 1)::int           AS co_authored_units
-        FROM mine
+      SELECT to_char(timezone(app_accounting_timezone(), oic.occurred_at), 'YYYY-MM')
+                                                                  AS period_key,
+             oic.currency,
+             COUNT(*)::int                                        AS units_sold,
+             COALESCE(SUM(oic.slice_minor), 0)::text              AS gross,
+             COALESCE(SUM(oic.amount_minor), 0)::text             AS engineer,
+             COALESCE(SUM(oic.platform_amount_minor), 0)::text    AS platform,
+             COUNT(*) FILTER (WHERE oic.share_bp < 10000)::int    AS co_authored_units
+        FROM order_item_contributors oic
+       WHERE oic.contributor_id = ${scope}
+         AND oic.occurred_at IS NOT NULL
+         AND oic.slice_minor IS NOT NULL
        GROUP BY 1, 2
        ORDER BY 1 DESC, 2
     `)) as unknown as Array<Record<string, string | number>>;

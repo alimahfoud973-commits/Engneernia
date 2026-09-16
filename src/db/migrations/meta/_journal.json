@@ -351,6 +351,20 @@
       "when": 1789421756766,
       "tag": "0049_credit_share_is_not_the_contributors",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1789421816766,
+      "tag": "0050_commission_rate_per_contributor",
+      "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1789421876766,
+      "tag": "0051_contributor_reads_their_own_sales",
+      "breakpoints": true
     }
   ]
 }

@@ -10,6 +10,7 @@ import Link from 'next/link';
 const LINKS = [
   { href: '/admin/payments', label: 'المدفوعات' },
   { href: '/admin/settlements', label: 'التسوية الشهرية' },
+  { href: '/admin/commissions', label: 'اتفاقات العمولة' },
   { href: '/admin/finance', label: 'التقرير المالي' },
   { href: '/admin/adjustments', label: 'قيود التصحيح' },
 ] as const;

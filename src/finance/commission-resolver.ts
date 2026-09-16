@@ -6,7 +6,7 @@ import { extractTax, type TaxBreakdown } from '@/lib/money/tax';
 import { MoneyInvariantError, RuleViolationError } from '@/lib/errors';
 import { money, subtract, type Money } from '@/lib/money/money';
 import {
-  computeCommissionSnapshot, type CommissionAgreement, type CommissionSnapshot,
+  computeCommissionSnapshot, type CommissionAgreement, type CommissionModel,
 } from '@/lib/money/commission';
 import { distributeEngineerAmount, type ContributorShare } from '@/lib/money/distribution';
 
@@ -24,7 +24,6 @@ import { distributeEngineerAmount, type ContributorShare } from '@/lib/money/dis
  */
 
 export interface ResolvedTerms {
-  readonly snapshot: CommissionSnapshot;
   /**
    * The catalogue price as displayed, tax included and BEFORE any discount.
    *
@@ -48,13 +47,42 @@ export interface ResolvedTerms {
    * what changed hands, not of a price nobody paid.
    */
   readonly tax: TaxBreakdown;
-  readonly agreementId: string;
   readonly priceRowId: string;
-  /** How the engineer's side divides between credited contributors. */
+  /**
+   * The LINE's totals, summed from the per-contributor splits below.
+   *
+   * `model` and `engineerBp` describe the line only when exactly one engineer
+   * is credited. On a co-authored product there is no single model or rate for
+   * the line — that is the whole of OPEN-15 — so both are null and the truth
+   * lives on the per-contributor rows, which is the only place it can.
+   */
+  readonly line: {
+    readonly model: CommissionModel | null;
+    readonly engineerBp: number | null;
+    readonly engineerAmountMinor: bigint;
+    readonly platformAmountMinor: bigint;
+    /** True when any contributor's fixed agreement had to be capped. */
+    readonly clamped: boolean;
+  };
+  /**
+   * One entry per credited engineer: their slice of the sale, THEIR OWN
+   * agreement, and what that agreement made of it (owner decision on OPEN-15).
+   */
   readonly distribution: ReadonlyArray<{
     readonly contributorId: string;
     readonly shareBp: number;
+    /** Their portion of the tax-free, post-discount pot. */
+    readonly sliceMinor: bigint;
+    /** What they earn from it, under their own agreement. */
     readonly amountMinor: bigint;
+    /** What the platform takes from THEIR slice, and from no one else's. */
+    readonly platformAmountMinor: bigint;
+    readonly agreementId: string;
+    readonly model: CommissionModel;
+    readonly engineerBp: number | null;
+    readonly engineerFixedMinor: bigint | null;
+    readonly platformFixedMinor: bigint | null;
+    readonly clamped: boolean;
   }>;
 }
 
@@ -185,15 +213,9 @@ export async function resolveTermsForSale(
     throw new RuleViolationError('لا يوجد مهندس منسوب إليه هذا المنتج', { productId });
   }
 
-  // 3. Whose agreement governs the split. On a co-authored product the terms
-  //    are the PRIMARY contributor's — the one holding the largest share —
-  //    because §11 defines an agreement per contributor, not per product.
-  //    OPEN-15 records that a genuinely per-co-author rate is undecided.
-  const primary = [...credits].sort(
-    (a, b) => b.shareBp - a.shareBp || a.contributorId.localeCompare(b.contributorId),
-  )[0]!;
-
-  const agreementRow = await findAgreement(tx, primary.contributorId, productId);
+  // 3. EVERY credited engineer's own agreement, resolved separately
+  //    (owner decision on OPEN-15). Read before any arithmetic, so a sale with
+  //    one unagreed co-author is refused before a single figure is computed.
   const currency = priceRow.currency;
   const price: Money = money(priceRow.amountMinor, currency);
 
@@ -274,49 +296,128 @@ export async function resolveTermsForSale(
     });
   }
 
-  const snapshot = computeCommissionSnapshot({
-    listPrice: money(netList, currency),
-    discount: money(discountNet, currency),
-    agreement: toAgreement(agreementRow),
-  });
-
   /**
-   * The seam between the two modules, checked at the seam. `computeCommission
-   * Snapshot` guarantees its own split re-adds to its own net; this is the
-   * separate claim that its net is the amount tax left behind.
+   * =========================================================================
+   * THE POT IS SLICED FIRST, AND EACH SLICE MEETS ITS OWN AGREEMENT (OPEN-15)
+   * =========================================================================
+   * Before this decision one rate governed the whole line — the PRIMARY
+   * author's — and the engineers' side was divided afterwards by credit. That
+   * paid a co-author at a rate they never agreed to, and it made the sale
+   * reconstructible: a colleague's pay was the pot less your own, and the pot
+   * followed from one rate you knew.
+   *
+   * Now the order is reversed:
+   *
+   *     net  ──split by credit──▶  slice per engineer
+   *     slice ──their agreement──▶  their pay + the platform's cut of it
+   *
+   * Two properties fall out, and both are asserted below rather than assumed:
+   *
+   *   THE MONEY STILL RE-ADDS. `distributeEngineerAmount` divides the net into
+   *   slices that sum to it exactly (largest remainder), and each slice is then
+   *   divided into two parts that sum to that slice exactly. A sum of exact
+   *   sums is exact, so `engineers + platform + tax = paid` survives untouched
+   *   — the identity the ledger refuses to post without.
+   *
+   *   A COLLEAGUE'S PAY STOPS BEING DERIVABLE. It is now a function of THEIR
+   *   rate, which §12 keeps private. Knowing the price, your own rate and your
+   *   own pay yields your own slice and therefore the others' combined slice —
+   *   but not a currency figure any of them received. That is KI-3 closed, and
+   *   it is closed by arithmetic rather than by a policy, which is why no
+   *   policy could close it before.
    */
-  if (snapshot.netPriceMinor !== tax.netMinor) {
-    throw new MoneyInvariantError('صافي العمولة لا يطابق الصافي بعد الضريبة', {
-      productId,
-      snapshotNetMinor: snapshot.netPriceMinor.toString(),
-      taxNetMinor: tax.netMinor.toString(),
-    });
-  }
-
-  // 4. Divide the engineer's side, losing nothing to rounding.
   const shares: ContributorShare[] = credits.map((c) => ({
     contributorId: c.contributorId,
     shareBp: c.shareBp,
   }));
 
-  const distribution = distributeEngineerAmount(
-    money(snapshot.engineerAmountMinor, snapshot.currency),
-    shares,
-  );
+  const slices = distributeEngineerAmount(money(tax.netMinor, currency), shares);
+
+  const distribution: Array<ResolvedTerms['distribution'][number]> = [];
+  let engineerTotal = 0n;
+  let platformTotal = 0n;
+  let anyClamped = false;
+
+  for (const slice of slices) {
+    // Their own agreement: product-scoped first, then their default, then a
+    // refusal. There is still no platform-wide fallback rate — inventing one
+    // for a co-author is exactly the silent business rule §11 forbids.
+    const agreementRow = await findAgreement(tx, slice.contributorId, productId);
+
+    /*
+     * The discount is NOT passed here. It came off the displayed price before
+     * tax, so the pot being sliced is already net of it and each slice carries
+     * its proportional part. Handing the engine the discount a second time
+     * would subtract it once per engineer.
+     */
+    const snapshot = computeCommissionSnapshot({
+      listPrice: money(slice.amountMinor, currency),
+      agreement: toAgreement(agreementRow),
+    });
+
+    distribution.push({
+      contributorId: slice.contributorId,
+      shareBp: slice.shareBp,
+      sliceMinor: slice.amountMinor,
+      amountMinor: snapshot.engineerAmountMinor,
+      platformAmountMinor: snapshot.platformAmountMinor,
+      agreementId: agreementRow.id,
+      model: snapshot.model,
+      engineerBp: snapshot.engineerBp,
+      engineerFixedMinor: snapshot.engineerFixedMinor,
+      platformFixedMinor: snapshot.platformFixedMinor,
+      clamped: snapshot.clamped,
+    });
+
+    engineerTotal += snapshot.engineerAmountMinor;
+    platformTotal += snapshot.platformAmountMinor;
+    anyClamped = anyClamped || snapshot.clamped;
+  }
+
+  /**
+   * The seam between the modules, checked at the seam. Each snapshot
+   * guarantees its own two parts re-add to its own slice; this is the separate
+   * claim that the slices re-add to what tax left behind — which is what the
+   * database CHECK on the order line and the ledger both go on to require.
+   */
+  if (engineerTotal + platformTotal !== tax.netMinor) {
+    throw new MoneyInvariantError('مجموع حصص المهندسين والمنصة لا يساوي الصافي بعد الضريبة', {
+      productId,
+      engineerTotalMinor: engineerTotal.toString(),
+      platformTotalMinor: platformTotal.toString(),
+      taxNetMinor: tax.netMinor.toString(),
+    });
+  }
+
+  /*
+   * `discountNet` is computed above and is recorded on the ORDER LINE, not
+   * here: with per-engineer terms there is no single snapshot to carry it.
+   * Referenced so the derivation above is not mistaken for dead code.
+   */
+  void discountNet;
+
+  /**
+   * A line-level model and rate exist only for a sole author. Writing the
+   * primary's onto a co-authored line is what OPEN-15 corrects — it would name
+   * a rate that governed only part of the sale, and an auditor reading it
+   * would mis-compute every figure beneath it.
+   */
+  const sole = distribution.length === 1 ? distribution[0]! : null;
 
   return {
-    snapshot,
     grossMinor: priceRow.amountMinor,
     discountMinor,
     payableMinor: payable.amountMinor,
     tax,
-    agreementId: agreementRow.id,
     priceRowId: priceRow.id,
-    distribution: distribution.map((d) => ({
-      contributorId: d.contributorId,
-      shareBp: d.shareBp,
-      amountMinor: d.amountMinor,
-    })),
+    line: {
+      model: sole ? sole.model : null,
+      engineerBp: sole ? sole.engineerBp : null,
+      engineerAmountMinor: engineerTotal,
+      platformAmountMinor: platformTotal,
+      clamped: anyClamped,
+    },
+    distribution,
   };
 }
 

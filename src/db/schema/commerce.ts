@@ -279,7 +279,45 @@ export const orderItemContributors = pgTable(
       .notNull()
       .references(() => contributors.id, { onDelete: 'restrict' }),
     shareBp: integer('share_bp').notNull(),
+    /**
+     * THIS ENGINEER'S OWN TERMS, FROZEN (owner decision on OPEN-15).
+     *
+     * Before OPEN-15 one agreement — the primary author's — governed the whole
+     * line, and this table carried only the resulting amount. A co-author was
+     * therefore paid at a rate they had never agreed to, and the line could be
+     * read backwards into a colleague's pay.
+     *
+     * Now the net is sliced by credit first and each slice meets its own
+     * agreement, so these columns are the sale: `slice_minor` is what this
+     * engineer's terms applied to, and `amount_minor + platform_amount_minor`
+     * re-adds to it exactly — a database CHECK says so.
+     *
+     * Null on every row written before migration 0050. The ledger and the
+     * order line already hold those sales' correct totals; a constraint that
+     * demanded these columns of them would have failed on any database that
+     * had taken a single sale.
+     */
+    sliceMinor: bigint('slice_minor', { mode: 'bigint' }),
     amountMinor: bigint('amount_minor', { mode: 'bigint' }).notNull(),
+    /** What the platform took from THIS engineer's slice, and no one else's. */
+    platformAmountMinor: bigint('platform_amount_minor', { mode: 'bigint' }),
+    agreementId: uuid('agreement_id'),
+    commissionModel: commissionModelEnum('commission_model'),
+    engineerBp: integer('engineer_bp'),
+    engineerFixedMinor: bigint('engineer_fixed_minor', { mode: 'bigint' }),
+    platformFixedMinor: bigint('platform_fixed_minor', { mode: 'bigint' }),
+    /** True when this engineer's fixed agreement exceeded their slice. */
+    commissionClamped: boolean('commission_clamped').notNull().default(false),
+    /**
+     * The sale's own date and currency, denormalised (migration 0051).
+     *
+     * So the engineer can read their sales from THIS table alone. `orders` and
+     * `order_items` are invisible to them by policy, and an inner join through
+     * an invisible table returns nothing rather than failing — which is how
+     * their earnings screen came to be silently empty.
+     */
+    occurredAt: utcTimestamp('occurred_at'),
+    currency: text('currency'),
     createdAt: createdAt(),
   },
   (table) => [

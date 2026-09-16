@@ -527,36 +527,33 @@ describe('6. the residual — what arithmetic still discloses, measured', () => 
    * THIS IS NOT AN ACCESS-CONTROL FAILURE, AND IT IS NOT CLOSABLE BY RLS.
    * =========================================================================
    * Every case above proves engineer A cannot READ a single row belonging to
-   * engineer B. This case proves A can still COMPUTE what B was paid on the
-   * product they share — from two numbers that are indisputably A's own.
+   * engineer B. This section is about what A can still COMPUTE — and, since
+   * OPEN-15, about where that computation now stops.
    *
-   *     pot           = my amount x 10000 / my share_bp
-   *     others' total = pot - my amount
+   * THE EXPOSURE THAT EXISTED. One rate governed a whole sale, so
    *
-   * The second number is exact, because `distributeEngineerAmount` divides the
-   * pot strictly in proportion to the credited shares and those shares total
-   * exactly 10000 basis points by constraint.
+   *     pot           = (price - tax) x the governing rate
+   *     others' total = pot - my own pay
    *
-   * There is no policy that fixes this. Telling an engineer BOTH what they
-   * earned AND what fraction of the product they are credited with discloses
-   * what the remaining fraction earned, as surely as telling them a half
-   * discloses the other half. To close it the platform would have to stop
-   * saying one of those two things, and it cannot stop saying either: the
-   * share is the term the engineer agreed to, and the amount is the pay.
+   * was exact, and on a two-author product it named one person's pay. Every
+   * input was legitimately the reader's own — the price is public, the rate
+   * was their contract, the pay is their statement — so no row-level policy
+   * could close it. It was filed as KI-3: arithmetic, not a defect.
    *
-   * WHAT IT IS BOUNDED BY. It yields the co-authors' COMBINED pay. That is one
-   * named person's pay only when the product has exactly two authors — and the
-   * author list is public on the product page by design, so A can count them.
-   * Three authors and A learns a total, not a person.
+   * WHAT CLOSED IT, IN TWO STEPS.
+   *   Migration 0049 took the credit share away from contributors, which shut
+   *   the route a MINORITY co-author had: they could scale their own pay by
+   *   their own share to reach the pot, and could not otherwise, because the
+   *   governing rate was the primary's and §12 keeps it private.
+   *   Migration 0050 (OPEN-15) removed the governing rate itself. Each
+   *   engineer's slice now meets their own agreement, so a colleague's pay is
+   *   a function of a rate A cannot read.
    *
-   * WHAT WOULD ACTUALLY CLOSE IT is OPEN-15: a commission rate per co-author
-   * rather than one governing rate taken from the primary author. Then A's pay
-   * is a function of A's own rate and B's of B's, A does not know B's rate,
-   * and the pot stops being reconstructible from one share. That is an
-   * undecided business rule, not a defect to patch here.
-   *
-   * The test asserts the exposure rather than pretending it away, so that the
-   * day OPEN-15 changes the model this fails and is re-read on purpose.
+   * WHAT REMAINS, AND WHY IT IS NOT A PAYMENT. A can still recover their own
+   * slice from their own pay and rate, and therefore the others' combined
+   * SLICE — the portion of the sale credited to them. A slice is not money
+   * anybody received; turning it into one needs their rate. The two cases
+   * below assert exactly that boundary.
    */
   it('the credit-share route is CLOSED for every co-author (migration 0049)', async () => {
     /*
@@ -571,21 +568,23 @@ describe('6. the residual — what arithmetic still discloses, measured', () => 
     expect(credit).toHaveLength(0);
   });
 
-  it('the PRIMARY co-author can also derive it WITHOUT their credit share', async () => {
+  it('KI-3 IS CLOSED: the primary co-author can no longer reach a colleague\u2019s pay', async () => {
     /*
-     * A second, independent route, and the one that decides whether hiding the
-     * credit share is worth anything.
+     * This case used to assert the opposite, and was written to fail the day
+     * OPEN-15 landed so that it would be re-read on purpose rather than
+     * quietly deleted. Migration 0050 landed; here is what changed.
      *
-     * On a co-authored product the governing commission agreement is the
-     * PRIMARY author's — the one holding the largest credit — and A is a party
-     * to their own agreement, so A knows the rate. The price is public on the
-     * product page. That is the whole pot:
+     * THE OLD ROUTE. One rate governed the whole line — the primary author's —
+     * so the pot was `(price - tax) x my own rate`, and the colleagues' pay was
+     * the pot less my own. Every input was legitimately mine: the price is
+     * public, the rate is my contract, the pay is my statement. No policy could
+     * close it, which is why KI-3 was filed as arithmetic rather than a defect.
      *
-     *     pot = (price - tax) x my own engineer_bp
-     *
-     * and the co-authors' combined pay is the pot less A's own. Nothing in
-     * this route touches `product_contributors`, so no policy on that table
-     * can close it.
+     * THE NEW ROUTE DOES NOT ARRIVE. A colleague's pay is now their slice times
+     * THEIR rate, and §12 keeps that rate private — this file already proves A
+     * cannot read B's agreement. So the old formula now computes something
+     * real but harmless: A's own slice, and therefore the others' combined
+     * SLICE. A slice is a portion of a sale, not a payment to anybody.
      */
     const rate = await asA<{ engineer_bp: number }>(
       'SELECT engineer_bp FROM commission_agreements',
@@ -600,19 +599,43 @@ describe('6. the residual — what arithmetic still discloses, measured', () => 
        WHERE kind = 'SALE' AND product_title = 'منتج مشترك'
     `);
 
-    // Tax ships at rate zero, so net == price here.
-    const pot = (BigInt(price[0]!.amount_minor) * BigInt(rate[0]!.engineer_bp)) / 10_000n;
-    const inferred = pot - BigInt(line[0]!.engineer_minor);
+    const net = BigInt(price[0]!.amount_minor);       // tax ships at zero
+    const myRate = BigInt(rate[0]!.engineer_bp);
+    const myPay = BigInt(line[0]!.engineer_minor);
 
-    const [truth] = await withRawActorContext(OWNER_RAW, (tx) =>
-      tx.select({ amountMinor: orderItemContributors.amountMinor })
+    // (a) The formula that used to work: pot = net x my rate, less my pay.
+    const oldFormula = (net * myRate) / 10_000n - myPay;
+
+    // (b) The best A can do now: recover their OWN slice from their own pay
+    //     and rate, and subtract it from the net.
+    const mySlice = (myPay * 10_000n) / myRate;
+    const othersSlice = net - mySlice;
+
+    const [bPay] = await withRawActorContext(OWNER_RAW, (tx) =>
+      tx.select({
+        amountMinor: orderItemContributors.amountMinor,
+        sliceMinor: orderItemContributors.sliceMinor,
+      })
         .from(orderItemContributors)
         .innerJoin(orderItems, eq(orderItems.id, orderItemContributors.orderItemId))
         .where(sql`${orderItems.productId} = ${ids.productShared}
                    AND ${orderItemContributors.contributorId} = ${ids.contribB}`),
     );
 
-    expect(inferred).toBe(truth!.amountMinor);
+    // (a) now lands on nothing at all — not B's pay, and not even B's slice.
+    //     It mixes A's rate with B's portion, which no longer describes anything.
+    expect(oldFormula).not.toBe(bPay!.amountMinor);
+    expect(oldFormula).not.toBe(bPay!.sliceMinor);
+
+    /*
+     * (b) reaches B's SLICE exactly — and stops there. A slice is the portion
+     * of the sale credited to B, not a sum of money B received: B is paid 70%
+     * of it under an agreement A cannot read. The gap between the two numbers
+     * is precisely the private rate, and it is where KI-3 died.
+     */
+    expect(othersSlice).toBe(bPay!.sliceMinor);
+    expect(bPay!.amountMinor).toBeLessThan(bPay!.sliceMinor!);
+    expect(othersSlice).not.toBe(bPay!.amountMinor);
   });
 
   it('the MINORITY co-author cannot: they do not know the governing rate', async () => {

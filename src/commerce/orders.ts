@@ -459,10 +459,16 @@ export async function approvePayment(
       await tx
         .update(orderItems)
         .set({
-          commissionModel: terms.snapshot.model,
-          engineerBp: terms.snapshot.engineerBp,
-          engineerAmountMinor: terms.snapshot.engineerAmountMinor,
-          platformAmountMinor: terms.snapshot.platformAmountMinor,
+          /*
+           * Null on a co-authored line (OPEN-15): with a rate per engineer
+           * there is no single model or rate that describes the line, and
+           * writing the primary's would name terms that governed only part of
+           * the sale. The truth is on `order_item_contributors`, one row each.
+           */
+          commissionModel: terms.line.model,
+          engineerBp: terms.line.engineerBp,
+          engineerAmountMinor: terms.line.engineerAmountMinor,
+          platformAmountMinor: terms.line.platformAmountMinor,
           taxBp: terms.tax.rateBp,
           taxMinor: terms.tax.taxMinor,
           netMinor: terms.tax.netMinor,
@@ -470,19 +476,43 @@ export async function approvePayment(
           // part of the snapshot from this moment on, and re-stating it here
           // keeps every frozen figure written by one statement.
           discountMinor: terms.discountMinor,
-          agreementId: terms.agreementId,
+          // Likewise: one agreement id only when one agreement governed.
+          agreementId: terms.distribution.length === 1
+            ? terms.distribution[0]!.agreementId
+            : null,
           priceRowId: terms.priceRowId,
-          commissionClamped: terms.snapshot.clamped,
+          commissionClamped: terms.line.clamped,
           snapshotTakenAt: new Date(),
         })
         .where(eq(orderItems.id, item.id));
 
+      /*
+       * THE PER-ENGINEER SNAPSHOT (OPEN-15).
+       *
+       * Each row records the slice, the agreement that governed it, and what
+       * that agreement made of it. Frozen exactly like the line: the trigger
+       * on this table refuses every UPDATE, so a rate changed next year cannot
+       * reach a sale made this year — which is what §13 requires and what
+       * makes a statement defensible a year later.
+       */
       await tx.insert(orderItemContributors).values(
         terms.distribution.map((d) => ({
           orderItemId: item.id,
           contributorId: d.contributorId,
           shareBp: d.shareBp,
+          sliceMinor: d.sliceMinor,
           amountMinor: d.amountMinor,
+          platformAmountMinor: d.platformAmountMinor,
+          agreementId: d.agreementId,
+          commissionModel: d.model,
+          engineerBp: d.engineerBp,
+          engineerFixedMinor: d.engineerFixedMinor,
+          platformFixedMinor: d.platformFixedMinor,
+          commissionClamped: d.clamped,
+          // The sale's own context, so the engineer can read their sales from
+          // this table alone (migration 0051).
+          occurredAt: new Date(),
+          currency: item.currency,
         })),
       );
 
@@ -492,7 +522,7 @@ export async function approvePayment(
           (sharesByContributor.get(d.contributorId) ?? 0n) + d.amountMinor,
         );
       }
-      platformTotal += terms.snapshot.platformAmountMinor;
+      platformTotal += terms.line.platformAmountMinor;
       taxTotal += terms.tax.taxMinor;
       // What the customer PAID for this line, which is what the books record.
       // Accumulating the list price here would balance against a total nobody
