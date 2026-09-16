@@ -313,11 +313,22 @@ describe('5. contributors are isolated from each other', () => {
     );
     expect(rows.reduce((sum, r) => sum + r.shareBp, 0)).toBe(10000);
 
-    // And each engineer still sees only their own line.
+    /*
+     * AND NEITHER ENGINEER SEES A CREDIT ROW AT ALL — not even their own
+     * (migration 0049). This assertion used to read "sees only their own
+     * line", which was the whole trouble: `share_bp` on that line turns an
+     * engineer's own pay into everybody else's,
+     *
+     *     pot = my amount x 10000 / my share_bp,  others = pot - my amount
+     *
+     * exactly, and on a two-author product "others" is one named person.
+     * Decisions §6 says an engineer never learns another engineer's share, and
+     * no contributor-facing screen displays a credit share, so the read side
+     * now matches the write side: the owner's alone.
+     */
     const seenByA = await withRawActorContext(ctxOf(engineerA), (tx) =>
       tx.select().from(productContributors).where(eq(productContributors.productId, ids.productA)),
     );
-    expect(seenByA).toHaveLength(1);
-    expect(seenByA[0]?.contributorId).toBe(ids.contribA);
+    expect(seenByA).toHaveLength(0);
   });
 });

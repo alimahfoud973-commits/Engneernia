@@ -344,6 +344,13 @@
       "when": 1789421696766,
       "tag": "0048_discount_base_and_single_purchase",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1789421756766,
+      "tag": "0049_credit_share_is_not_the_contributors",
+      "breakpoints": true
     }
   ]
 }
