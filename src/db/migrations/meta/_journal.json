@@ -365,6 +365,20 @@
       "when": 1789421876766,
       "tag": "0051_contributor_reads_their_own_sales",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1789421936766,
+      "tag": "0052_statement_shows_the_engineers_own_slice",
+      "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1789421996766,
+      "tag": "0053_engineer_discipline",
+      "breakpoints": true
     }
   ]
 }

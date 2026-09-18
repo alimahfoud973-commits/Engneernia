@@ -65,3 +65,22 @@ export const PRODUCT_STATUS_LABELS: Readonly<Record<string, string>> = {
   UNPUBLISHED: 'غير منشور',
   ARCHIVED: 'مؤرشف',
 };
+
+export const COMMISSION_MODEL_LABELS: Readonly<Record<string, string>> = {
+  PERCENTAGE: 'نسبة مئوية',
+  FIXED_ENGINEER: 'مبلغ ثابت للمهندس',
+  FIXED_PLATFORM: 'مبلغ ثابت للمنصة',
+};
+
+/**
+ * Basis points as a person reads them: 8000 is "80", 6250 is "62.5".
+ *
+ * Trailing zeros are stripped only AFTER a decimal point — a blanket strip
+ * would turn 10000 into "1" and put every engineer on a one percent rate as
+ * far as the screen is concerned.
+ *
+ * Display only. Never fed back into a calculation (CLAUDE.md rule 2).
+ */
+export function formatPercent(bp: number): string {
+  return (bp / 100).toFixed(2).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
+}

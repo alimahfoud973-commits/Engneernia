@@ -96,6 +96,16 @@ export const settlements = pgTable(
     periodAdjustmentsMinor: bigint('period_adjustments_minor', { mode: 'bigint' }).notNull(),
     /** Gross sales value the engineer's share came from, for context (§18). */
     periodGrossSalesMinor: bigint('period_gross_sales_minor', { mode: 'bigint' }).notNull(),
+    /**
+     * The engineer's OWN share of that sales value (migration 0052).
+     *
+     * On a product with one author the two are the same number. On a shared
+     * product they are not, and the gross is the one that misleads: it is the
+     * whole product's price, most of which is a colleague's. Nullable because
+     * statements issued before 0052 cannot be given this figure honestly —
+     * see the migration for why a title-matched backfill was refused.
+     */
+    periodSliceSalesMinor: bigint('period_slice_sales_minor', { mode: 'bigint' }),
     periodUnitsSold: integer('period_units_sold').notNull().default(0),
 
     // --- the PAYMENT DECISION: everything still owed ---
@@ -171,6 +181,14 @@ export const settlementLines = pgTable(
     currency: text('currency').notNull(),
     /** What the customer paid for it. */
     grossMinor: bigint('gross_minor', { mode: 'bigint' }).notNull(),
+    /**
+     * What THIS engineer's agreed rate was applied to (migration 0052): the
+     * sale's net after discount and tax, sliced by credit. `engineerMinor` is
+     * this minus the platform's cut of this — of this slice and no one
+     * else's. Null on an adjustment line, and on every line written before
+     * 0052.
+     */
+    sliceMinor: bigint('slice_minor', { mode: 'bigint' }),
     /** The engineer's frozen share. Negative on a REFUND line. */
     engineerMinor: bigint('engineer_minor', { mode: 'bigint' }).notNull(),
 

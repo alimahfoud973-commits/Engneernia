@@ -293,9 +293,25 @@ export async function revenueByContributor(
              MAX(c.display_name)                                      AS display_name,
              oi.currency,
              COUNT(*)::int                                            AS units_sold,
-             COALESCE(SUM(oi.unit_price_minor), 0)::text         AS gross,
-             COALESCE(SUM(oic.amount_minor), 0)::text         AS engineer,
-             COALESCE(SUM(oi.platform_amount_minor), 0)::text         AS platform
+             COALESCE(SUM(oi.unit_price_minor), 0)::text              AS gross,
+             COALESCE(SUM(oic.amount_minor), 0)::text                 AS engineer,
+             /*
+              * THE ENGINEER'S OWN ROW, NOT THE LINE'S (migration 0050).
+              *
+              * oi.platform_amount_minor is the platform's cut of the WHOLE
+              * sale. Summed in a query grouped by contributor it is counted
+              * once per credited engineer, so a product with two authors
+              * reported the platform's cut twice — and told the owner that
+              * each of them individually earned the platform all of it.
+              *
+              * oic.platform_amount_minor is the cut taken from THIS
+              * engineer's slice. The fallback covers rows written before 0050,
+              * which are single-author lines where the two are the same
+              * number; there is nothing better for them, and dropping them
+              * would understate a real historical total.
+              */
+             COALESCE(SUM(COALESCE(oic.platform_amount_minor,
+                                   oi.platform_amount_minor)), 0)::text AS platform
         FROM order_item_contributors oic
         JOIN order_items oi ON oi.id = oic.order_item_id
         JOIN orders o       ON o.id = oi.order_id

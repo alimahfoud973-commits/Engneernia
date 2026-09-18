@@ -171,6 +171,13 @@ async function readStatementDetail(
 ): Promise<{
   lines: Array<typeof settlementLines.$inferInsert>;
   grossSalesMinor: bigint;
+  /**
+   * The engineer's own share of the sales value — null the moment ONE sale in
+   * the period predates migration 0050 and has no frozen slice. Null, not a
+   * partial sum: a total that silently omits some of its months' sales is a
+   * wrong number, and the statement's fallback wording is the honest answer.
+   */
+  sliceSalesMinor: bigint | null;
   unitsSold: number;
 }> {
   /*
@@ -184,6 +191,7 @@ async function readStatementDetail(
   const rows = (await tx.execute(sql`
     SELECT 'SALE'::text AS kind, o.paid_at AS occurred_at, oi.title_snapshot AS title,
            oi.currency, oi.unit_price_minor::text AS gross,
+           oic.slice_minor::text AS slice,
            oic.amount_minor::text AS engineer, NULL::text AS note
       FROM order_item_contributors oic
       JOIN order_items oi ON oi.id = oic.order_item_id
@@ -203,7 +211,7 @@ async function readStatementDetail(
      * adjustment feature exists to avoid.
      */
     SELECT 'ADJUSTMENT'::text, l.occurred_at, 'تصحيح مالي',
-           l.currency, '0'::text, (-l.amount_minor)::text, l.memo
+           l.currency, '0'::text, NULL::text, (-l.amount_minor)::text, l.memo
       FROM ledger_lines l
      WHERE l.account_code = ${LEDGER_ACCOUNTS.ENGINEER_PAYABLE}
        AND l.contributor_id = ${contributorId}
@@ -215,15 +223,26 @@ async function readStatementDetail(
 
   const lines: Array<typeof settlementLines.$inferInsert> = [];
   let grossSalesMinor = 0n;
+  let sliceSalesMinor: bigint | null = 0n;
   let unitsSold = 0;
 
   for (const row of rows) {
     const gross = BigInt(row.gross!);
     const isSale = row.kind === 'SALE';
+    // Frozen since migration 0050; absent on older sales, and on the
+    // adjustment lines, which describe no sale at all.
+    const slice = isSale && row.slice != null ? BigInt(row.slice) : null;
 
     if (isSale) {
       grossSalesMinor += gross;
       unitsSold += 1;
+      // One sale without a slice makes the PERIOD total unanswerable. It does
+      // not make the line's own slice unanswerable, so the lines that have one
+      // keep it — the detail stays as complete as the data allows while the
+      // headline refuses to be a half-truth.
+      sliceSalesMinor = slice === null || sliceSalesMinor === null
+        ? null
+        : sliceSalesMinor + slice;
     }
 
     lines.push({
@@ -235,12 +254,13 @@ async function readStatementDetail(
       productTitle: row.title!,
       currency: row.currency!,
       grossMinor: gross,
+      sliceMinor: slice,
       engineerMinor: BigInt(row.engineer!),
       note: row.note ?? null,
     });
   }
 
-  return { lines, grossSalesMinor, unitsSold };
+  return { lines, grossSalesMinor, sliceSalesMinor, unitsSold };
 }
 
 /**
@@ -355,6 +375,8 @@ export async function generateSettlements(
           productTitle: 'تسوية فرق غير مفصّل',
           currency: row.currency,
           grossMinor: 0n,
+          // A balancing line describes no product, so it has no slice.
+          sliceMinor: null,
           engineerMinor: unexplainedMinor,
           note:
             'فرقٌ بين إجمالي الدفتر وتفاصيل المبيعات المتاحة. الدفتر هو المرجع؛ '
@@ -385,6 +407,7 @@ export async function generateSettlements(
           periodRefundsMinor: row.periodRefundsMinor,
           periodAdjustmentsMinor,
           periodGrossSalesMinor: detail.grossSalesMinor,
+          periodSliceSalesMinor: detail.sliceSalesMinor,
           periodUnitsSold: detail.unitsSold,
           carriedForwardMinor,
           netDueMinor,

@@ -223,10 +223,27 @@ export async function renderStatementPdf(doc: StatementDocument): Promise<Uint8A
   y += 6;
   ctx.fillStyle = INK_FAINT;
   ctx.font = `18px ${ARABIC_FONT}`;
+  /*
+   * WHOSE VALUE THIS IS (migration 0052).
+   *
+   * `periodGrossSalesMinor` is the sum of the PRODUCTS' prices. On a product
+   * with two authors most of that number is the colleague's, so printing it
+   * beside this engineer's earnings both overstates their sales and makes
+   * their own commission rate look wrong. `periodSliceSalesMinor` is their
+   * own share of the same sales, and is preferred whenever the sales it
+   * covers were frozen with one.
+   *
+   * The fallback is not a cosmetic default: on a statement issued before
+   * 0052 the slice is genuinely unknown, and the old wording is what that
+   * document said. Reprinting an old statement must reprint the old statement.
+   */
   rtl(
     ctx,
-    `عدد المبيعات ${ltr(String(s.periodUnitsSold))} · إجمالي قيمتها `
-    + `${ltr(money(s.periodGrossSalesMinor, currency))}`,
+    s.periodSliceSalesMinor === null
+      ? `عدد المبيعات ${ltr(String(s.periodUnitsSold))} · إجمالي قيمتها `
+        + `${ltr(money(s.periodGrossSalesMinor, currency))}`
+      : `عدد المبيعات ${ltr(String(s.periodUnitsSold))} · قيمة حصتي منها `
+        + `${ltr(money(s.periodSliceSalesMinor, currency))}`,
     right,
     y,
   );

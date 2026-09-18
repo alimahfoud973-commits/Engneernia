@@ -25,6 +25,9 @@ export interface SettlementSummary {
   readonly periodRefundsMinor: bigint;
   readonly periodUnitsSold: number;
   readonly periodGrossSalesMinor: bigint;
+  /** The engineer's own share of that value. Null on statements issued
+   *  before migration 0052, or covering a sale that predates 0050. */
+  readonly periodSliceSalesMinor: bigint | null;
   readonly carriedForwardMinor: bigint;
   readonly balanceMinor: bigint;
   readonly netDueMinor: bigint;
@@ -47,6 +50,9 @@ function mapSummary(row: Record<string, unknown>): SettlementSummary {
     periodRefundsMinor: BigInt(row.period_refunds_minor as string),
     periodUnitsSold: Number(row.period_units_sold),
     periodGrossSalesMinor: BigInt(row.period_gross_sales_minor as string),
+    periodSliceSalesMinor: row.period_slice_sales_minor == null
+      ? null
+      : BigInt(row.period_slice_sales_minor as string),
     carriedForwardMinor: BigInt(row.carried_forward_minor as string),
     balanceMinor: BigInt(row.balance_minor as string),
     netDueMinor: BigInt(row.net_due_minor as string),
@@ -62,7 +68,8 @@ function mapSummary(row: Record<string, unknown>): SettlementSummary {
 const SUMMARY_COLUMNS = sql`
   id, reference, period_key, status::text AS status, currency,
   period_sales_minor, period_refunds_minor, period_units_sold,
-  period_gross_sales_minor, carried_forward_minor, balance_minor,
+  period_gross_sales_minor, period_slice_sales_minor,
+  carried_forward_minor, balance_minor,
   net_due_minor, minimum_payout_minor,
   generated_at, approved_at, paid_at, payout_reference, note
 `;
@@ -89,6 +96,9 @@ export interface StatementLine {
   readonly productTitle: string;
   readonly currency: string;
   readonly grossMinor: bigint;
+  /** What this engineer's rate was applied to. Null before migration 0052,
+   *  and on adjustment lines, which describe no sale. */
+  readonly sliceMinor: bigint | null;
   readonly engineerMinor: bigint;
   readonly note: string | null;
 }
@@ -101,7 +111,7 @@ export async function statementLines(
   return withActor(actor, async (tx) => {
     const rows = (await tx.execute(sql`
       SELECT kind::text AS kind, occurred_at, product_title, currency,
-             gross_minor, engineer_minor, note
+             gross_minor, slice_minor, engineer_minor, note
         FROM settlement_lines
        WHERE settlement_id = ${settlementId}
        ORDER BY occurred_at, id
@@ -113,6 +123,7 @@ export async function statementLines(
       productTitle: row.product_title as string,
       currency: row.currency as string,
       grossMinor: BigInt(row.gross_minor as string),
+      sliceMinor: row.slice_minor == null ? null : BigInt(row.slice_minor as string),
       engineerMinor: BigInt(row.engineer_minor as string),
       note: (row.note as string | null) ?? null,
     }));
@@ -188,7 +199,7 @@ export async function statementDocument(
 
     const lineRows = (await tx.execute(sql`
       SELECT kind::text AS kind, occurred_at, product_title, currency,
-             gross_minor, engineer_minor, note
+             gross_minor, slice_minor, engineer_minor, note
         FROM settlement_lines
        WHERE settlement_id = ${settlementId}
        ORDER BY occurred_at, id
@@ -203,6 +214,7 @@ export async function statementDocument(
         productTitle: line.product_title as string,
         currency: line.currency as string,
         grossMinor: BigInt(line.gross_minor as string),
+        sliceMinor: line.slice_minor == null ? null : BigInt(line.slice_minor as string),
         engineerMinor: BigInt(line.engineer_minor as string),
         note: (line.note as string | null) ?? null,
       })),

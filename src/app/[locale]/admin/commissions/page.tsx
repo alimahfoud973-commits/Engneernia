@@ -5,19 +5,9 @@ import { CommissionForm } from '@/components/commission-forms';
 import { formatMinor } from '@/components/money-display';
 import { requireOwner } from '@/auth/current';
 import { commissionOverview } from '@/finance/commissions';
+import { formatPercent } from '@/lib/labels';
 
 export const dynamic = 'force-dynamic';
-
-/**
- * Basis points as a person reads them: 8000 is "80", 6250 is "62.5".
- *
- * Trailing zeros are stripped only AFTER a decimal point — a blanket strip
- * would turn 10000 into "1" and put every engineer on a one percent rate as
- * far as the screen is concerned.
- */
-function formatPercent(bp: number): string {
-  return (bp / 100).toFixed(2).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
-}
 
 /**
  * Commission agreements, one engineer at a time (§11 — owner decision OPEN-15).

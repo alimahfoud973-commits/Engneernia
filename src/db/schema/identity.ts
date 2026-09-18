@@ -146,6 +146,13 @@ export const contributors = pgTable(
     settlementCode: text('settlement_code').notNull(),
 
     displayName: text('display_name').notNull(),
+    /**
+     * Which of the platform's four disciplines this engineer belongs to
+     * (migration 0053) — the SAME four the catalogue files products under, by
+     * foreign key, so the two can never drift into different spellings.
+     */
+    disciplineId: uuid('discipline_id'),
+    /** The narrower line they work in, free text. A different question. */
     specialization: text('specialization'),
     bio: text('bio'),
 
