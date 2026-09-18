@@ -68,6 +68,29 @@ describe('content security policy', () => {
   it('allows the same-origin iframe the PDF preview needs', () => {
     expect(directive(production, 'frame-src')).toBe("frame-src 'self'");
   });
+
+  it('upgrades insecure requests in production', () => {
+    expect(directive(production, 'upgrade-insecure-requests'))
+      .toBe('upgrade-insecure-requests');
+  });
+
+  /*
+   * AND NOT IN DEVELOPMENT — the one relaxation here that is about reachability
+   * rather than tooling.
+   *
+   * The directive is invisible on localhost, which the browser treats as
+   * trustworthy and exempts. It applies on every other host, so on
+   * `http://192.168.1.x:3000` — how a phone on the same Wi-Fi reaches a
+   * development server — the browser re-requests every script, stylesheet and
+   * font over https, the dev server speaks no TLS, and the page never
+   * hydrates. No error reaches the server log and no form ever submits.
+   *
+   * Every automated check in this repository talks to localhost, so nothing
+   * else in the suite can see this. This assertion is the whole guard.
+   */
+  it('does NOT upgrade in development, or the site is unreachable off localhost', () => {
+    expect(development).not.toContain('upgrade-insecure-requests');
+  });
 });
 
 describe('nonce', () => {

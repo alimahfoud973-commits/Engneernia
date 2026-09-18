@@ -42,11 +42,13 @@ export function newNonce(): string {
 /**
  * The policy for an HTML response.
  *
- * `isDevelopment` relaxes exactly two things, and only two: `'unsafe-eval'`,
- * which Next's hot-reload runtime requires, and a websocket connection for
- * that reload channel. Production gets neither. The split is here, in one
- * expression, so that what production actually sends can be read in one place
- * rather than inferred from a chain of conditions.
+ * `isDevelopment` relaxes exactly three things, and only three: `'unsafe-eval'`,
+ * which Next's hot-reload runtime requires; a websocket connection for that
+ * reload channel; and `upgrade-insecure-requests`, which is OMITTED in
+ * development for the reason written at the directive itself. Production gets
+ * all three. The split is here, in one expression, so that what production
+ * actually sends can be read in one place rather than inferred from a chain of
+ * conditions.
  */
 export function buildCsp(nonce: string, isDevelopment: boolean): string {
   const directives: Array<[string, string]> = [
@@ -90,7 +92,29 @@ export function buildCsp(nonce: string, isDevelopment: boolean): string {
     ['form-action', "'self'"],
     // Clickjacking, in the modern spelling. X-Frame-Options stays for old UAs.
     ['frame-ancestors', "'none'"],
-    ['upgrade-insecure-requests', ''],
+    /*
+     * PRODUCTION ONLY, AND THE REASON IS NOT TIDINESS.
+     *
+     * This directive tells the browser to re-request every subresource over
+     * https. On `localhost` that is invisible, because localhost is a
+     * "potentially trustworthy" origin and the browser exempts it. On ANY
+     * OTHER host it applies — including `http://192.168.1.x:3000`, which is
+     * how a phone on the same Wi-Fi reaches a development server.
+     *
+     * The failure is silent and total: every script, stylesheet and font is
+     * upgraded to https, the dev server speaks no TLS, each request dies with
+     * ERR_CONNECTION_RESET, React never hydrates, and the login button does
+     * nothing at all — no error, no network request, nothing in the server
+     * log. Only the browser console says why. It was found by opening the
+     * site from a second device, which is the only way it CAN be found:
+     * every automated check in this repository talks to localhost.
+     *
+     * Omitting it in development costs nothing. There is no https development
+     * server for it to protect, and production still sends it.
+     */
+    ...(isDevelopment
+      ? ([] as Array<[string, string]>)
+      : ([['upgrade-insecure-requests', '']] as Array<[string, string]>)),
   ];
 
   return directives
