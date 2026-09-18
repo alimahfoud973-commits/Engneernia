@@ -8,6 +8,7 @@ import Link from 'next/link';
  * this component would change what the owner can find, not what anyone can do.
  */
 const LINKS = [
+  { href: '/admin/products', label: 'الكتالوج' },
   { href: '/admin/payments', label: 'المدفوعات' },
   { href: '/admin/settlements', label: 'التسوية الشهرية' },
   { href: '/admin/commissions', label: 'اتفاقات العمولة' },

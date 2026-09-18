@@ -54,3 +54,14 @@ export const ORDER_STATUS_LABELS: Readonly<Record<string, string>> = {
   CANCELLED: 'ملغى',
   REFUNDED: 'مُسترجع',
 };
+
+export const PRODUCT_STATUS_LABELS: Readonly<Record<string, string>> = {
+  DRAFT: 'مسودّة',
+  SUBMITTED: 'مُرسَل للمراجعة',
+  IN_REVIEW: 'قيد المراجعة',
+  REVISION_REQUESTED: 'مطلوب تعديل',
+  APPROVED: 'معتمد — جاهز للنشر',
+  PUBLISHED: 'منشور',
+  UNPUBLISHED: 'غير منشور',
+  ARCHIVED: 'مؤرشف',
+};

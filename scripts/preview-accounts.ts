@@ -32,13 +32,44 @@ await sql`UPDATE users SET password_hash=${await argonHash(OWNER_PW)},
             email_verified_at=COALESCE(email_verified_at, now()), status='ACTIVE'
           WHERE id=${owner.id}`;
 
+/*
+ * RE-RUNNABLE. The first version used `ON CONFLICT (email) DO NOTHING` on the
+ * users, which meant a second run inserted nothing and then pointed a new
+ * contributor row at a user id that had never been created — a foreign-key
+ * violation that read as if the database were broken. Prior preview rows are
+ * removed first instead, in dependency order.
+ */
+const PREVIEW_EMAILS = ['engineer@preview.local', 'customer@preview.local', 'newbuyer@preview.local'];
+
+const priorUsers = await sql`SELECT id FROM users WHERE email = ANY(${PREVIEW_EMAILS})`;
+const priorIds = priorUsers.map((r) => r.id as string);
+if (priorIds.length > 0) {
+  await sql`DELETE FROM entitlements WHERE customer_id = ANY(${priorIds})`;
+  await sql`DELETE FROM orders WHERE customer_id = ANY(${priorIds})`;
+  const priorContribs = await sql`SELECT id FROM contributors WHERE user_id = ANY(${priorIds})`;
+  const contribIds = priorContribs.map((r) => r.id as string);
+  if (contribIds.length > 0) {
+    const priorProducts = await sql`
+      SELECT DISTINCT product_id FROM product_contributors WHERE contributor_id = ANY(${contribIds})`;
+    const productIds = priorProducts.map((r) => r.product_id as string);
+    await sql`DELETE FROM commission_agreements WHERE contributor_id = ANY(${contribIds})`;
+    await sql`DELETE FROM product_contributors WHERE contributor_id = ANY(${contribIds})`;
+    if (productIds.length > 0) {
+      await sql`DELETE FROM product_files WHERE product_id = ANY(${productIds})`;
+      await sql`DELETE FROM product_prices WHERE product_id = ANY(${productIds})`;
+      await sql`DELETE FROM products WHERE id = ANY(${productIds})`;
+    }
+    await sql`DELETE FROM contributors WHERE id = ANY(${contribIds})`;
+  }
+  await sql`DELETE FROM users WHERE id = ANY(${priorIds})`;
+}
+
 const engUser = randomUUID(), contrib = randomUUID(), prod = randomUUID(), buyer = randomUUID();
 const [disc] = await sql`SELECT id FROM disciplines WHERE slug = 'civil' LIMIT 1`;
 if (!disc) { console.error('No civil discipline. Run seed:catalog first.'); process.exit(1); }
 
 await sql`INSERT INTO users (id,email,password_hash,role,status,display_name,email_verified_at)
-          VALUES (${engUser},'engineer@preview.local',${await argonHash(USER_PW)},'CONTRIBUTOR','ACTIVE','م. سامر الحلبي',now())
-          ON CONFLICT (email) DO NOTHING`;
+          VALUES (${engUser},'engineer@preview.local',${await argonHash(USER_PW)},'CONTRIBUTOR','ACTIVE','م. سامر الحلبي',now())`;
 await sql`INSERT INTO contributors (id,user_id,public_slug,settlement_code,display_name,specialization,is_active)
           VALUES (${contrib},${engUser},${'preview-eng-'+t},${'PRV'+t},'م. سامر الحلبي','هندسة مدنية',true)`;
 await sql`INSERT INTO products (id,slug,title_ar,subtitle_ar,description_ar,discipline_id,file_type,status,currency,level,published_at)
@@ -50,22 +81,21 @@ await sql`INSERT INTO commission_agreements (contributor_id,model,engineer_bp,cu
           VALUES (${contrib},'PERCENTAGE',8000,'USD')`;
 
 await sql`INSERT INTO users (id,email,password_hash,role,status,display_name,country_code,email_verified_at)
-          VALUES (${buyer},'customer@preview.local',${await argonHash(USER_PW)},'CUSTOMER','ACTIVE','عميل المعاينة','SY',now())
-          ON CONFLICT (email) DO NOTHING`;
+          VALUES (${buyer},'customer@preview.local',${await argonHash(USER_PW)},'CUSTOMER','ACTIVE','عميل المعاينة','SY',now())`;
 
-const [order] = await sql`INSERT INTO orders (order_number,customer_id,status,currency,subtotal_minor,discount_minor,total_minor,paid_at,completed_at)
-          VALUES (${'PRV-'+t},${buyer},'COMPLETED','USD',3500,0,3500,now(),now()) RETURNING id`;
-if (!order) { console.error('Could not create the sample order.'); process.exit(1); }
-const [item] = await sql`INSERT INTO order_items
-  (order_id,product_id,title_snapshot,unit_price_minor,discount_minor,currency,
-   commission_model,engineer_bp,engineer_amount_minor,platform_amount_minor,tax_bp,tax_minor,net_minor,snapshot_taken_at)
-  VALUES (${order.id},${prod},'دليل تصميم الأساسات السطحية',3500,0,'USD','PERCENTAGE',8000,2800,700,0,0,3500,now())
-  RETURNING id`;
-if (!item) { console.error('Could not create the sample order item.'); process.exit(1); }
-await sql`INSERT INTO order_item_contributors
-  (order_item_id,contributor_id,share_bp,slice_minor,amount_minor,platform_amount_minor,commission_model,engineer_bp,currency,occurred_at)
-  VALUES (${item.id},${contrib},10000,3500,2800,700,'PERCENTAGE',8000,'USD',now())`;
-await sql`INSERT INTO entitlements (customer_id,product_id,order_item_id) VALUES (${buyer},${prod},${item.id})`;
+/*
+ * NO MANUFACTURED SALE HERE.
+ *
+ * An earlier version inserted an order, an order item and a contributor split
+ * directly — which produced a sale the DOUBLE-ENTRY LEDGER had never heard of.
+ * The settlement run then found earnings it could not itemise and added a
+ * balancing line reading "تسوية فرق غير مفصّل" to every statement, which looks
+ * exactly like a defect in the settlement engine and is not one.
+ *
+ * The ledger is the financial authority (P6), so nothing may create a sale
+ * except the sale path. Buy the product through the site, or approve a payment
+ * in /admin/payments, and every figure downstream follows correctly.
+ */
 
 console.log(JSON.stringify({
   owner: { email: owner.email, password: OWNER_PW, totpSecret: secret, codeNow: generateTotp(secret) },

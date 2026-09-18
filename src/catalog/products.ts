@@ -22,6 +22,145 @@ import { NotFoundError, RuleViolationError } from '@/lib/errors';
  * performed, or performed without being recorded.
  */
 
+/**
+ * ===========================================================================
+ * CREATE A PRODUCT (specification §26, §27)
+ * ===========================================================================
+ * Owner-only, and it creates a DRAFT and nothing else. A product is not
+ * publishable at birth: it has no price, no credited engineer and no file, and
+ * `publishBlockers` refuses every one of those absences. That is deliberate —
+ * the workflow exists so that a half-built product cannot reach a customer,
+ * and a create that jumped straight to PUBLISHED would be a way around it.
+ *
+ * THE SLUG IS TYPED, NOT DERIVED. Deriving it from an Arabic title would
+ * produce either a percent-encoded URL nobody can read or a transliteration
+ * nobody agrees on, and the slug is permanent: it is the product's address.
+ * So the owner chooses it, and the database's unique index is what makes it
+ * unique — not a check here that two concurrent creates could both pass.
+ * ===========================================================================
+ */
+export interface CreateProductInput {
+  readonly slug: string;
+  readonly titleAr: string;
+  readonly subtitleAr?: string | null;
+  readonly descriptionAr?: string | null;
+  readonly disciplineId: string;
+  readonly categoryId?: string | null;
+  readonly fileType: 'PDF' | 'EXCEL' | 'CAD' | 'REVIT_BIM' | 'ARCHIVE' | 'TEMPLATE' | 'PROJECT' | 'OTHER';
+  readonly level?: 'BEGINNER' | 'INTERMEDIATE' | 'ADVANCED' | null;
+  readonly currency: string;
+  readonly softwareTags?: readonly string[];
+}
+
+const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+export async function createProduct(
+  actor: Actor,
+  input: CreateProductInput,
+): Promise<{ productId: string; slug: string }> {
+  if (!isOwner(actor)) {
+    throw new RuleViolationError('إنشاء المنتجات من صلاحية مالك المنصة وحده');
+  }
+
+  const slug = input.slug.trim().toLowerCase();
+  if (!SLUG_PATTERN.test(slug)) {
+    throw new RuleViolationError(
+      'العنوان اللطيف يُكتب بحروف لاتينية صغيرة وأرقام وشرطات فقط (مثال: foundation-design-guide)',
+      { slug: input.slug },
+    );
+  }
+  if (input.titleAr.trim() === '') {
+    throw new RuleViolationError('عنوان المنتج مطلوب');
+  }
+
+  return withActor(actor, async (tx) => {
+    const [created] = await tx
+      .insert(products)
+      .values({
+        slug,
+        titleAr: input.titleAr.trim(),
+        subtitleAr: input.subtitleAr?.trim() || null,
+        descriptionAr: input.descriptionAr?.trim() || null,
+        disciplineId: input.disciplineId,
+        categoryId: input.categoryId || null,
+        fileType: input.fileType,
+        level: input.level || null,
+        currency: input.currency,
+        softwareTags: [...(input.softwareTags ?? [])],
+        // Born a draft, always. Everything else is a later, checked transition.
+        status: 'DRAFT',
+        createdBy: actor.kind === 'USER' ? actor.userId : null,
+      })
+      .returning({ id: products.id, slug: products.slug });
+
+    if (!created) {
+      // RLS refuses a write by returning zero rows rather than raising.
+      throw new RuleViolationError('رُفض إنشاء المنتج');
+    }
+
+    await recordAudit(tx, actor, {
+      action: 'PRODUCT_CREATED',
+      entityType: 'product',
+      entityId: created.id,
+      after: { slug: created.slug, titleAr: input.titleAr, disciplineId: input.disciplineId },
+    });
+
+    return { productId: created.id, slug: created.slug };
+  });
+}
+
+/** Edit the descriptive fields of a product that is not yet published. */
+export async function updateProductDetails(
+  actor: Actor,
+  input: {
+    productId: string;
+    titleAr: string;
+    subtitleAr?: string | null;
+    descriptionAr?: string | null;
+    level?: 'BEGINNER' | 'INTERMEDIATE' | 'ADVANCED' | null;
+    softwareTags?: readonly string[];
+  },
+): Promise<void> {
+  if (!isOwner(actor)) {
+    throw new RuleViolationError('تعديل المنتجات من صلاحية مالك المنصة وحده');
+  }
+
+  await withActor(actor, async (tx) => {
+    const [before] = await tx
+      .select({ titleAr: products.titleAr, status: products.status })
+      .from(products)
+      .where(eq(products.id, input.productId))
+      .limit(1);
+
+    if (!before) throw new NotFoundError('المنتج غير موجود');
+
+    const updated = await tx
+      .update(products)
+      .set({
+        titleAr: input.titleAr.trim(),
+        subtitleAr: input.subtitleAr?.trim() || null,
+        descriptionAr: input.descriptionAr?.trim() || null,
+        level: input.level || null,
+        softwareTags: [...(input.softwareTags ?? [])],
+        updatedAt: new Date(),
+      })
+      .where(eq(products.id, input.productId))
+      .returning({ id: products.id });
+
+    if (updated.length === 0) {
+      throw new RuleViolationError('لم يُطبَّق تعديل المنتج', { productId: input.productId });
+    }
+
+    await recordAudit(tx, actor, {
+      action: 'PRODUCT_UPDATED',
+      entityType: 'product',
+      entityId: input.productId,
+      before: { titleAr: before.titleAr },
+      after: { titleAr: input.titleAr },
+    });
+  });
+}
+
 /** The price in force right now: the single open row (effective_to IS NULL). */
 export async function currentPrice(tx: Transaction, productId: string): Promise<Money | null> {
   const [row] = await tx
