@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { getPublicSettings } from '@/platform/settings';
 import { BrandMark } from '@/components/brand-mark';
 import { currentActor } from '@/auth/current';
+import { isOwner } from '@/authz/actor';
 import { unreadNotificationCount } from '@/notifications/queries';
 
 const DISCIPLINE_NAV = [
@@ -24,6 +25,10 @@ export async function SiteHeader() {
   const actor = await currentActor();
   const unread = await unreadNotificationCount(actor);
   const signedIn = actor.kind === 'USER';
+  // The same predicate `requireOwner` applies, so the link and the gate cannot
+  // disagree. It is rendered on the server: for anyone else it is not hidden,
+  // it is absent from the response.
+  const owner = isOwner(actor);
 
   return (
     <header className="sticky top-0 z-40 border-b border-[var(--color-line)] bg-[var(--color-surface)]/95 backdrop-blur">
@@ -59,6 +64,15 @@ export async function SiteHeader() {
                 {unread}
               </span>
             ) : null}
+          </Link>
+        ) : null}
+
+        {owner ? (
+          <Link
+            href="/admin"
+            className="order-last rounded-sm px-2.5 py-1.5 text-sm text-[var(--color-ink-soft)] transition-colors hover:bg-[var(--color-surface-muted)] hover:text-[var(--color-ink)] sm:order-none"
+          >
+            لوحة الإدارة
           </Link>
         ) : null}
 

@@ -142,6 +142,15 @@ async function get(page, path) {
   };
 }
 
+/**
+ * Whether the site header links to the admin console. Matched on the raw HTML,
+ * like the markers: a link merely hidden by CSS would still count as offered.
+ */
+async function offersConsole(page) {
+  const res = await page.request.get(`${BASE}/`);
+  return /href="\/admin"/.test(await res.text());
+}
+
 // ---------------------------------------------------------------------------
 console.log('\n1. SECURITY HEADERS');
 {
@@ -177,6 +186,9 @@ console.log('\n2. NOBODY UNAUTHENTICATED REACHES A FINANCIAL SURFACE');
   // Shape check, not authorisation: a malformed id must not become a 500.
   const malformed = await get(page, '/api/proofs/not-a-uuid');
   check(malformed.status === 404, 'a malformed id is 404, not a server error', String(malformed.status));
+  const door = await get(page, '/admin');
+  check(door.landedOn.startsWith('/login'), '/admin sends a visitor to sign in', door.landedOn);
+  check(!(await offersConsole(page)), 'the header offers a visitor no link to the console');
   await ctx.close();
 }
 
@@ -197,6 +209,9 @@ console.log('\n3. A SIGNED-IN ENGINEER REACHES ONLY THEIR OWN');
   check(proof.status === 404, "someone else's receipt is 404", String(proof.status));
   const own = await get(page, '/account/earnings');
   check(own.status === 200, 'the engineer still reaches their own earnings page');
+  const door = await get(page, '/admin');
+  check(!door.landedOn.startsWith('/admin'), '/admin is refused to an engineer', door.landedOn);
+  check(!(await offersConsole(page)), 'the header offers an engineer no link to the console');
   await ctx.close();
 }
 
@@ -216,6 +231,11 @@ console.log('\n4. THE OWNER DOES REACH THEM (POSITIVE CONTROL)');
   check(finance.markers.length > 0, 'the finance report really does contain figures', finance.markers.join(', '));
   const statement = await get(page, `/api/settlements/${env.PROBE_FOREIGN_SETTLEMENT_ID}/statement`);
   check(statement.status === 200, 'the owner reaches any settlement statement', String(statement.status));
+  const door = await get(page, '/admin');
+  check(door.landedOn === '/admin/products', '/admin takes the owner to the catalogue', door.landedOn);
+  // The positive control for the two "no link" checks above: without it they
+  // would pass against a header that never renders the link for anybody.
+  check(await offersConsole(page), 'the header offers the owner a link to the console');
   await ctx.close();
 }
 
