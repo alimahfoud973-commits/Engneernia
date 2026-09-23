@@ -70,18 +70,20 @@ export default async function DisciplinePage({
           </h2>
           <ul className="flex flex-wrap gap-2">
             {discipline.categories.map((category) => (
-              <li
-                key={category.slug}
-                className={
-                  category.productCount > 0
-                    ? 'rounded-[var(--radius-card)] border border-[var(--color-accent)] bg-[var(--color-accent-soft)] px-3 py-1.5 text-sm text-[var(--color-accent-ink)]'
-                    : 'rounded-[var(--radius-card)] border border-[var(--color-line)] px-3 py-1.5 text-sm text-[var(--color-ink-faint)]'
-                }
-              >
-                {category.nameAr}
-                {category.productCount > 0 ? (
-                  <span className="ms-1.5 tabular-nums text-xs">({category.productCount})</span>
-                ) : null}
+              <li key={category.slug}>
+                <Link
+                  href={`/search?discipline=${discipline.slug}&category=${category.slug}`}
+                  className={
+                    category.productCount > 0
+                      ? 'block rounded-[var(--radius-card)] border border-[var(--color-accent)] bg-[var(--color-accent-soft)] px-3 py-1.5 text-sm text-[var(--color-accent-ink)]'
+                      : 'block rounded-[var(--radius-card)] border border-[var(--color-line)] px-3 py-1.5 text-sm text-[var(--color-ink-faint)]'
+                  }
+                >
+                  {category.nameAr}
+                  {category.productCount > 0 ? (
+                    <span className="ms-1.5 tabular-nums text-xs">({category.productCount})</span>
+                  ) : null}
+                </Link>
               </li>
             ))}
           </ul>
