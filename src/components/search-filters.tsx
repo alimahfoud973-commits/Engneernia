@@ -216,6 +216,18 @@ export function SortControl({ filters }: { filters: SearchFilters }) {
   );
 }
 
+/** How many filters narrow the results — the "N فلتر مُفعّل" count. */
+export function activeFilterCount(filters: SearchFilters): number {
+  return (
+    (filters.discipline ? 1 : 0) +
+    (filters.category ? 1 : 0) +
+    (filters.fileTypes?.length ?? 0) +
+    (filters.levels?.length ?? 0) +
+    (filters.software?.length ?? 0) +
+    (filters.price ? 1 : 0)
+  );
+}
+
 export function Pagination({
   filters,
   page,
@@ -231,6 +243,7 @@ export function Pagination({
     const params = new URLSearchParams();
     if (filters.q) params.set('q', filters.q);
     if (filters.discipline) params.set('discipline', filters.discipline);
+    if (filters.category) params.set('category', filters.category);
     for (const type of filters.fileTypes ?? []) params.append('type', type);
     for (const level of filters.levels ?? []) params.append('level', level);
     for (const software of filters.software ?? []) params.append('software', software);

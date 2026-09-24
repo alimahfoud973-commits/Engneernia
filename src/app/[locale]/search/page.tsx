@@ -1,7 +1,9 @@
 import { setRequestLocale } from 'next-intl/server';
 import { SiteHeader, SiteFooter } from '@/components/site-chrome';
 import { ProductGrid } from '@/components/product-card';
-import { Pagination, SearchFiltersPanel, SortControl } from '@/components/search-filters';
+import {
+  Pagination, SearchFiltersPanel, SortControl, activeFilterCount,
+} from '@/components/search-filters';
 import { searchCatalogue, type SearchFilters, type SortOption } from '@/catalog/search';
 import type { Metadata } from 'next';
 
@@ -55,12 +57,7 @@ export default async function SearchPage({
 
   const results = await searchCatalogue(filters);
 
-  const activeCount =
-    (filters.discipline ? 1 : 0) +
-    (filters.fileTypes?.length ?? 0) +
-    (filters.levels?.length ?? 0) +
-    (filters.software?.length ?? 0) +
-    (filters.price ? 1 : 0);
+  const activeCount = activeFilterCount(filters);
 
   return (
     <>
