@@ -68,7 +68,7 @@ export function PaymentMethodPicker({
   if (methods.length === 0) {
     return (
       <p className="rounded-[var(--radius-card)] border border-[var(--color-warn)] bg-[var(--color-warn-soft)] px-4 py-3 text-sm text-[var(--color-warn)]">
-        لا تتوفر طريقة دفع لهذا الطلب حالياً. تواصل معنا وسنساعدك.
+        لا تتوفر طريقة دفع لهذا الطلب حالياً.
       </p>
     );
   }
@@ -95,7 +95,7 @@ export function PaymentMethodPicker({
               <span className="text-sm font-semibold">{method.displayNameAr}</span>
               <span className="text-xs text-[var(--color-ink-soft)]">
                 {method.type === 'ASSISTED'
-                  ? 'سنتواصل معك لإتمام الدفع'
+                  ? 'تُفتح محادثة واتساب معنا لإتمام الدفع'
                   : method.requiresProof
                     ? 'تحويل يدوي — يتطلب رفع إيصال'
                     : 'دفع مباشر'}

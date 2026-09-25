@@ -16,6 +16,7 @@ const LINKS = [
   { href: '/admin/commissions', label: 'اتفاقات العمولة' },
   { href: '/admin/finance', label: 'التقرير المالي' },
   { href: '/admin/adjustments', label: 'قيود التصحيح' },
+  { href: '/admin/settings', label: 'الإعدادات' },
 ] as const;
 
 export function AdminNav({ current }: { current: string }) {

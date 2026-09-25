@@ -1,5 +1,5 @@
 import 'server-only';
-import { eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 import { paymentMethods } from '@/db/schema';
 import type { Transaction } from '@/db/actor-context';
 import { getPublicSettings } from '@/platform/settings';
@@ -9,6 +9,9 @@ import type {
 import {
   ManualTransferProvider, UnconfiguredGatewayProvider, WhatsAppAssistProvider, manualMethodGaps,
 } from './providers';
+import {
+  DEFAULT_WHATSAPP_TEMPLATE, fillWhatsappTemplate, normalizeWhatsappNumber, whatsappLink,
+} from './whatsapp';
 
 /**
  * ===========================================================================
@@ -134,6 +137,40 @@ export function methodGaps(config: PaymentMethodConfig, whatsappPhone: string): 
     case 'GATEWAY':
       return ['لا توجد بوابة دفع إلكترونية مُعدّة'];
   }
+}
+
+/**
+ * "Having trouble with payment? Contact us on WhatsApp" (specification §23 —
+ * W2): the permanent fallback, as a ready link for this order — or null when
+ * the owner has set no usable number, so nothing is promised that cannot be
+ * reached.
+ *
+ * The number is today's setting, never one copied onto the order: WhatsApp is
+ * how a customer reaches the platform, and an old order should reach whoever
+ * answers now. The message is the owner's own template on the active
+ * WhatsApp method when there is one.
+ */
+export async function whatsappHelpLink(
+  tx: Transaction,
+  context: PaymentContext,
+): Promise<string | null> {
+  const number = normalizeWhatsappNumber((await getPublicSettings()).whatsapp);
+  if (number === null) return null;
+
+  const [assisted] = await tx
+    .select({ template: paymentMethods.supportMessageAr })
+    .from(paymentMethods)
+    .where(and(eq(paymentMethods.type, 'ASSISTED'), eq(paymentMethods.isActive, true)))
+    .orderBy(asc(paymentMethods.sortOrder))
+    .limit(1);
+
+  const message = fillWhatsappTemplate(assisted?.template ?? DEFAULT_WHATSAPP_TEMPLATE, {
+    items: context.itemTitles,
+    order: context.orderNumber,
+    amountMinor: context.amountMinor,
+    currency: context.currency,
+  });
+  return whatsappLink(number, message);
 }
 
 /**

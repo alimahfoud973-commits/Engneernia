@@ -4,7 +4,7 @@ import {
   entitlements, orderItems, orders, paymentMethods, paymentProofs, payments, products,
 } from '@/db/schema';
 import { withActor } from '@/db/actor-context';
-import { availableMethods } from '@/payments/registry';
+import { availableMethods, whatsappHelpLink } from '@/payments/registry';
 import type { Actor } from '@/authz/actor';
 import type { PaymentContext } from '@/payments/port';
 
@@ -60,11 +60,14 @@ export async function checkoutView(actor: Actor, orderId: string) {
     };
 
     const methods = await availableMethods(tx, context);
+    // §23: the WhatsApp fallback for this order, when a number is set (W2).
+    const whatsappHelp = await whatsappHelpLink(tx, context);
 
     return {
       order,
       items,
       payment: paymentRows[0] ?? null,
+      whatsappHelp,
       methods: methods.map((m) => ({
         id: m.config.id,
         code: m.config.code,

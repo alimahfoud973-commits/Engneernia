@@ -96,13 +96,20 @@ export async function choosePaymentMethodAction(
 
   const actor = await requireActor(`/checkout/${parsed.data.orderId}`);
 
+  let initiation: Awaited<ReturnType<typeof placeOrder>>;
   try {
-    await placeOrder(actor, parsed.data);
+    initiation = await placeOrder(actor, parsed.data);
   } catch (error) {
     return { error: toMessage(error) };
   }
 
   revalidatePath(`/checkout/${parsed.data.orderId}`);
+
+  // WhatsApp assistance hands the customer to a person (§23). The link was
+  // built for this order; returning without it left the customer on a page
+  // promising a chat that never opened (W2). The order page keeps a link too.
+  if (initiation.kind === 'ASSISTED') redirect(initiation.url);
+
   return { error: null, ok: true };
 }
 

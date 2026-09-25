@@ -1,6 +1,9 @@
 import type {
   InitiationResult, PaymentContext, PaymentMethodConfig, PaymentOutcome, PaymentProvider,
 } from './port';
+import {
+  DEFAULT_WHATSAPP_TEMPLATE, fillWhatsappTemplate, normalizeWhatsappNumber, whatsappLink,
+} from './whatsapp';
 
 /**
  * What a manual method still lacks before a customer can be sent to pay by
@@ -80,36 +83,34 @@ export class WhatsAppAssistProvider implements PaymentProvider {
   readonly code = 'whatsapp';
   readonly type = 'ASSISTED' as const;
 
-  private readonly phone: string;
+  /** The number as wa.me needs it, or null when none usable is set (W2). */
+  private readonly phone: string | null;
 
   constructor(phone: string) {
-    this.phone = phone.replace(/[^\d]/g, '');
+    this.phone = normalizeWhatsappNumber(phone);
   }
 
   supports(): boolean {
-    // Offered only when the owner has actually set a number.
-    return this.phone.length >= 8;
+    // Offered only when the owner has set a number a chat can reach — a
+    // local "0933…" or a word in the setting would build a link to nobody.
+    return this.phone !== null;
   }
 
   async initiate(
     config: PaymentMethodConfig,
     context: PaymentContext,
   ): Promise<InitiationResult> {
-    const template =
-      config.supportMessageAr ??
-      'مرحباً، أرغب بشراء:\n{{items}}\nرقم الطلب: {{order}}\nالمبلغ: {{amount}} {{currency}}';
+    if (this.phone === null) {
+      throw new Error('WhatsApp assistance has no usable number; supports() should have refused it.');
+    }
+    const messageAr = fillWhatsappTemplate(config.supportMessageAr ?? DEFAULT_WHATSAPP_TEMPLATE, {
+      items: context.itemTitles,
+      order: context.orderNumber,
+      amountMinor: context.amountMinor,
+      currency: context.currency,
+    });
 
-    const messageAr = template
-      .replace('{{items}}', context.itemTitles.join('، '))
-      .replace('{{order}}', context.orderNumber)
-      .replace('{{amount}}', formatMajor(context.amountMinor))
-      .replace('{{currency}}', context.currency);
-
-    return {
-      kind: 'ASSISTED',
-      url: `https://wa.me/${this.phone}?text=${encodeURIComponent(messageAr)}`,
-      messageAr,
-    };
+    return { kind: 'ASSISTED', url: whatsappLink(this.phone, messageAr), messageAr };
   }
 }
 
@@ -135,11 +136,4 @@ export class UnconfiguredGatewayProvider implements PaymentProvider {
       'No payment gateway is configured. Enabling one requires a merchant account and a callback implementation.',
     );
   }
-}
-
-/** Display helper for the WhatsApp message body. Never used in a calculation. */
-function formatMajor(amountMinor: bigint): string {
-  const whole = amountMinor / 100n;
-  const fraction = amountMinor % 100n;
-  return `${whole}.${String(fraction).padStart(2, '0')}`;
 }

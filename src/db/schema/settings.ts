@@ -1,4 +1,4 @@
-import { jsonb, pgTable, text, uuid } from 'drizzle-orm/pg-core';
+import { boolean, jsonb, pgTable, text, uuid } from 'drizzle-orm/pg-core';
 import { updatedAt } from './columns';
 
 /**
@@ -18,6 +18,11 @@ export const settings = pgTable('settings', {
   value: jsonb('value').notNull(),
   /** Owner-facing description, so the admin screen explains itself. */
   descriptionAr: text('description_ar'),
+  /**
+   * Readable without authentication (migration 0017, where RLS enforces it).
+   * Declared here so a writer can state it; the column always existed.
+   */
+  isPublic: boolean('is_public').notNull().default(false),
   updatedBy: uuid('updated_by'),
   updatedAt: updatedAt(),
 });

@@ -1,6 +1,6 @@
 import 'server-only';
 import { cache } from 'react';
-import { inArray } from 'drizzle-orm';
+import { inArray, sql } from 'drizzle-orm';
 import { settings } from '@/db/schema';
 import { withActor } from '@/db/actor-context';
 import { GUEST } from '@/authz/actor';
@@ -54,14 +54,25 @@ const KEYS = [
 
 export const getPublicSettings = cache(async (): Promise<PublicSettings> => {
   try {
+    /*
+     * READ AS TEXT, PARSED ONCE (Stage 2 audit, W2).
+     *
+     * Selecting the jsonb column through Drizzle parses it twice: the driver
+     * already returns `"963933123456"` as the string 963933123456, and
+     * Drizzle's jsonb decoder then runs JSON.parse on that string again —
+     * turning it into a NUMBER. Every check below asks for a string, so a
+     * WhatsApp number stored exactly as wa.me needs it was read as absent and
+     * the assistance silently vanished. The text form is parsed here, once,
+     * so a string setting stays a string whatever it looks like.
+     */
     const rows = await withActor(GUEST, (tx) =>
       tx
-        .select({ key: settings.key, value: settings.value })
+        .select({ key: settings.key, json: sql<string>`${settings.value}::text` })
         .from(settings)
         .where(inArray(settings.key, [...KEYS])),
     );
 
-    const map = new Map(rows.map((row) => [row.key, row.value]));
+    const map = new Map(rows.map((row) => [row.key, JSON.parse(row.json) as unknown]));
     const str = (key: string, fallback: string) =>
       typeof map.get(key) === 'string' ? (map.get(key) as string) : fallback;
     const num = (key: string, fallback: number) =>

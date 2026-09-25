@@ -129,7 +129,7 @@ try {
     console.log(`\nNOT OFFERED TO BUYERS until completed: ${incomplete.map((r) => r.code).join(', ')}`);
     console.log('Fill in the account details at /admin/payment-methods before taking real money.');
   }
-  console.log('WhatsApp assistance is offered only once support.whatsapp is set in settings.');
+  console.log('WhatsApp assistance is offered only once a number is set at /admin/settings.');
 } catch (error) {
   console.error(`Payment method seeding failed: ${(error as Error).message}`);
   process.exitCode = 1;

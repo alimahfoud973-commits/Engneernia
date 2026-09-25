@@ -48,7 +48,7 @@ export default async function CheckoutPage({
   // covers both absent and not-yours, indistinguishably.
   if (!view) notFound();
 
-  const { order, items, payment, methods } = view;
+  const { order, items, payment, methods, whatsappHelp } = view;
   const isSettled = order.status === 'PAID' || order.status === 'COMPLETED';
   // A free order is taken, not paid for: no method to choose, nothing to confirm.
   const isFree = order.totalMinor === 0n;
@@ -126,11 +126,15 @@ export default async function CheckoutPage({
                   <p className="technical-term text-sm font-semibold">{payment.accountDetailsAr}</p>
                 </div>
               ) : null}
-              <p className="rounded-[var(--radius-card)] border border-dashed border-[var(--color-line-strong)] px-4 py-2.5 text-sm">
-                اكتب رقم الطلب{' '}
-                <span className="technical-term font-bold">{order.orderNumber}</span>{' '}
-                في خانة البيان عند التحويل.
-              </p>
+              {/* A transfer to annotate exists only where there is an account to
+                  pay into or a receipt to send — not for WhatsApp assistance (W2). */}
+              {payment.accountDetailsAr || payment.requiresProof ? (
+                <p className="rounded-[var(--radius-card)] border border-dashed border-[var(--color-line-strong)] px-4 py-2.5 text-sm">
+                  اكتب رقم الطلب{' '}
+                  <span className="technical-term font-bold">{order.orderNumber}</span>{' '}
+                  في خانة البيان عند التحويل.
+                </p>
+              ) : null}
             </div>
 
             {payment.requiresProof && order.status !== 'PROOF_SUBMITTED' ? (
@@ -150,6 +154,22 @@ export default async function CheckoutPage({
             )}
           </section>
         )}
+
+        {/* §23: the permanent fallback, wherever the order still waits for
+            payment and the owner has set a WhatsApp number (W2). */}
+        {!isSettled && !isFree && whatsappHelp ? (
+          <section className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-surface)] p-5">
+            <p className="text-sm font-semibold">تواجه صعوبة في الدفع؟</p>
+            <a
+              href={whatsappHelp}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="rounded-[var(--radius-card)] bg-[var(--color-accent)] px-4 py-2 text-sm font-semibold text-[var(--color-accent-contrast)]"
+            >
+              تواصل معنا عبر واتساب
+            </a>
+          </section>
+        ) : null}
 
         {order.adminNote ? (
           <p className="rounded-[var(--radius-card)] border border-[var(--color-danger)] bg-[var(--color-danger-soft)] px-4 py-3 text-sm text-[var(--color-danger)]">
