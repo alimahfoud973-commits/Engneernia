@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { getPublicSettings } from '@/platform/settings';
 import { BrandMark } from '@/components/brand-mark';
 import { currentActor } from '@/auth/current';
-import { isOwner } from '@/authz/actor';
+import { isOwner, type Actor } from '@/authz/actor';
 import { unreadNotificationCount } from '@/notifications/queries';
 
 const DISCIPLINE_NAV = [
@@ -11,6 +11,18 @@ const DISCIPLINE_NAV = [
   { slug: 'architecture', label: 'معمارية' },
   { slug: 'mechanical', label: 'ميكانيكية' },
 ] as const;
+
+/**
+ * The header's way in: sign-in for a visitor, the account for anyone signed
+ * in. Same test as the notifications link, so the two cannot disagree. A
+ * session still owing its second factor counts as signed in; `/account` sends
+ * it to the challenge, which is the step it actually has to take.
+ */
+export function accountEntry(actor: Actor): { href: '/login' | '/account'; label: string } {
+  return actor.kind === 'USER'
+    ? { href: '/account', label: 'الحساب' }
+    : { href: '/login', label: 'تسجيل الدخول' };
+}
 
 /**
  * The brand comes from the settings table, not from a constant, so the owner
@@ -29,6 +41,7 @@ export async function SiteHeader() {
   // disagree. It is rendered on the server: for anyone else it is not hidden,
   // it is absent from the response.
   const owner = isOwner(actor);
+  const entry = accountEntry(actor);
 
   return (
     <header className="sticky top-0 z-40 border-b border-[var(--color-line)] bg-[var(--color-surface)]/95 backdrop-blur">
@@ -49,6 +62,13 @@ export async function SiteHeader() {
             </Link>
           ))}
         </nav>
+
+        <Link
+          href={entry.href}
+          className="order-last rounded-sm px-2.5 py-1.5 text-sm font-semibold text-[var(--color-accent-ink)] transition-colors hover:bg-[var(--color-surface-muted)] sm:order-none"
+        >
+          {entry.label}
+        </Link>
 
         {signedIn ? (
           <Link
