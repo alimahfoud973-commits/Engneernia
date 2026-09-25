@@ -1,9 +1,11 @@
 import 'server-only';
-import { and, desc, eq, isNull, sql } from 'drizzle-orm';
-import { commissionAgreements, productContributors, productPrices } from '@/db/schema';
+import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
+import {
+  commissionAgreements, contributors, productContributors, productPrices, products,
+} from '@/db/schema';
 import type { Transaction } from '@/db/actor-context';
 import { extractTax, type TaxBreakdown } from '@/lib/money/tax';
-import { MoneyInvariantError, RuleViolationError } from '@/lib/errors';
+import { MoneyInvariantError, RuleViolationError, ValidationError } from '@/lib/errors';
 import { money, subtract, type Money } from '@/lib/money/money';
 import {
   computeCommissionSnapshot, type CommissionAgreement, type CommissionModel,
@@ -114,51 +116,240 @@ function toAgreement(row: typeof commissionAgreements.$inferSelect): CommissionA
   }
 }
 
+type AgreementRow = typeof commissionAgreements.$inferSelect;
+
 /**
- * The agreement in force RIGHT NOW for this product.
+ * The agreement in force RIGHT NOW for this product, chosen from rows already
+ * read — or null when there is none.
  *
  * "In force" means the open row (effective_to IS NULL), which is what the
  * temporal table guarantees exactly one of per scope. A product-scoped row
  * wins over the contributor's default (§11).
+ *
+ * The one rule both the sale and the sale-readiness check below apply, so the
+ * two can never disagree about which agreement governs a slice.
  */
+function pickAgreement(
+  rows: readonly AgreementRow[],
+  contributorId: string,
+  productId: string,
+): AgreementRow | null {
+  const open = rows.filter((r) => r.contributorId === contributorId && r.effectiveTo === null);
+  const override = open.find((r) => r.productId === productId);
+  if (override) return override;
+
+  const defaults = open
+    .filter((r) => r.productId === null)
+    .sort((a, b) => b.effectiveFrom.getTime() - a.effectiveFrom.getTime());
+  return defaults[0] ?? null;
+}
+
 async function findAgreement(
   tx: Transaction,
   contributorId: string,
   productId: string,
-): Promise<typeof commissionAgreements.$inferSelect> {
-  const [override] = await tx
+): Promise<AgreementRow> {
+  const rows = await tx
     .select()
     .from(commissionAgreements)
     .where(
       and(
         eq(commissionAgreements.contributorId, contributorId),
-        eq(commissionAgreements.productId, productId),
         isNull(commissionAgreements.effectiveTo),
+        or(isNull(commissionAgreements.productId), eq(commissionAgreements.productId, productId)),
       ),
-    )
-    .limit(1);
+    );
 
-  if (override) return override;
-
-  const [fallback] = await tx
-    .select()
-    .from(commissionAgreements)
-    .where(
-      and(
-        eq(commissionAgreements.contributorId, contributorId),
-        isNull(commissionAgreements.productId),
-        isNull(commissionAgreements.effectiveTo),
-      ),
-    )
-    .orderBy(desc(commissionAgreements.effectiveFrom))
-    .limit(1);
-
-  if (fallback) return fallback;
+  const agreement = pickAgreement(rows, contributorId, productId);
+  if (agreement) return agreement;
 
   throw new RuleViolationError(
     'لا يوجد اتفاق عمولة سارٍ لهذا المنتج — لا يمكن إتمام البيع',
     { contributorId, productId },
   );
+}
+
+/**
+ * ===========================================================================
+ * CAN THIS PRODUCT BE SOLD RIGHT NOW? (Stage 2 buyer audit, F2)
+ * ===========================================================================
+ * `resolveTermsForSale` refuses a sale whose engineer has no agreement, or one
+ * in another currency — but it runs when the owner APPROVES a payment, after
+ * the customer has already transferred the money. This asks the same question
+ * earlier, so a product that would be refused at approval is never offered.
+ *
+ * Same choice of agreement (`pickAgreement`), same validation (`toAgreement`,
+ * then `computeCommissionSnapshot`, which is where the currency rule lives),
+ * same price row (the open one). It reports instead of throwing, one entry per
+ * engineer, so the owner's checklist can name who is missing terms.
+ *
+ * A FREE PRODUCT HAS NOTHING TO RESOLVE. At a price of zero no payment is
+ * approved and no commission is computed (F1, 0054), so no agreement is
+ * required. Raising the price is what brings the requirement in — and that
+ * change is guarded by `keepPublishedSellable` below.
+ *
+ * No price at all is not reported here: `publishBlockers` already refuses it.
+ *
+ * Read in three set-based queries whatever the number of products, because
+ * changing one engineer's default re-checks every product they are credited
+ * on — one query per product made that seconds for a large catalogue.
+ * ===========================================================================
+ */
+export type SaleBlockerReason = 'NO_AGREEMENT' | 'CURRENCY_MISMATCH' | 'INVALID_AGREEMENT';
+
+export interface SaleBlocker {
+  readonly contributorId: string;
+  readonly reason: SaleBlockerReason;
+  readonly message: string;
+}
+
+export async function productSaleBlockers(
+  tx: Transaction,
+  productId: string,
+): Promise<readonly SaleBlocker[]> {
+  return (await saleBlockersByProduct(tx, [productId])).get(productId) ?? [];
+}
+
+async function saleBlockersByProduct(
+  tx: Transaction,
+  productIds: readonly string[],
+): Promise<ReadonlyMap<string, readonly SaleBlocker[]>> {
+  const result = new Map<string, SaleBlocker[]>();
+  if (productIds.length === 0) return result;
+
+  const prices = await tx
+    .select({
+      productId: productPrices.productId,
+      amountMinor: productPrices.amountMinor,
+      currency: productPrices.currency,
+    })
+    .from(productPrices)
+    .where(and(inArray(productPrices.productId, [...productIds]), isNull(productPrices.effectiveTo)));
+
+  const paid = new Map(prices.filter((p) => p.amountMinor > 0n).map((p) => [p.productId, p]));
+  if (paid.size === 0) return result;
+  const paidIds = [...paid.keys()];
+
+  // LEFT join: a name the reader may not see must not hide a missing agreement.
+  const credits = await tx
+    .select({
+      productId: productContributors.productId,
+      contributorId: productContributors.contributorId,
+      displayName: contributors.displayName,
+    })
+    .from(productContributors)
+    .leftJoin(contributors, eq(contributors.id, productContributors.contributorId))
+    .where(inArray(productContributors.productId, paidIds))
+    .orderBy(productContributors.productId, productContributors.contributorId);
+  if (credits.length === 0) return result;
+
+  const agreements = await tx
+    .select()
+    .from(commissionAgreements)
+    .where(
+      and(
+        inArray(commissionAgreements.contributorId, [...new Set(credits.map((c) => c.contributorId))]),
+        isNull(commissionAgreements.effectiveTo),
+        or(isNull(commissionAgreements.productId), inArray(commissionAgreements.productId, paidIds)),
+      ),
+    );
+
+  for (const credit of credits) {
+    const price = paid.get(credit.productId)!;
+    const name = credit.displayName ?? credit.contributorId;
+    const row = pickAgreement(agreements, credit.contributorId, credit.productId);
+    const blocker = agreementBlocker(row, price, name);
+    if (blocker) {
+      const list = result.get(credit.productId) ?? [];
+      list.push({ contributorId: credit.contributorId, ...blocker });
+      result.set(credit.productId, list);
+    }
+  }
+  return result;
+}
+
+/** Why the sale would refuse this engineer's slice, or null if it would not. */
+function agreementBlocker(
+  row: AgreementRow | null,
+  price: { amountMinor: bigint; currency: string },
+  name: string,
+): { reason: SaleBlockerReason; message: string } | null {
+  if (!row) {
+    return { reason: 'NO_AGREEMENT', message: `لا يوجد اتفاق عمولة سارٍ للمهندس ${name}` };
+  }
+
+  if (row.currency !== price.currency) {
+    return {
+      reason: 'CURRENCY_MISMATCH',
+      message: `اتفاق عمولة المهندس ${name} بعملة ${row.currency} وسعر المنتج بعملة ${price.currency}`,
+    };
+  }
+
+  // The engine the sale runs, run on the list price: whatever it would refuse
+  // at approval (a malformed or negative term) is refused here.
+  try {
+    computeCommissionSnapshot({
+      listPrice: money(price.amountMinor, price.currency),
+      agreement: toAgreement(row),
+    });
+  } catch (error) {
+    if (!(error instanceof RuleViolationError || error instanceof ValidationError)) throw error;
+    return { reason: 'INVALID_AGREEMENT', message: `اتفاق عمولة المهندس ${name} غير صالح` };
+  }
+  return null;
+}
+
+/**
+ * Run a change that could leave a PUBLISHED product unsellable — its credits,
+ * its price, or an engineer's agreement — and refuse it if it would.
+ *
+ * "Would" means: the change introduces a sale blocker the product did not
+ * already have. A product already broken before this rule existed can still be
+ * repaired one step at a time (credit one engineer's terms, then the next);
+ * what cannot happen is a sellable product being made unsellable, or a broken
+ * one broken further.
+ *
+ * The products are locked first, so a concurrent publish or a second change
+ * waits for this one and then re-reads what it wrote. Only the owner reaches
+ * this with anything to lock: a row the actor may not update is not returned.
+ */
+export async function keepPublishedSellable<T>(
+  tx: Transaction,
+  productIds: readonly string[],
+  change: () => Promise<T>,
+): Promise<T> {
+  const ids = [...new Set(productIds)];
+  if (ids.length === 0) return change();
+
+  const locked = await tx
+    .select({ id: products.id, status: products.status })
+    .from(products)
+    .where(inArray(products.id, ids))
+    .orderBy(products.id)
+    .for('update');
+
+  const published = locked.filter((p) => p.status === 'PUBLISHED').map((p) => p.id);
+  const key = (b: SaleBlocker) => `${b.contributorId}:${b.reason}`;
+
+  const before = await saleBlockersByProduct(tx, published);
+
+  const result = await change();
+
+  const after = await saleBlockersByProduct(tx, published);
+  for (const id of published) {
+    const had = new Set((before.get(id) ?? []).map(key));
+    const introduced = (after.get(id) ?? []).filter((b) => !had.has(key(b)));
+    if (introduced.length > 0) {
+      throw new RuleViolationError(
+        `لا يمكن تطبيق هذا التعديل لأنه يجعل منتجاً منشوراً غير قابل للبيع: ${introduced
+          .map((b) => b.message)
+          .join('، ')}`,
+        { productId: id, blockers: introduced.map((b) => b.message) },
+      );
+    }
+  }
+
+  return result;
 }
 
 /**
@@ -435,6 +626,27 @@ export async function setCommissionAgreement(
   const now = new Date();
   const productId = input.productId ?? null;
 
+  // A default reaches every product the engineer is credited on; an override,
+  // only its own. Either may leave a published product unsellable (F2).
+  const affected =
+    productId !== null
+      ? [productId]
+      : (
+          await tx
+            .select({ productId: productContributors.productId })
+            .from(productContributors)
+            .where(eq(productContributors.contributorId, input.contributorId))
+        ).map((r) => r.productId);
+
+  return keepPublishedSellable(tx, affected, () => writeAgreement(tx, input, productId, now));
+}
+
+async function writeAgreement(
+  tx: Transaction,
+  input: Parameters<typeof setCommissionAgreement>[1],
+  productId: string | null,
+  now: Date,
+): Promise<string> {
   // Temporal, exactly like prices: close the open row, open a new one. The
   // terms in force on any past date stay reconstructible.
   await tx

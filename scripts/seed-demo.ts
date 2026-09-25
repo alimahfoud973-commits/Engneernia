@@ -130,6 +130,10 @@ const PRODUCTS: readonly ProductSeed[] = [
 try {
   if (remove) {
     await sql`DELETE FROM products WHERE slug LIKE 'demo-%'`;
+    await sql`
+      DELETE FROM commission_agreements
+       WHERE contributor_id IN (SELECT id FROM contributors WHERE public_slug LIKE 'demo-%')
+    `;
     await sql`DELETE FROM contributors WHERE public_slug LIKE 'demo-%'`;
     await sql`DELETE FROM users WHERE email LIKE 'demo-%@example.com'`;
     console.log('Demonstration data removed.');
@@ -155,6 +159,20 @@ try {
               true, false, now())
       ON CONFLICT (public_slug) DO UPDATE SET display_name = EXCLUDED.display_name
       RETURNING id
+    `;
+
+    // The paid products below are published, and a published paid product
+    // must be sellable: its engineer needs terms in force in the price's
+    // currency, or every approval would be refused (F2). Demonstration terms,
+    // opened only if the engineer has none, so a rate the owner has since set
+    // is never disturbed.
+    await sql`
+      INSERT INTO commission_agreements (contributor_id, model, engineer_bp, currency, note)
+      SELECT ${contributor!.id}, 'PERCENTAGE', 8000, 'USD', 'demonstration seed'
+       WHERE NOT EXISTS (
+         SELECT 1 FROM commission_agreements
+          WHERE contributor_id = ${contributor!.id} AND product_id IS NULL AND effective_to IS NULL
+       )
     `;
 
     for (const product of PRODUCTS) {

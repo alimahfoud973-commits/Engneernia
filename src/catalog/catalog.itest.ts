@@ -5,7 +5,7 @@ import { withRawActorContext } from '@/db/actor-context';
 import { ensureTestOwner } from '@/db/testing/single-owner';
 import { closeDb } from '@/db';
 import {
-  auditLogs, contributors, disciplines, notifications,
+  auditLogs, commissionAgreements, contributors, disciplines, notifications,
   productContributors, productFiles, productPrices, products, users,
 } from '@/db/schema';
 import { changeProductPrice, changeProductStatus, setProductContributors } from './products';
@@ -76,6 +76,12 @@ beforeAll(async () => {
       { productId: ids.productA, amountMinor: 1000n, currency: 'USD' },
       { productId: ids.productB, amountMinor: 2000n, currency: 'USD' },
     ]);
+    // A paid product is published only if every engineer on it has terms in
+    // force in its currency (F2); these are the terms that makes true.
+    await tx.insert(commissionAgreements).values([
+      { contributorId: ids.contribA, productId: null, model: 'PERCENTAGE', engineerBp: 8000, currency: 'USD', createdBy: ids.ownerUser },
+      { contributorId: ids.contribB, productId: null, model: 'PERCENTAGE', engineerBp: 8000, currency: 'USD', createdBy: ids.ownerUser },
+    ]);
 
     // Since phase P3 the publication gate requires a scanned original, and a
     // preview for PDF products. Attaching them here keeps this suite focused
@@ -107,6 +113,7 @@ afterAll(async () => {
     await tx.delete(notifications).where(sql`user_id IN (${ids.userA}, ${ids.userB})`);
     await tx.delete(products).where(sql`id IN (${ids.productA}, ${ids.productB})`);
     await tx.delete(disciplines).where(eq(disciplines.id, ids.discipline));
+    await tx.delete(commissionAgreements).where(sql`contributor_id IN (${ids.contribA}, ${ids.contribB})`);
     await tx.delete(contributors).where(sql`id IN (${ids.contribA}, ${ids.contribB})`);
     await tx.delete(users).where(sql`id IN (${ids.userA}, ${ids.userB})`);
   });

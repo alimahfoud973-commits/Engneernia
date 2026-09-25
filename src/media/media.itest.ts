@@ -5,7 +5,7 @@ import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { withRawActorContext } from '@/db/actor-context';
 import { ensureTestOwner } from '@/db/testing/single-owner';
 import { closeDb } from '@/db';
-import { contributors, disciplines, downloadEvents, entitlements, productContributors, productFiles, productPrices, products, users } from '@/db/schema';
+import { commissionAgreements, contributors, disciplines, downloadEvents, entitlements, productContributors, productFiles, productPrices, products, users } from '@/db/schema';
 import { getStorage } from './storage';
 import { ingestProductFile } from './ingest';
 import { deliverProductFile } from './deliver';
@@ -84,6 +84,11 @@ beforeAll(async () => {
       await tx.insert(productContributors).values({ productId, contributorId: ids.contributor, shareBp: 10000 });
       await tx.insert(productPrices).values({ productId, amountMinor: 1000n, currency: 'USD' });
     }
+    // Paid and published below, so the engineer needs terms in force in the
+    // price's currency (F2).
+    await tx.insert(commissionAgreements).values({
+      contributorId: ids.contributor, productId: null, model: 'PERCENTAGE', engineerBp: 8000, currency: 'USD', createdBy: ids.owner,
+    });
   });
 }, 60_000);
 
@@ -96,6 +101,7 @@ afterAll(async () => {
       .where(sql`product_id IN (${ids.pdfProduct}, ${ids.dwgProduct}, ${ids.zipProduct})`);
     await tx.delete(products).where(sql`id IN (${ids.pdfProduct}, ${ids.dwgProduct}, ${ids.zipProduct})`);
     await tx.delete(disciplines).where(eq(disciplines.id, ids.discipline));
+    await tx.delete(commissionAgreements).where(eq(commissionAgreements.contributorId, ids.contributor));
     await tx.delete(contributors).where(eq(contributors.id, ids.contributor));
     await tx.delete(users).where(sql`id IN (${ids.engineerUser})`);
     await tx.delete(users).where(sql`email LIKE ${`p3-buyer-${suffix}%`}`);

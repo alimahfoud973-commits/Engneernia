@@ -26,6 +26,7 @@ const READY = {
   hasPreview: true,
   requiresPreview: true,
   fileIsServable: true,
+  commissionBlockers: [] as readonly string[],
 };
 
 describe('the documented happy path (specification §10)', () => {
@@ -97,10 +98,20 @@ describe('publish preconditions', () => {
     const blockers = publishBlockers({
       hasContributor: false, hasCurrentPrice: false, hasOriginalFile: false,
       hasPreview: false, requiresPreview: true, fileIsServable: false,
+      commissionBlockers: [],
     });
     // Contributor, price, original file, preview — the missing scan is not
     // listed separately because there is no file to have scanned.
     expect(blockers).toHaveLength(4);
+  });
+
+  /** F2: a sale the approval step would refuse is refused at publication. */
+  it('lists a commission blocker and refuses to publish on it', () => {
+    const unagreed = { ...READY, commissionBlockers: ['لا يوجد اتفاق عمولة سارٍ للمهندس س'] };
+    expect(publishBlockers(unagreed)).toEqual(['لا يوجد اتفاق عمولة سارٍ للمهندس س']);
+    expect(() => assertTransition('APPROVED', 'PUBLISHED', owner, unagreed)).toThrow(
+      'المنتج غير جاهز للنشر',
+    );
   });
 
   /**

@@ -11,6 +11,7 @@ import { publishBlockers, transitionsFrom, type ProductStatus } from './publicat
 import { supportsPreview } from '@/media/file-types';
 import { isServable } from '@/media/scanner';
 import { serverEnv } from '@/lib/config/env';
+import { productSaleBlockers } from '@/finance/commission-resolver';
 
 /**
  * Read models for the owner's catalogue screens.
@@ -190,6 +191,8 @@ export async function adminProductDetail(
       hasPreview: files.some((f) => f.role === 'PREVIEW'),
       requiresPreview: supportsPreview(product.fileType),
       fileIsServable: original ? isServable(original.scanStatus, isProduction) : false,
+      // The same check the publish itself runs, so the checklist cannot differ.
+      commissionBlockers: (await productSaleBlockers(tx, productId)).map((b) => b.message),
     });
 
     return {

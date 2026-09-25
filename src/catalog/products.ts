@@ -12,6 +12,7 @@ import { notifyProductContributors } from '@/notifications/notify';
 import { assertTransition, type ProductStatus, type PublishReadiness } from './publication';
 import { money, type Money } from '@/lib/money/money';
 import { assertSharesValid, type ContributorShare } from '@/lib/money/distribution';
+import { keepPublishedSellable, productSaleBlockers } from '@/finance/commission-resolver';
 import { NotFoundError, RuleViolationError } from '@/lib/errors';
 
 /**
@@ -218,16 +219,20 @@ export async function changeProductPrice(
     const previous = await currentPrice(tx, input.productId);
 
     // Atomic close-and-open, guarded by the partial unique index that permits
-    // exactly one open price row per product.
-    await tx.execute(sql`
-      SELECT app_set_product_price(
-        ${input.productId}::uuid,
-        ${input.newAmountMinor}::bigint,
-        ${input.currency},
-        ${actor.kind === 'USER' ? actor.userId : null}::uuid,
-        ${input.reason ?? null}
-      )
-    `);
+    // exactly one open price row per product. On a published product, refused
+    // if the new price or currency has no matching agreement (F2) — a free
+    // product given a price is exactly that case.
+    await keepPublishedSellable(tx, [input.productId], () =>
+      tx.execute(sql`
+        SELECT app_set_product_price(
+          ${input.productId}::uuid,
+          ${input.newAmountMinor}::bigint,
+          ${input.currency},
+          ${actor.kind === 'USER' ? actor.userId : null}::uuid,
+          ${input.reason ?? null}
+        )
+      `),
+    );
 
     const next = money(input.newAmountMinor, input.currency);
 
@@ -258,11 +263,18 @@ export async function changeProductStatus(
   input: { productId: string; to: ProductStatus; note?: string },
 ): Promise<ProductStatus> {
   return withActor(actor, async (tx) => {
-    const [product] = await tx
+    const query = tx
       .select({ id: products.id, status: products.status, titleAr: products.titleAr })
       .from(products)
       .where(eq(products.id, input.productId))
       .limit(1);
+    // Publishing locks the row, so a concurrent agreement, price or credit
+    // change (which locks it too) cannot slip between the readiness check and
+    // the publish (F2). Only the owner publishing: a lock asks for the update
+    // policy, which a contributor has not got — their attempt must still be
+    // refused as an illegal transition, not hidden as "not found".
+    const [product] =
+      input.to === 'PUBLISHED' && isOwner(actor) ? await query.for('update') : await query;
 
     // RLS already hid products this actor may not see, so "not found" here
     // covers both "absent" and "not yours" without distinguishing them.
@@ -372,6 +384,7 @@ async function publishReadiness(tx: Transaction, productId: string): Promise<Pub
     // Owner decision: a preview exists for PDF and for nothing else.
     requiresPreview: product ? supportsPreview(product.fileType) : false,
     fileIsServable: original ? isServable(original.scanStatus, isProduction) : false,
+    commissionBlockers: (await productSaleBlockers(tx, productId)).map((b) => b.message),
   };
 }
 
@@ -397,14 +410,18 @@ export async function setProductContributors(
       .from(productContributors)
       .where(eq(productContributors.productId, productId));
 
-    await tx.delete(productContributors).where(eq(productContributors.productId, productId));
-    await tx.insert(productContributors).values(
-      shares.map((share) => ({
-        productId,
-        contributorId: share.contributorId,
-        shareBp: share.shareBp,
-      })),
-    );
+    // On a published product, refused if a newly credited engineer has no
+    // agreement matching the price (F2).
+    await keepPublishedSellable(tx, [productId], async () => {
+      await tx.delete(productContributors).where(eq(productContributors.productId, productId));
+      await tx.insert(productContributors).values(
+        shares.map((share) => ({
+          productId,
+          contributorId: share.contributorId,
+          shareBp: share.shareBp,
+        })),
+      );
+    });
 
     await recordAudit(tx, actor, {
       action: 'COMMISSION_CHANGED',

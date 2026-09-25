@@ -55,6 +55,18 @@ try {
       throw new Error('Run seed:catalog and seed:demo first.');
     }
 
+    // Every synthetic product is published and most are paid, so their
+    // engineer needs terms in force in USD or none of them could be sold (F2).
+    // Opened only if the engineer has none, so existing terms are never moved.
+    await sql`
+      INSERT INTO commission_agreements (contributor_id, model, engineer_bp, currency, note)
+      SELECT ${contributor.id}, 'PERCENTAGE', 8000, 'USD', 'scale seed'
+       WHERE NOT EXISTS (
+         SELECT 1 FROM commission_agreements
+          WHERE contributor_id = ${contributor.id} AND product_id IS NULL AND effective_to IS NULL
+       )
+    `;
+
     console.log(`Generating ${count} products...`);
     const started = Date.now();
     const BATCH = 500;

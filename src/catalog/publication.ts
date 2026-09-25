@@ -103,6 +103,13 @@ export interface PublishReadiness {
   readonly requiresPreview: boolean;
   /** The original's scan state, and whether this deployment enforces scanning. */
   readonly fileIsServable: boolean;
+  /**
+   * Why a sale would be refused at payment approval — an engineer with no
+   * agreement in force, or one in another currency (F2). Empty for a free
+   * product. Computed by `productSaleBlockers`, the same check that guards
+   * price, credit and agreement changes on a product already published.
+   */
+  readonly commissionBlockers: readonly string[];
 }
 
 /**
@@ -111,6 +118,10 @@ export interface PublishReadiness {
  * No credited engineer means a sale nobody can be paid for. No current price
  * means a checkout with nothing to charge. An unscanned original means
  * handing a customer a file the platform never looked at.
+ *
+ * A paid product whose engineer has no agreement in force (or one in another
+ * currency) would reach the customer, take their transfer, and then be
+ * refused when the owner approves the payment — so it is refused here instead.
  *
  * A missing preview blocks publication only for PDFs: by the owner's
  * decision, Excel, DWG, Revit and archives have no preview, so requiring one
@@ -130,6 +141,7 @@ export function publishBlockers(readiness: PublishReadiness): readonly string[] 
   if (readiness.hasOriginalFile && !readiness.fileIsServable) {
     blockers.push('الملف الأصلي لم يجتز فحص البرمجيات الخبيثة');
   }
+  blockers.push(...readiness.commissionBlockers);
   return blockers;
 }
 
