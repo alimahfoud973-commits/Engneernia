@@ -626,6 +626,18 @@ export async function setCommissionAgreement(
   const now = new Date();
   const productId = input.productId ?? null;
 
+  // The engineer's row is the lock this change and a credit change share
+  // (`setProductContributors` takes it in share mode). Taken BEFORE the
+  // credits are read: a concurrent credit of this engineer then either
+  // committed first — and is read below — or waits until this change has
+  // committed, and its own check reads the new terms. Without it both could
+  // pass and leave a published product unsellable (F2).
+  await tx
+    .select({ id: contributors.id })
+    .from(contributors)
+    .where(eq(contributors.id, input.contributorId))
+    .for('no key update');
+
   // A default reaches every product the engineer is credited on; an override,
   // only its own. Either may leave a published product unsellable (F2).
   const affected =

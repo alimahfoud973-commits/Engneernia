@@ -1,6 +1,6 @@
 import 'server-only';
-import { and, desc, eq, isNull, sql } from 'drizzle-orm';
-import { products, productPrices, productContributors, productFiles } from '@/db/schema';
+import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { contributors, products, productPrices, productContributors, productFiles } from '@/db/schema';
 import { serverEnv } from '@/lib/config/env';
 import { supportsPreview } from '@/media/file-types';
 import { isServable } from '@/media/scanner';
@@ -405,6 +405,17 @@ export async function setProductContributors(
   assertSharesValid(shares);
 
   await withActor(actor, async (tx) => {
+    // Share-lock every engineer being credited, pairing with the lock an
+    // agreement change takes on its engineer (`setCommissionAgreement`): that
+    // change either committed first — and the check below reads its terms —
+    // or waits for this credit and then sees this product (F2).
+    await tx
+      .select({ id: contributors.id })
+      .from(contributors)
+      .where(inArray(contributors.id, shares.map((s) => s.contributorId)))
+      .orderBy(contributors.id)
+      .for('share');
+
     const before = await tx
       .select()
       .from(productContributors)

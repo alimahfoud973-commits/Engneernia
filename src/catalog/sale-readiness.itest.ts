@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { and, eq, inArray, isNull } from 'drizzle-orm';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { withRawActorContext, type Transaction } from '@/db/actor-context';
@@ -45,6 +45,7 @@ const ids = {
   owner: '', customer: randomUUID(), discipline: randomUUID(), bank: randomUUID(),
   uOk: randomUUID(), uNone: randomUUID(), uEur: randomUUID(), uLegA: randomUUID(), uLegB: randomUUID(),
   eOk: randomUUID(), eNone: randomUUID(), eEur: randomUUID(), eLegA: randomUUID(), eLegB: randomUUID(),
+  uRace: randomUUID(), eRace: randomUUID(), uRace2: randomUUID(), eRace2: randomUUID(),
   legacy: randomUUID(),
 };
 const PRICE = 2500n;
@@ -132,6 +133,7 @@ beforeAll(async () => {
   const engineers = [
     [ids.uOk, ids.eOk, 'ok'], [ids.uNone, ids.eNone, 'none'], [ids.uEur, ids.eEur, 'eur'],
     [ids.uLegA, ids.eLegA, 'lega'], [ids.uLegB, ids.eLegB, 'legb'],
+    [ids.uRace, ids.eRace, 'race'], [ids.uRace2, ids.eRace2, 'racetwo'],
   ] as const;
 
   await asOwner(async (tx) => {
@@ -148,6 +150,8 @@ beforeAll(async () => {
     await tx.insert(commissionAgreements).values([
       { contributorId: ids.eOk, productId: null, model: 'PERCENTAGE', engineerBp: 8000, currency: 'USD', createdBy: ids.owner },
       { contributorId: ids.eEur, productId: null, model: 'PERCENTAGE', engineerBp: 7000, currency: 'EUR', createdBy: ids.owner },
+      { contributorId: ids.eRace, productId: null, model: 'PERCENTAGE', engineerBp: 8000, currency: 'USD', createdBy: ids.owner },
+      { contributorId: ids.eRace2, productId: null, model: 'PERCENTAGE', engineerBp: 8000, currency: 'USD', createdBy: ids.owner },
     ]);
     await tx.insert(disciplines).values({ id: ids.discipline, slug: `f2-disc-${suffix}`, nameAr: 'تخصص', nameEn: 'T', sortOrder: 95 });
     await tx.insert(paymentMethods).values({
@@ -166,7 +170,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await asOwner(async (tx) => {
     const all = [...created, ids.legacy];
-    const engineers = [ids.eOk, ids.eNone, ids.eEur, ids.eLegA, ids.eLegB];
+    const engineers = [ids.eOk, ids.eNone, ids.eEur, ids.eLegA, ids.eLegB, ids.eRace, ids.eRace2];
     await tx.delete(orders).where(eq(orders.customerId, ids.customer));
     await tx.delete(entitlements).where(eq(entitlements.customerId, ids.customer));
     await tx.delete(paymentMethods).where(eq(paymentMethods.id, ids.bank));
@@ -177,7 +181,9 @@ afterAll(async () => {
     await tx.delete(products).where(inArray(products.id, all));
     await tx.delete(disciplines).where(eq(disciplines.id, ids.discipline));
     await tx.delete(contributors).where(inArray(contributors.id, engineers));
-    await tx.delete(users).where(inArray(users.id, [ids.customer, ids.uOk, ids.uNone, ids.uEur, ids.uLegA, ids.uLegB]));
+    await tx.delete(users).where(inArray(users.id, [
+      ids.customer, ids.uOk, ids.uNone, ids.uEur, ids.uLegA, ids.uLegB, ids.uRace, ids.uRace2,
+    ]));
   });
   await closeDb();
 });
@@ -421,5 +427,132 @@ describe('9. giving the engineer terms is what makes it publishable', () => {
     });
     await expect(changeProductStatus(owner, { productId: unagreed.productId, to: 'PUBLISHED' }))
       .resolves.toBe('PUBLISHED');
+  });
+});
+
+// ===========================================================================
+/**
+ * THE RACE THE CODE REVIEW FOUND. An agreement change reads which products
+ * its engineer is credited on; a credit change checks the engineer's terms.
+ * Run at the same moment, each could read the other's state from before it
+ * committed — both would pass, and a published product would be left with an
+ * engineer whose terms are in the wrong currency.
+ *
+ * Both now take the engineer's row first — the agreement change exclusively,
+ * the credit change in share mode — so one always waits for the other and
+ * then reads what it wrote. These tests do not rely on timing: each holds one
+ * side open in a transaction, proves (from pg_stat_activity) that the other
+ * side is BLOCKED on the expected lock, and only then lets the first commit.
+ */
+describe('10. an agreement change and a credit change cannot pass each other', () => {
+  // Published by section 1 in a full run; published here when run on its own.
+  beforeAll(async () => {
+    if ((await statusOf(sellable.productId)) !== 'PUBLISHED') {
+      await changeProductStatus(owner, { productId: sellable.productId, to: 'PUBLISHED' });
+    }
+  });
+
+  /** Resolves once a backend of this database waits on a lock in a statement matching `pattern`. */
+  async function blockedOn(pattern: string, pending: Promise<unknown>): Promise<void> {
+    let settled = false;
+    pending.then(() => { settled = true; }, () => { settled = true; });
+    for (let i = 0; i < 400; i += 1) {
+      if (settled) throw new Error(`the operation finished instead of waiting on a lock (${pattern})`);
+      const [row] = await asOwner((tx) => tx.execute<{ n: number }>(sql`
+        SELECT count(*)::int AS n FROM pg_stat_activity
+         WHERE datname = current_database() AND wait_event_type = 'Lock' AND query ILIKE ${pattern}`));
+      if (row && Number(row.n) > 0) return;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    throw new Error(`nothing waited on a lock matching ${pattern}`);
+  }
+
+  function gate(): { opened: Promise<void>; open: () => void } {
+    let open!: () => void;
+    const opened = new Promise<void>((resolve) => { open = resolve; });
+    return { opened, open };
+  }
+
+  it('agreement change first: the credit waits, then reads the NEW terms and is refused', async () => {
+    const release = gate();
+    const reached = gate();
+
+    // Engineer `race` is credited on nothing published, so moving their default
+    // to EUR is allowed on its own. Held open: written, locked, not committed.
+    const agreementChange = asOwner(async (tx) => {
+      await setCommissionAgreement(tx, {
+        contributorId: ids.eRace, productId: null,
+        agreement: { model: 'PERCENTAGE', engineerBp: 8000, currency: 'EUR' }, createdBy: ids.owner,
+      });
+      reached.open();
+      await release.opened;
+    });
+    try {
+      await reached.opened;
+
+      // Meanwhile: credit `race` on the published USD product.
+      const credit = setProductContributors(owner, sellable.productId, [
+        { contributorId: ids.eOk, shareBp: 5000 },
+        { contributorId: ids.eRace, shareBp: 5000 },
+      ]);
+      await blockedOn('%"contributors"%for share%', credit);
+
+      release.open();
+      await agreementChange;
+
+      const error = await refusal(credit);
+      expect(error.message).toContain('اتفاق عمولة المهندس مهندس race بعملة EUR وسعر المنتج بعملة USD');
+      expect(await creditsOf(sellable.productId)).toEqual([ids.eOk]);
+      expect((await openAgreements(ids.eRace))[0]!.currency).toBe('EUR');
+      expect((await adminProductDetail(owner, sellable.productId)).blockers).toEqual([]);
+    } finally {
+      // Never leave the held transaction open: it would block the teardown.
+      release.open();
+      await agreementChange.catch(() => undefined);
+    }
+  });
+
+  it('credit change first: the agreement change waits, then sees the new product and is refused', async () => {
+    const release = gate();
+    const reached = gate();
+
+    // Hold the product itself, so the credit change stops INSIDE its own
+    // transaction — after it has taken the engineer's row, before it commits.
+    const productHold = asOwner(async (tx) => {
+      await tx.select({ id: products.id }).from(products)
+        .where(eq(products.id, sellable.productId)).for('update');
+      reached.open();
+      await release.opened;
+    });
+    try {
+      await reached.opened;
+
+      const credit = setProductContributors(owner, sellable.productId, [
+        { contributorId: ids.eOk, shareBp: 5000 },
+        { contributorId: ids.eRace2, shareBp: 5000 },
+      ]);
+      await blockedOn('%"products"%for update%', credit);
+
+      // Engineer `racetwo` is not yet credited on anything published.
+      const agreementChange = saveCommissionAgreement(owner, {
+        contributorId: ids.eRace2, productId: null,
+        agreement: { model: 'PERCENTAGE', engineerBp: 8000, currency: 'EUR' },
+      });
+      await blockedOn('%"contributors"%for no key update%', agreementChange);
+
+      release.open();
+      await productHold;
+      await credit;
+
+      const error = await refusal(agreementChange);
+      expect(error.message).toContain('اتفاق عمولة المهندس مهندس racetwo بعملة EUR وسعر المنتج بعملة USD');
+      expect(await creditsOf(sellable.productId)).toEqual([ids.eOk, ids.eRace2].sort());
+      expect((await openAgreements(ids.eRace2))[0]!.currency).toBe('USD');
+      expect((await adminProductDetail(owner, sellable.productId)).blockers).toEqual([]);
+    } finally {
+      // Never leave the held transaction open: it would block the teardown.
+      release.open();
+      await productHold.catch(() => undefined);
+    }
   });
 });
