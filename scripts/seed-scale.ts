@@ -48,24 +48,17 @@ try {
     const categories = await sql<Array<{ id: string; discipline_id: string }>>`
       SELECT id, discipline_id FROM categories
     `;
+    // Credited to the demonstration engineer by name — never "whoever was
+    // created first", which on a real database is a real engineer. That
+    // engineer's (demonstration) terms are seed:demo's to write; this script
+    // writes none, so every synthetic product is sellable on terms that exist
+    // only for demonstration (F2), and --remove leaves no terms behind.
     const [contributor] = await sql<Array<{ id: string }>>`
-      SELECT id FROM contributors ORDER BY created_at LIMIT 1
+      SELECT id FROM contributors WHERE public_slug = 'demo-engineer'
     `;
     if (disciplines.length === 0 || !contributor) {
       throw new Error('Run seed:catalog and seed:demo first.');
     }
-
-    // Every synthetic product is published and most are paid, so their
-    // engineer needs terms in force in USD or none of them could be sold (F2).
-    // Opened only if the engineer has none, so existing terms are never moved.
-    await sql`
-      INSERT INTO commission_agreements (contributor_id, model, engineer_bp, currency, note)
-      SELECT ${contributor.id}, 'PERCENTAGE', 8000, 'USD', 'scale seed'
-       WHERE NOT EXISTS (
-         SELECT 1 FROM commission_agreements
-          WHERE contributor_id = ${contributor.id} AND product_id IS NULL AND effective_to IS NULL
-       )
-    `;
 
     console.log(`Generating ${count} products...`);
     const started = Date.now();
@@ -124,6 +117,9 @@ try {
         INSERT INTO product_contributors (product_id, contributor_id, share_bp)
         SELECT p.id, ${contributor.id}, 10000 FROM products p
          WHERE p.slug = ANY(${rows.map((r) => r.slug)})
+           -- A product credited by an earlier run keeps its credit: adding a
+           -- second 100% share would credit it twice.
+           AND NOT EXISTS (SELECT 1 FROM product_contributors pc WHERE pc.product_id = p.id)
         ON CONFLICT (product_id, contributor_id) DO NOTHING
       `;
 

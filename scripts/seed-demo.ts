@@ -39,6 +39,21 @@ const sql = postgres(url, { max: 1 });
 await sql`SELECT set_config('app.actor_role', 'OWNER', false)`;
 const remove = process.argv.includes('--remove');
 
+/**
+ * DEMONSTRATION TERMS FOR THE ONE FICTITIOUS ENGINEER BELOW — NOT A PLATFORM RATE.
+ *
+ * Enginora has no commission rate of its own (CLAUDE.md rule 9, §11): every
+ * engineer's terms are agreed with them and set by the owner in
+ * /admin/commissions. But the paid products seeded here are published, and a
+ * published paid product must be sellable (F2) — its engineer needs terms in
+ * force in the price's currency. These are those terms, for `demo-engineer`
+ * and no one else. They are written only if the owner has not already set
+ * terms for that engineer, carry DEMO_TERMS_NOTE on the row itself so no one
+ * mistakes them for an agreement, and go with --remove.
+ */
+const DEMO_ENGINEER_TERMS = { model: 'PERCENTAGE', engineerBp: 8000, currency: 'USD' } as const;
+const DEMO_TERMS_NOTE = 'بيانات عرض فقط — ليست نسبة عمولة للمنصة ولا اتفاقاً حقيقياً';
+
 interface ProductSeed {
   slug: string;
   titleAr: string;
@@ -161,14 +176,12 @@ try {
       RETURNING id
     `;
 
-    // The paid products below are published, and a published paid product
-    // must be sellable: its engineer needs terms in force in the price's
-    // currency, or every approval would be refused (F2). Demonstration terms,
-    // opened only if the engineer has none, so a rate the owner has since set
-    // is never disturbed.
+    // See DEMO_ENGINEER_TERMS: demonstration terms for this engineer only,
+    // opened only if they have none, so terms the owner has set are kept.
     await sql`
       INSERT INTO commission_agreements (contributor_id, model, engineer_bp, currency, note)
-      SELECT ${contributor!.id}, 'PERCENTAGE', 8000, 'USD', 'demonstration seed'
+      SELECT ${contributor!.id}, ${DEMO_ENGINEER_TERMS.model}::commission_model,
+             ${DEMO_ENGINEER_TERMS.engineerBp}, ${DEMO_ENGINEER_TERMS.currency}, ${DEMO_TERMS_NOTE}
        WHERE NOT EXISTS (
          SELECT 1 FROM commission_agreements
           WHERE contributor_id = ${contributor!.id} AND product_id IS NULL AND effective_to IS NULL
