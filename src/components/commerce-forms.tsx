@@ -2,7 +2,7 @@
 
 import { useActionState } from 'react';
 import {
-  approvePaymentAction, choosePaymentMethodAction, rejectPaymentAction,
+  approvePaymentAction, choosePaymentMethodAction, completeFreeOrderAction, rejectPaymentAction,
   startPurchaseAction, submitProofAction, type ActionState,
 } from '@/commerce/actions';
 
@@ -31,6 +31,25 @@ export function BuyButton({ slug, label }: { slug: string; label: string }) {
         className="rounded-[var(--radius-card)] bg-[var(--color-accent)] px-4 py-2.5 text-sm font-semibold text-[var(--color-accent-contrast)] transition-opacity hover:opacity-90 disabled:opacity-60"
       >
         {pending ? 'جارٍ التجهيز…' : label}
+      </button>
+      <ErrorNote message={state.error} />
+    </form>
+  );
+}
+
+/** Finishes a free order still in DRAFT — no payment method, no receipt. */
+export function FreeOrderForm({ orderId }: { orderId: string }) {
+  const [state, formAction, pending] = useActionState(completeFreeOrderAction, INITIAL);
+  return (
+    <form action={formAction} className="flex flex-col gap-3">
+      <input type="hidden" name="orderId" value={orderId} />
+      <p className="text-sm text-[var(--color-ink-soft)]">هذا الطلب مجاني ولا يحتاج إلى دفع.</p>
+      <button
+        type="submit"
+        disabled={pending}
+        className="w-fit rounded-[var(--radius-card)] bg-[var(--color-accent)] px-4 py-2.5 text-sm font-semibold text-[var(--color-accent-contrast)] transition-opacity hover:opacity-90 disabled:opacity-60"
+      >
+        {pending ? 'جارٍ الإتمام…' : 'الحصول عليه مجاناً'}
       </button>
       <ErrorNote message={state.error} />
     </form>

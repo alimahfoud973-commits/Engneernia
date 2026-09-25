@@ -292,6 +292,13 @@ export async function placeOrder(
 
     if (!order) throw new NotFoundError('الطلب غير موجود');
 
+    // A free order is taken, never paid for: `completeFreeOrder` below. A
+    // payment of zero is refused by the database (payments_amount_positive),
+    // and this says why in a sentence before it gets that far.
+    if (order.totalMinor === 0n) {
+      throw new RuleViolationError('هذا الطلب مجاني ولا يحتاج إلى دفع');
+    }
+
     const items = await tx
       .select({ title: orderItems.titleSnapshot })
       .from(orderItems)
@@ -333,6 +340,52 @@ export async function placeOrder(
     }
 
     return initiation;
+  });
+}
+
+/**
+ * A FREE PRODUCT, TAKEN (OPEN-12; Stage 2 buyer audit, F1).
+ *
+ * Completes a zero-value DRAFT order of the caller's own and grants access, in
+ * one transaction, through `app_complete_free_order` (migration 0054). No
+ * payment, ledger entry, invoice or commission snapshot is written: no money
+ * moved. The function proves the order is free now — every line priced at
+ * zero, every product published and still free — before it grants anything,
+ * and the entitlements it writes are read by the same download gate as a
+ * paid one.
+ */
+export async function completeFreeOrder(
+  actor: Actor,
+  input: { orderId: string },
+): Promise<{ orderId: string; orderNumber: string; entitlementsGranted: number }> {
+  requireUser(actor);
+
+  return withActor(actor, async (tx) => {
+    let rows: Array<{ order_id: string; order_number: string; entitlements_granted: number }>;
+    try {
+      rows = (await tx.execute(
+        sql`SELECT * FROM app_complete_free_order(${input.orderId}::uuid)`,
+      )) as unknown as typeof rows;
+    } catch (error) {
+      const code = (error as { cause?: { code?: string }; code?: string })?.cause?.code
+        ?? (error as { code?: string })?.code;
+      // P0002 no_data_found: not the caller's order, or no such order — one
+      // answer for both, as everywhere else an order is looked up.
+      if (code === 'P0002') throw new NotFoundError('الطلب غير موجود');
+      // P0001: the function refused — not a DRAFT, not free, or already paid.
+      if (code === 'P0001') {
+        throw new RuleViolationError('لا يمكن إتمام هذا الطلب مجاناً', { orderId: input.orderId });
+      }
+      throw error;
+    }
+
+    const row = rows[0];
+    if (!row) throw new RuleViolationError('تعذّر إتمام الطلب المجاني');
+    return {
+      orderId: row.order_id,
+      orderNumber: row.order_number,
+      entitlementsGranted: Number(row.entitlements_granted),
+    };
   });
 }
 

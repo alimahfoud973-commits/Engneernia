@@ -4,7 +4,9 @@ import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { currentActor, requireActor, requireOwner } from '@/auth/current';
-import { createOrder, placeOrder, approvePayment, rejectPayment } from './orders';
+import {
+  createOrder, completeFreeOrder, placeOrder, approvePayment, rejectPayment,
+} from './orders';
 import { submitPaymentProof } from './proofs';
 import { toUserMessage } from '@/lib/action-errors';
 
@@ -38,14 +40,43 @@ export async function startPurchaseAction(
   }
 
   let orderId: string;
+  let free: boolean;
   try {
     const order = await createOrder(actor, { productSlugs: [parsed.data.slug] });
     orderId = order.orderId;
+    free = order.totalMinor === 0n;
+    // A free product is taken on the spot: no payment method, no receipt.
+    if (free) await completeFreeOrder(actor, { orderId });
   } catch (error) {
     return { error: toMessage(error) };
   }
 
-  redirect(`/checkout/${orderId}`);
+  redirect(free ? '/account' : `/checkout/${orderId}`);
+}
+
+const freeSchema = z.object({ orderId: z.string().uuid() });
+
+/**
+ * The checkout screen's way to finish a free order still in DRAFT — one left
+ * behind before free orders completed on the spot, or one whose completion
+ * failed. The same guarded function, so the same checks.
+ */
+export async function completeFreeOrderAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const parsed = freeSchema.safeParse({ orderId: formData.get('orderId') });
+  if (!parsed.success) return { error: 'طلب غير صالح' };
+
+  const actor = await requireActor(`/checkout/${parsed.data.orderId}`);
+
+  try {
+    await completeFreeOrder(actor, parsed.data);
+  } catch (error) {
+    return { error: toMessage(error) };
+  }
+
+  redirect('/account');
 }
 
 const methodSchema = z.object({

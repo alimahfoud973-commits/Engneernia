@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { setRequestLocale } from 'next-intl/server';
 import { SiteHeader, SiteFooter } from '@/components/site-chrome';
-import { PaymentMethodPicker, ProofUploadForm } from '@/components/commerce-forms';
+import { FreeOrderForm, PaymentMethodPicker, ProofUploadForm } from '@/components/commerce-forms';
 import { formatPrice } from '@/components/product-card';
 import { requireActor } from '@/auth/current';
 import { checkoutView } from '@/commerce/queries';
@@ -50,6 +50,8 @@ export default async function CheckoutPage({
 
   const { order, items, payment, methods } = view;
   const isSettled = order.status === 'PAID' || order.status === 'COMPLETED';
+  // A free order is taken, not paid for: no method to choose, nothing to confirm.
+  const isFree = order.totalMinor === 0n;
 
   return (
     <>
@@ -70,7 +72,9 @@ export default async function CheckoutPage({
                   : 'bg-[var(--color-warn-soft)] text-[var(--color-warn)]')
             }
           >
-            {STATUS_LABELS[order.status] ?? order.status}
+            {isFree && order.status === 'DRAFT'
+              ? 'بانتظار الإتمام'
+              : (STATUS_LABELS[order.status] ?? order.status)}
           </p>
         </header>
 
@@ -96,7 +100,9 @@ export default async function CheckoutPage({
 
         {isSettled ? (
           <section className="flex flex-col gap-3 rounded-[var(--radius-card)] border border-[var(--color-ok)] bg-[var(--color-ok-soft)] p-5">
-            <h2 className="text-sm font-semibold text-[var(--color-ok)]">تم تأكيد الدفع</h2>
+            <h2 className="text-sm font-semibold text-[var(--color-ok)]">
+              {isFree ? 'أُضيف إلى مشترياتك' : 'تم تأكيد الدفع'}
+            </h2>
             <p className="text-sm">الملفات متاحة الآن في حسابك.</p>
             <Link
               href="/account"
@@ -137,7 +143,11 @@ export default async function CheckoutPage({
           </section>
         ) : (
           <section className="rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-surface)] p-5">
-            <PaymentMethodPicker orderId={order.id} methods={methods} />
+            {isFree && order.status === 'DRAFT' ? (
+              <FreeOrderForm orderId={order.id} />
+            ) : (
+              <PaymentMethodPicker orderId={order.id} methods={methods} />
+            )}
           </section>
         )}
 
