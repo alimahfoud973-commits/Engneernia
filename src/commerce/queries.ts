@@ -32,19 +32,20 @@ export async function checkoutView(actor: Actor, orderId: string) {
       .leftJoin(products, eq(products.id, orderItems.productId))
       .where(eq(orderItems.orderId, order.id));
 
+    // What the customer was told when they chose the method — kept on the
+    // payment (migration 0055), not read from the method, which the owner may
+    // since have changed or disabled (and RLS hides a disabled one).
     const paymentRows = await tx
       .select({
         id: payments.id,
         status: payments.status,
         methodId: payments.paymentMethodId,
-        methodName: paymentMethods.displayNameAr,
-        methodType: paymentMethods.type,
-        instructionsAr: paymentMethods.instructionsAr,
-        accountDetailsAr: paymentMethods.accountDetailsAr,
-        requiresProof: paymentMethods.requiresProof,
+        methodName: payments.methodNameSnapshot,
+        instructionsAr: payments.instructionsSnapshot,
+        accountDetailsAr: payments.accountDetailsSnapshot,
+        requiresProof: payments.requiresProofSnapshot,
       })
       .from(payments)
-      .leftJoin(paymentMethods, eq(paymentMethods.id, payments.paymentMethodId))
       .where(eq(payments.orderId, order.id))
       .orderBy(desc(payments.createdAt))
       .limit(1);

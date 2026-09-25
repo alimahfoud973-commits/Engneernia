@@ -207,9 +207,10 @@ try {
             'PROOF_SUBMITTED', 'USD', 424242, 0, 424242)
   `;
   await tx`
-    INSERT INTO payments (id, order_id, payment_method_id, status, amount_minor, currency)
+    INSERT INTO payments (id, order_id, payment_method_id, status, amount_minor, currency,
+                          method_name_snapshot, instructions_snapshot, requires_proof_snapshot)
     VALUES (${ids.payment}::uuid, ${ids.order}::uuid, ${ids.method}::uuid,
-            'PROOF_SUBMITTED', 424242, 'USD')
+            'PROOF_SUBMITTED', 424242, 'USD', 'تحويل', 'حوّل', true)
   `;
   await tx`
     INSERT INTO payment_proofs (id, payment_id, storage_key, content_type, byte_size,

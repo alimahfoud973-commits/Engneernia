@@ -3,6 +3,25 @@ import type {
 } from './port';
 
 /**
+ * What a manual method still lacks before a customer can be sent to pay by
+ * it — empty when it is complete (Stage 2 audit, F3).
+ *
+ * Both are required: instructions say what to do, account details say where
+ * the money goes. Without the second a customer is sent to transfer money to
+ * nobody — which is what the seeded placeholder "يُعبّئها المالك من لوحة
+ * الإدارة" did, shown to buyers as if it were an account. The owner's screen
+ * lists the same gaps, so "not offered" never has to be guessed at.
+ */
+export function manualMethodGaps(
+  config: Pick<PaymentMethodConfig, 'instructionsAr' | 'accountDetailsAr'>,
+): readonly string[] {
+  const gaps: string[] = [];
+  if ((config.instructionsAr ?? '').trim() === '') gaps.push('تعليمات الدفع');
+  if ((config.accountDetailsAr ?? '').trim() === '') gaps.push('بيانات الحساب');
+  return gaps;
+}
+
+/**
  * Manual transfer — bank transfer, ShamCash, any local method.
  *
  * This is ONE adapter serving every manually-verified method: they differ
@@ -14,9 +33,8 @@ export class ManualTransferProvider implements PaymentProvider {
   readonly type = 'MANUAL' as const;
 
   supports(config: PaymentMethodConfig): boolean {
-    // A manual method with no instructions would leave the customer with
-    // nowhere to send the money.
-    return (config.instructionsAr ?? '').trim().length > 0;
+    // Offered only when complete: instructions AND an account to pay into.
+    return manualMethodGaps(config).length === 0;
   }
 
   async initiate(

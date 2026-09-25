@@ -11,6 +11,7 @@ const LINKS = [
   { href: '/admin/products', label: 'الكتالوج' },
   { href: '/admin/engineers', label: 'المهندسون' },
   { href: '/admin/payments', label: 'المدفوعات' },
+  { href: '/admin/payment-methods', label: 'طرق الدفع' },
   { href: '/admin/settlements', label: 'التسوية الشهرية' },
   { href: '/admin/commissions', label: 'اتفاقات العمولة' },
   { href: '/admin/finance', label: 'التقرير المالي' },

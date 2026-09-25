@@ -9,7 +9,10 @@
  * exists so enabling one later is configuration, not a rewrite, and so the
  * checkout never shows a button that cannot complete (§22).
  *
- * Every field here is owner-editable from the admin console afterwards.
+ * NO ACCOUNT DETAILS ARE SEEDED (F3). Only the owner knows the account money
+ * goes to, and a manual method without one is not offered to any customer —
+ * so bank transfer stays invisible to buyers until the owner fills it in at
+ * /admin/payment-methods, where every field here can be edited.
  */
 import postgres from 'postgres';
 
@@ -38,7 +41,6 @@ const METHODS = [
     instructions_ar:
       'حوّل المبلغ المذكور إلى الحساب أدناه، واكتب رقم الطلب في خانة البيان.\n'
       + 'بعد التحويل ارفع صورة الإيصال، وسيُراجع الطلب ويُفعَّل الوصول خلال مدة قصيرة.',
-    account_details_ar: 'يُعبّئها المالك من لوحة الإدارة',
     requires_proof: true,
     countries: [],
     currencies: ['USD'],
@@ -53,7 +55,6 @@ const METHODS = [
     description_ar: 'الدفع عبر محفظة شام كاش، ثم رفع إثبات الحوالة.',
     instructions_ar:
       'أرسل المبلغ إلى المحفظة أدناه، ثم ارفع صورة إشعار الحوالة مع رقم العملية.',
-    account_details_ar: 'يُعبّئها المالك من لوحة الإدارة',
     requires_proof: true,
     countries: ['SY'],
     currencies: ['USD'],
@@ -100,16 +101,14 @@ try {
         ${m.code}, ${m.type}::payment_method_type, ${m.display_name_ar},
         ${m.display_name_en}, ${m.description_ar},
         ${'instructions_ar' in m ? m.instructions_ar : null},
-        ${'account_details_ar' in m ? m.account_details_ar : null},
+        ${null}, -- account details: the owner's to enter, never seeded (F3)
         ${'support_message_ar' in m ? m.support_message_ar : null},
         ${m.requires_proof}, ${m.countries as unknown as string[]},
         ${m.currencies as unknown as string[]}, ${m.is_active}, ${m.sort_order}
       )
-      ON CONFLICT (code) DO UPDATE SET
-        display_name_ar = EXCLUDED.display_name_ar,
-        description_ar  = EXCLUDED.description_ar,
-        sort_order      = EXCLUDED.sort_order,
-        updated_at      = now()
+      -- A method that exists is the owner's (F3: edited at /admin/payment-methods);
+      -- re-running the seed must not put its names or order back.
+      ON CONFLICT (code) DO NOTHING
     `;
   }
 
@@ -120,8 +119,17 @@ try {
   for (const row of active) {
     console.log(`  ${row.is_active ? 'ACTIVE  ' : 'inactive'} ${row.code}`);
   }
-  console.log('\nNEXT: fill in the account details from the admin console before');
-  console.log('taking real money, and set support.whatsapp in settings.');
+  const incomplete = await sql<Array<{ code: string }>>`
+    SELECT code FROM payment_methods
+     WHERE type = 'MANUAL'
+       AND (coalesce(trim(account_details_ar), '') = '' OR coalesce(trim(instructions_ar), '') = '')
+     ORDER BY sort_order
+  `;
+  if (incomplete.length > 0) {
+    console.log(`\nNOT OFFERED TO BUYERS until completed: ${incomplete.map((r) => r.code).join(', ')}`);
+    console.log('Fill in the account details at /admin/payment-methods before taking real money.');
+  }
+  console.log('WhatsApp assistance is offered only once support.whatsapp is set in settings.');
 } catch (error) {
   console.error(`Payment method seeding failed: ${(error as Error).message}`);
   process.exitCode = 1;

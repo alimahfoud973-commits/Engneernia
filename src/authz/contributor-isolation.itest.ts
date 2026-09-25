@@ -167,7 +167,7 @@ beforeAll(async () => {
     ]);
     await tx.insert(paymentMethods).values({
       id: ids.method, code: `iso-bank-${suffix}`, type: 'MANUAL',
-      displayNameAr: 'تحويل', instructionsAr: 'حوّل', requiresProof: false,
+      displayNameAr: 'تحويل', instructionsAr: 'حوّل', accountDetailsAr: 'IBAN TEST', requiresProof: false,
       countries: [], currencies: ['USD'], isActive: true, sortOrder: 1,
     });
   });

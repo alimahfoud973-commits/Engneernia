@@ -386,6 +386,13 @@
       "when": 1789422056766,
       "tag": "0054_free_order_completion",
       "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1789510000000,
+      "tag": "0055_payment_method_snapshot",
+      "breakpoints": true
     }
   ]
 }

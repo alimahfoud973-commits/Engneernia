@@ -7,7 +7,7 @@ import type {
   PaymentContext, PaymentMethodConfig, PaymentProvider, PaymentMethodType,
 } from './port';
 import {
-  ManualTransferProvider, UnconfiguredGatewayProvider, WhatsAppAssistProvider,
+  ManualTransferProvider, UnconfiguredGatewayProvider, WhatsAppAssistProvider, manualMethodGaps,
 } from './providers';
 
 /**
@@ -112,6 +112,28 @@ export async function availableMethods(
       return { config, provider: providerFor(config.type, settings.whatsapp) };
     })
     .filter(({ config, provider }) => isMethodAvailable(config, provider, context));
+}
+
+/**
+ * Why an ACTIVE method is still not offered to anyone — empty when nothing
+ * but a customer's country, currency or amount can keep it back.
+ *
+ * For the owner's screen (F3): the same rules `availableMethods` applies
+ * through each provider's `supports`, put into words. A manual method lists
+ * exactly what is missing; the other two types depend on things outside the
+ * row (a WhatsApp number in settings, a gateway that does not exist).
+ */
+export function methodGaps(config: PaymentMethodConfig, whatsappPhone: string): readonly string[] {
+  switch (config.type) {
+    case 'MANUAL':
+      return manualMethodGaps(config).map((gap) => `ينقصها: ${gap}`);
+    case 'ASSISTED':
+      return new WhatsAppAssistProvider(whatsappPhone).supports()
+        ? []
+        : ['لم يُضبط رقم واتساب في إعدادات المنصة'];
+    case 'GATEWAY':
+      return ['لا توجد بوابة دفع إلكترونية مُعدّة'];
+  }
 }
 
 /**

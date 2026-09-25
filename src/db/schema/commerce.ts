@@ -355,6 +355,17 @@ export const payments = pgTable(
     approvedAt: utcTimestamp('approved_at'),
     rejectedReason: text('rejected_reason'),
 
+    /*
+     * What the customer was told when they chose the method (migration 0055).
+     * The order screen reads these, never the live method: disabling a method
+     * or changing its account must not change what an order already waiting
+     * for a transfer says.
+     */
+    methodNameSnapshot: text('method_name_snapshot').notNull(),
+    instructionsSnapshot: text('instructions_snapshot'),
+    accountDetailsSnapshot: text('account_details_snapshot'),
+    requiresProofSnapshot: boolean('requires_proof_snapshot').notNull(),
+
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

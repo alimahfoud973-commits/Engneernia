@@ -332,6 +332,12 @@ export async function placeOrder(
         currency: order.currency,
         // One payment per order attempt; a double-click cannot create two.
         idempotencyKey: `${order.id}:${resolved.config.id}`,
+        // What this customer is told to do, kept with their payment: the
+        // owner changing or disabling the method later does not rewrite it.
+        methodNameSnapshot: resolved.config.displayNameAr,
+        instructionsSnapshot: resolved.config.instructionsAr,
+        accountDetailsSnapshot: resolved.config.accountDetailsAr,
+        requiresProofSnapshot: resolved.config.requiresProof,
       })
       .onConflictDoNothing({ target: payments.idempotencyKey });
 

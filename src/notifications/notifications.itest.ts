@@ -91,7 +91,7 @@ beforeAll(async () => {
     ]);
     await tx.insert(paymentMethods).values({
       id: ids.method, code: `nf-bank-${suffix}`, type: 'MANUAL',
-      displayNameAr: 'تحويل بنكي', instructionsAr: 'حوّل', requiresProof: false,
+      displayNameAr: 'تحويل بنكي', instructionsAr: 'حوّل', accountDetailsAr: 'IBAN TEST', requiresProof: false,
       countries: [], currencies: ['USD'], isActive: true, sortOrder: 1,
     });
   });
