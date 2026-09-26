@@ -136,6 +136,18 @@ describe('1. PDF ingest produces a private original and a public preview', () =>
       expect(file.storageKey).toMatch(/^(original|preview)\/[0-9a-f]{2}\/[0-9a-f-]{36}$/);
     }
   });
+
+  it('records the size and hash of the bytes actually stored, for the preview too', async () => {
+    const files = await withRawActorContext(OWNER_RAW, (tx) =>
+      tx.select().from(productFiles).where(eq(productFiles.productId, ids.pdfProduct)),
+    );
+    for (const file of files) {
+      const bucket = file.role === 'PREVIEW' ? 'derivatives' : 'originals';
+      const stored = await getStorage().get(bucket, file.storageKey);
+      expect(file.byteSize).toBe(BigInt(stored.byteLength));
+      expect(file.sha256).toBe(createHash('sha256').update(stored).digest('hex'));
+    }
+  });
 });
 
 describe('2. the formats the owner asked for', () => {

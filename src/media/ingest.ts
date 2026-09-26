@@ -91,6 +91,7 @@ export async function ingestProductFile(actor: Actor, input: IngestInput): Promi
 
   // --- 4. Derive the preview — PDF only, by the owner's decision ------------
   let previewKey: string | null = null;
+  let storedPreview: { byteSize: number; sha256: string } | null = null;
   let pageCount: number | null = null;
   let previewPageCount: number | null = null;
 
@@ -101,7 +102,7 @@ export async function ingestProductFile(actor: Actor, input: IngestInput): Promi
     });
     previewPageCount = preview.previewPageCount;
     previewKey = newStorageKey('preview');
-    await storage.put('derivatives', previewKey, preview.pdf, 'application/pdf');
+    storedPreview = await storage.put('derivatives', previewKey, preview.pdf, 'application/pdf');
   }
 
   // --- 5. Record, atomically -----------------------------------------------
@@ -147,7 +148,7 @@ export async function ingestProductFile(actor: Actor, input: IngestInput): Promi
       .returning({ id: productFiles.id });
 
     let previewId: string | null = null;
-    if (previewKey) {
+    if (previewKey && storedPreview) {
       const [preview] = await tx
         .insert(productFiles)
         .values({
@@ -158,8 +159,8 @@ export async function ingestProductFile(actor: Actor, input: IngestInput): Promi
           originalFilename: `preview-${input.filename}`,
           contentType: 'application/pdf',
           container: 'PDF',
-          byteSize: BigInt(1),
-          sha256: '',
+          byteSize: BigInt(storedPreview.byteSize),
+          sha256: storedPreview.sha256,
           pageCount: previewPageCount,
           // A derivative the platform generated from an already-scanned file.
           scanStatus: 'CLEAN',
