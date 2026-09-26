@@ -20,7 +20,11 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const { slug } = await params;
   const contributor = await contributorBySlug(slug);
-  if (!contributor) return { title: 'غير موجود', robots: { index: false, follow: false } };
+  // `notFound()` HERE, not a stand-in title (D4): the browser takes its tab
+  // title from this function's result, not from `not-found.tsx`, so a title
+  // returned here is what a 404 tab showed. Raising not-found makes Next
+  // resolve `not-found.tsx`'s metadata instead; the status stays 404.
+  if (!contributor) notFound();
 
   const description = [contributor.specialization, contributor.bio]
     .filter(Boolean)

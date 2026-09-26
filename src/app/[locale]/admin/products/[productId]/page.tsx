@@ -1,3 +1,4 @@
+import { cache } from 'react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { setRequestLocale } from 'next-intl/server';
@@ -16,6 +17,39 @@ import { NotFoundError } from '@/lib/errors';
 export const dynamic = 'force-dynamic';
 
 /**
+ * The product this request is for, or not-found — shared by the page and its
+ * metadata (D4).
+ *
+ * The browser takes a 404's tab title from `generateMetadata`, so metadata has
+ * to know when the product does not resolve; otherwise the tab read as the
+ * home page. The steps and their order are the page's own, moved here
+ * unchanged. `cache()` runs them once per request, so the page and its
+ * metadata share one owner check and one query.
+ */
+const resolveProduct = cache(async (productId: string) => {
+  // A malformed id must be 404, not a 500 from the database.
+  if (!isUuid(productId)) notFound();
+
+  const actor = await requireOwner('/admin/products');
+
+  try {
+    return { actor, product: await adminProductDetail(actor, productId) };
+  } catch (error) {
+    if (error instanceof NotFoundError) notFound();
+    throw error;
+  }
+});
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ productId: string }>;
+}) {
+  await resolveProduct((await params).productId);
+  return {};
+}
+
+/**
  * One product, and every step it needs to become sellable (§26, §27, §30).
  *
  * The steps are on ONE page on purpose. They are not independent settings —
@@ -32,18 +66,7 @@ export default async function AdminProductPage({
   const { locale, productId } = await params;
   setRequestLocale(locale);
 
-  // A malformed id must be 404, not a 500 from the database.
-  if (!isUuid(productId)) notFound();
-
-  const actor = await requireOwner('/admin/products');
-
-  let product;
-  try {
-    product = await adminProductDetail(actor, productId);
-  } catch (error) {
-    if (error instanceof NotFoundError) notFound();
-    throw error;
-  }
+  const { actor, product } = await resolveProduct(productId);
 
   const options = await catalogueOptions(actor);
 

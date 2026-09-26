@@ -1,3 +1,4 @@
+import { cache } from 'react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { setRequestLocale } from 'next-intl/server';
@@ -45,6 +46,34 @@ function describeTerms(row: EngineerProductRow): string {
 }
 
 /**
+ * The engineer this request is for, or not-found — shared by the page and its
+ * metadata (D4).
+ *
+ * The browser takes a 404's tab title from `generateMetadata`, so metadata has
+ * to know when the engineer does not resolve; otherwise the tab read as the
+ * home page. The steps and their order are the page's own, moved here
+ * unchanged. `cache()` runs them once per request, so the page and its
+ * metadata share one owner check and one query.
+ */
+const resolveEngineer = cache(async (contributorId: string) => {
+  if (!isUuid(contributorId)) notFound();
+
+  const actor = await requireOwner(`/admin/engineers/${contributorId}`);
+  const detail = await engineerDetail(actor, contributorId);
+  if (!detail) notFound();
+  return { actor, detail };
+});
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ contributorId: string }>;
+}) {
+  await resolveEngineer((await params).contributorId);
+  return {};
+}
+
+/**
  * One engineer: who they are, what they have, what it sold, what they are owed.
  *
  * `isUuid` at the edge so a malformed id is 404 and not 500, and a
@@ -59,14 +88,8 @@ export default async function AdminEngineerPage({
   const { locale, contributorId } = await params;
   setRequestLocale(locale);
 
-  if (!isUuid(contributorId)) notFound();
-
-  const actor = await requireOwner(`/admin/engineers/${contributorId}`);
-  const [detail, disciplines] = await Promise.all([
-    engineerDetail(actor, contributorId),
-    disciplineOptions(actor),
-  ]);
-  if (!detail) notFound();
+  const { actor, detail } = await resolveEngineer(contributorId);
+  const disciplines = await disciplineOptions(actor);
 
   const { engineer, products } = detail;
 

@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { NotFoundContent } from '@/components/not-found-content';
 
 /**
@@ -8,6 +9,10 @@ import { NotFoundContent } from '@/components/not-found-content';
  * `lang`, `dir`, the fonts and the stylesheet. Next keeps the 404 status and
  * adds `noindex` itself.
  */
+export const metadata: Metadata = {
+  title: 'الصفحة غير موجودة',
+};
+
 export default function LocaleNotFound() {
   return <NotFoundContent />;
 }

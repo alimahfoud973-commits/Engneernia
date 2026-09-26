@@ -1,3 +1,4 @@
+import { cache } from 'react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { setRequestLocale } from 'next-intl/server';
@@ -23,6 +24,39 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 /**
+ * The order this request is for, or not-found — shared by the page and its
+ * metadata (D4).
+ *
+ * The browser takes a 404's tab title from `generateMetadata`, so metadata has
+ * to know when the order does not resolve; otherwise the tab of a missing
+ * order read as the home page. The steps and their order are the page's own,
+ * moved here unchanged. `cache()` runs them once per request, so the page and
+ * its metadata share one sign-in check and one query.
+ */
+const resolveOrder = cache(async (orderId: string) => {
+  // Before anything else, and before the sign-in redirect: a path segment that
+  // is not a uuid names no order, and must not be carried into a query (where
+  // PostgreSQL would raise) nor into the `next` parameter of a login link.
+  if (!isUuid(orderId)) notFound();
+
+  const actor = await requireActor(`/checkout/${orderId}`);
+  const view = await checkoutView(actor, orderId);
+  // RLS already removed an order that is not this actor's, so "not found"
+  // covers both absent and not-yours, indistinguishably.
+  if (!view) notFound();
+  return view;
+});
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ orderId: string }>;
+}) {
+  await resolveOrder((await params).orderId);
+  return {};
+}
+
+/**
  * The order screen (specification §24, §40).
  *
  * Written to carry a customer through a MANUAL payment without needing to
@@ -37,16 +71,7 @@ export default async function CheckoutPage({
   const { locale, orderId } = await params;
   setRequestLocale(locale);
 
-  // Before anything else, and before the sign-in redirect: a path segment that
-  // is not a uuid names no order, and must not be carried into a query (where
-  // PostgreSQL would raise) nor into the `next` parameter of a login link.
-  if (!isUuid(orderId)) notFound();
-
-  const actor = await requireActor(`/checkout/${orderId}`);
-  const view = await checkoutView(actor, orderId);
-  // RLS already removed an order that is not this actor's, so "not found"
-  // covers both absent and not-yours, indistinguishably.
-  if (!view) notFound();
+  const view = await resolveOrder(orderId);
 
   const { order, items, payment, methods, whatsappHelp } = view;
   const isSettled = order.status === 'PAID' || order.status === 'COMPLETED';

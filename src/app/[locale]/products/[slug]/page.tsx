@@ -24,9 +24,10 @@ export const dynamic = 'force-dynamic';
  * to it from four places; without a canonical those are competing duplicates
  * as far as a search engine is concerned.
  *
- * A product that does not resolve gets a plain title and no indexing, rather
- * than throwing: metadata generation runs before the page body, and a throw
- * here produces a 500 where the page itself would have produced a clean 404.
+ * A product that does not resolve raises `notFound()` here (D4). Not an
+ * ordinary throw — that would be a 500 where the page gives a clean 404 — but
+ * Next's not-found signal, which keeps the 404 and gives the tab the title of
+ * `not-found.tsx` instead of one written here.
  */
 export async function generateMetadata({
   params,
@@ -35,7 +36,11 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const { slug } = await params;
   const product = await productBySlug(slug);
-  if (!product) return { title: 'غير موجود', robots: { index: false, follow: false } };
+  // `notFound()` HERE, not a stand-in title (D4): the browser takes its tab
+  // title from this function's result, not from `not-found.tsx`, so a title
+  // returned here is what a 404 tab showed. Raising not-found makes Next
+  // resolve `not-found.tsx`'s metadata instead; the status stays 404.
+  if (!product) notFound();
 
   const description = metaDescription(product);
   const canonical = `/products/${product.slug}`;
