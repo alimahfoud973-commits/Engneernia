@@ -29,6 +29,28 @@ jobs:
           --health-timeout 5s
           --health-retries 10
 
+      # S3-compatible object storage at STORAGE_ENDPOINT (localhost:9000).
+      # The media, payment-proof and delivery tests store real objects and
+      # follow real signed URLs — the same protocol the application speaks to
+      # Cloudflare R2 in production. Without this service they fail with
+      # ECONNREFUSED on port 9000.
+      #
+      # RustFS, not the MinIO of docker-compose.yml: MinIO stopped publishing
+      # community images and removed them from Docker Hub, so no MinIO image
+      # can be relied on to pull in a clean environment. Pinned, so a new
+      # release cannot change CI underneath the code.
+      storage:
+        image: rustfs/rustfs:1.0.0
+        env:
+          RUSTFS_ACCESS_KEY: ci
+          RUSTFS_SECRET_KEY: ci
+        ports: ['9000:9000']
+        options: >-
+          --health-cmd "curl -fsS http://127.0.0.1:9000/health"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
     steps:
       - uses: actions/checkout@v4
 
@@ -91,6 +113,31 @@ jobs:
           npm run seed:catalog
           npm run seed:demo
           npm run seed:scale
+
+      # The application never creates buckets — in production they exist
+      # before it runs — so they are created here, as docker-compose.yml's
+      # minio_init does locally. Private, like every bucket in this stack.
+      - name: Create the storage buckets
+        env:
+          STORAGE_ENDPOINT: http://localhost:9000
+          STORAGE_REGION: us-east-1
+          STORAGE_ACCESS_KEY_ID: ci
+          STORAGE_SECRET_ACCESS_KEY: ci
+          STORAGE_BUCKET_ORIGINALS: ci-originals
+          STORAGE_BUCKET_DERIVATIVES: ci-derivatives
+        run: |
+          node --input-type=module -e "
+            import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3';
+            const env = process.env;
+            const s3 = new S3Client({
+              endpoint: env.STORAGE_ENDPOINT, region: env.STORAGE_REGION, forcePathStyle: true,
+              credentials: { accessKeyId: env.STORAGE_ACCESS_KEY_ID, secretAccessKey: env.STORAGE_SECRET_ACCESS_KEY },
+            });
+            for (const Bucket of [env.STORAGE_BUCKET_ORIGINALS, env.STORAGE_BUCKET_DERIVATIVES]) {
+              await s3.send(new CreateBucketCommand({ Bucket }));
+              console.log('created', Bucket);
+            }
+          "
 
       # The phase P1 exit criterion. These run every query the way a BUGGY
       # application would write it — no WHERE clause, no policy check — and

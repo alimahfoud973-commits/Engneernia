@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { serverEnv } from '@/lib/config/env';
+import { ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3';
 import { eq, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
@@ -153,6 +154,46 @@ afterAll(async () => {
   await closeDb();
 });
 
+/**
+ * How many objects the originals bucket holds, in whichever storage the
+ * application is configured with: a directory for `file:` (local work), the
+ * bucket itself for an S3-compatible service (CI, and R2 in production).
+ */
+async function objectsInOriginals(): Promise<number> {
+  const env = serverEnv();
+  if (env.STORAGE_ENDPOINT.startsWith('file:')) {
+    let total = 0;
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (entry.isDirectory()) walk(join(dir, entry.name));
+        else total += 1;
+      }
+    };
+    walk(join(env.STORAGE_ENDPOINT.replace(/^file:\/\//, ''), 'originals'));
+    return total;
+  }
+
+  const client = new S3Client({
+    endpoint: env.STORAGE_ENDPOINT,
+    region: env.STORAGE_REGION,
+    forcePathStyle: env.STORAGE_FORCE_PATH_STYLE,
+    credentials: {
+      accessKeyId: env.STORAGE_ACCESS_KEY_ID,
+      secretAccessKey: env.STORAGE_SECRET_ACCESS_KEY,
+    },
+  });
+  let total = 0;
+  let token: string | undefined;
+  do {
+    const page = await client.send(new ListObjectsV2Command({
+      Bucket: env.STORAGE_BUCKET_ORIGINALS, ContinuationToken: token,
+    }));
+    total += page.KeyCount ?? 0;
+    token = page.NextContinuationToken;
+  } while (token);
+  return total;
+}
+
 describe('1. payment method availability (specification §22)', () => {
   it('offers the manual method and refuses the unconfigured gateway', async () => {
     const methods = await withRawActorContext(ctxOf(customer), (tx) =>
@@ -243,20 +284,7 @@ describe('2. the manual purchase, end to end (specification §24)', () => {
      * report it: every call returns an error, which is what it looks like when
      * the platform is working.
      */
-    const root = serverEnv().STORAGE_ENDPOINT.replace(/^file:\/\//, '');
-    const count = () => {
-      let total = 0;
-      const walk = (dir: string) => {
-        for (const entry of readdirSync(dir, { withFileTypes: true })) {
-          if (entry.isDirectory()) walk(join(dir, entry.name));
-          else total += 1;
-        }
-      };
-      walk(join(root, 'originals'));
-      return total;
-    };
-
-    const before = count();
+    const before = await objectsInOriginals();
 
     await expect(
       submitPaymentProof(customer, {
@@ -264,7 +292,7 @@ describe('2. the manual purchase, end to end (specification §24)', () => {
       }),
     ).rejects.toThrow(NotFoundError);
 
-    expect(count()).toBe(before);
+    expect(await objectsInOriginals()).toBe(before);
   });
 
   it('refuses to let the customer approve their own payment', async () => {

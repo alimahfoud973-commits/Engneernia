@@ -6,7 +6,7 @@ import { withRawActorContext } from '@/db/actor-context';
 import { ensureTestOwner } from '@/db/testing/single-owner';
 import { closeDb } from '@/db';
 import { commissionAgreements, contributors, disciplines, downloadEvents, entitlements, productContributors, productFiles, productPrices, products, users } from '@/db/schema';
-import { getStorage } from './storage';
+import { getStorage, type DeliveryGrant } from './storage';
 import { ingestProductFile } from './ingest';
 import { deliverProductFile } from './deliver';
 import { changeProductStatus } from '@/catalog/products';
@@ -184,6 +184,22 @@ describe('2. the formats the owner asked for', () => {
 });
 
 /**
+ * The bytes a visitor actually receives, whichever way storage hands them over.
+ *
+ * The filesystem adapter streams. An S3-compatible service — CI, and R2 in
+ * production — answers with a signed URL instead (see `DeliveryGrant`), and
+ * that URL is fetched here exactly as the browser would follow it. Asserting
+ * on the grant's kind would test which adapter happens to be configured, not
+ * what reaches the visitor.
+ */
+async function deliveredBytes(grant: DeliveryGrant): Promise<Uint8Array> {
+  if (grant.kind === 'stream') return grant.body;
+  const response = await fetch(grant.url);
+  expect(response.status).toBe(200);
+  return new Uint8Array(await response.arrayBuffer());
+}
+
+/**
  * THE RULE THE WHOLE PHASE EXISTS FOR.
  */
 describe('3. the public reaches the preview and never the original', () => {
@@ -193,9 +209,8 @@ describe('3. the public reaches the preview and never the original', () => {
 
   it('lets an anonymous visitor fetch the preview', async () => {
     const result = await deliverProductFile(GUEST, { productSlug: slugs.pdf, role: 'PREVIEW' });
-    expect(result.grant.kind).toBe('stream');
-    if (result.grant.kind !== 'stream') return;
-    expect(Buffer.from(result.grant.body.subarray(0, 5)).toString()).toBe('%PDF-');
+    const body = await deliveredBytes(result.grant);
+    expect(Buffer.from(body.subarray(0, 5)).toString()).toBe('%PDF-');
   });
 
   it('REFUSES an anonymous visitor the original', async () => {
@@ -230,8 +245,7 @@ describe('3. the public reaches the preview and never the original', () => {
 
   it('the delivered preview carries no text from any withheld page', async () => {
     const result = await deliverProductFile(GUEST, { productSlug: slugs.pdf, role: 'PREVIEW' });
-    if (result.grant.kind !== 'stream') throw new Error('expected a stream');
-    const raw = Buffer.from(result.grant.body).toString('latin1');
+    const raw = Buffer.from(await deliveredBytes(result.grant)).toString('latin1');
     for (let page = 6; page <= 60; page += 1) {
       expect(raw.includes(`PAGE-${page}`), `page ${page} leaked`).toBe(false);
     }
