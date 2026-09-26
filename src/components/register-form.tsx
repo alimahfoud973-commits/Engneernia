@@ -1,16 +1,11 @@
 'use client';
 
 import { useActionState } from 'react';
-import {
-  registerAction,
-  resendVerificationAction,
-  type RegisterState,
-  type ResendState,
-} from '@/auth/actions';
+import Link from 'next/link';
+import { registerAction, type RegisterState } from '@/auth/actions';
 import { MIN_PASSWORD_LENGTH } from '@/auth/password-policy';
 
 const INITIAL: RegisterState = { error: null, done: false };
-const RESEND_INITIAL: ResendState = { error: null, done: false };
 
 const FIELD =
   'rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-surface)]'
@@ -27,7 +22,7 @@ export function RegisterForm() {
   const [state, formAction, pending] = useActionState(registerAction, INITIAL);
 
   if (state.done) {
-    return <CheckYourInbox />;
+    return <SignInNow />;
   }
 
   return (
@@ -126,59 +121,28 @@ export function RegisterForm() {
 }
 
 /**
- * Shown after every accepted submission, identical in all three server
- * outcomes. It offers the resend path because the commonest real failure is
- * not a bug — it is a message that went to spam.
+ * Shown after every accepted submission, identical whether the account was
+ * just created or the address already had one. There is no email step: the
+ * account is ACTIVE, so the next thing to do is sign in.
  */
-function CheckYourInbox() {
-  const [state, formAction, pending] = useActionState(resendVerificationAction, RESEND_INITIAL);
-
+function SignInNow() {
   return (
     <div className="flex flex-col gap-5">
-      <div className="rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-surface)] px-4 py-4">
-        <p className="text-sm font-semibold">تحقّق من بريدك</p>
+      <div
+        role="status"
+        className="rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-surface)] px-4 py-4"
+      >
+        <p className="text-sm font-semibold">تمّ</p>
         <p className="mt-1.5 text-sm text-[var(--color-ink-soft)]">
-          إن كان العنوان صالحاً فقد أُرسلت إليه رسالة تأكيد. افتح الرابط فيها لتفعيل حسابك.
-          الرابط صالح ٢٤ ساعة ويعمل مرة واحدة.
+          إن لم يكن هذا البريد مسجّلاً من قبل فقد أُنشئ حسابك. سجّل الدخول الآن ببريدك وكلمة المرور.
         </p>
       </div>
-
-      <div className="flex flex-col gap-2">
-        <p className="text-sm text-[var(--color-ink-soft)]">
-          لم تصلك الرسالة؟ تحقّق من مجلد البريد غير المرغوب، أو اطلب إرسالها من جديد.
-        </p>
-
-        {state.done ? (
-          <p role="status" className="text-sm text-[var(--color-ink-soft)]">
-            إن كان هناك حساب بانتظار التأكيد على هذا العنوان، فقد أُرسل رابط جديد.
-          </p>
-        ) : (
-          <form action={formAction} className="flex flex-col gap-2 sm:flex-row">
-            <input
-              name="email"
-              type="email"
-              required
-              dir="ltr"
-              placeholder="البريد نفسه"
-              aria-label="البريد الإلكتروني"
-              className={`${FIELD} flex-1`}
-            />
-            <button
-              type="submit"
-              disabled={pending}
-              className="rounded-[var(--radius-card)] border border-[var(--color-line)] px-4 py-2.5 text-sm font-semibold transition-opacity hover:opacity-80 disabled:opacity-60"
-            >
-              {pending ? 'جارٍ الإرسال…' : 'أرسل من جديد'}
-            </button>
-          </form>
-        )}
-
-        {state.error ? (
-          <p role="alert" className="text-sm text-[var(--color-danger)]">
-            {state.error}
-          </p>
-        ) : null}
-      </div>
+      <Link
+        href="/login"
+        className="rounded-[var(--radius-card)] bg-[var(--color-accent)] px-5 py-2.5 text-center text-sm font-semibold text-[var(--color-accent-contrast)] transition-opacity hover:opacity-90"
+      >
+        تسجيل الدخول
+      </Link>
     </div>
   );
 }

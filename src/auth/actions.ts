@@ -12,7 +12,7 @@ import {
 import { currentActor } from './current';
 import { toUserMessage } from '@/lib/action-errors';
 import { revalidatePath } from 'next/cache';
-import { registerCustomer, resendVerification } from './register';
+import { registerCustomer } from './register';
 import {
   createSession, markTwoFactorVerified, resolveActor,
   revokeAllSessions, sessionCookie,
@@ -89,10 +89,10 @@ export async function loginAction(
     case 'ACCOUNT_DISABLED':
       return { error: 'هذا الحساب معطّل. تواصل مع إدارة المنصة.' };
     case 'EMAIL_NOT_VERIFIED':
-      return {
-        error:
-          'لم يُؤكَّد بريدك بعد. افتح الرابط المُرسَل إليك، أو اطلب إرساله من جديد من صفحة إنشاء الحساب.',
-      };
+      // Unreachable since 0056 activated every PENDING account and stopped
+      // creating them. Kept so an unexpected row is refused with a remedy,
+      // not with an instruction to open a link nobody sends any more.
+      return { error: 'هذا الحساب غير مفعّل. تواصل مع إدارة المنصة.' };
     case 'TWO_FACTOR_REQUIRED':
     case 'SUCCESS': {
       const cookieStore = await cookies();
@@ -141,12 +141,13 @@ export async function logoutAction(): Promise<void> {
 
 /**
  * ===========================================================================
- * REGISTRATION (owner decision on OPEN-23)
+ * REGISTRATION (owner decision on OPEN-23, revised by 0056)
  * ===========================================================================
  * THE SUCCESS MESSAGE IS THE ONLY MESSAGE.
  *
- * Whether the address was new, already pending, or already a verified
- * customer, this returns the same "check your inbox". The outcome is known —
+ * Whether the address was new or already has an account, this returns the
+ * same "account created unless the address was already registered — sign in".
+ * The outcome is known —
  * `registerCustomer` returns it — and is deliberately discarded here. A
  * different word in any of those cases would let anyone type an address into
  * a public form and learn whether that person has an account on this
@@ -235,16 +236,11 @@ export async function registerAction(
      * ValidationError, which the branch before this one returns. So the hint
      * named the one thing that could not be wrong.
      *
-     * What actually reaches here is our side failing — and the likeliest one on
-     * launch day is outbound mail: a wrong SMTP password, a blocked port 465,
-     * a provider still holding new senders. The person then sees a message
-     * blaming their password, changes it, fails again, and leaves; and whoever
-     * reads the report goes looking at the password policy instead of at the
-     * mail server. Observed with an unreachable SMTP host, which is exactly the
-     * shape of a misconfigured launch.
+     * What actually reaches here is our side failing — the database, not the
+     * person's input. A message blaming their password would send them to
+     * change it, fail again, and leave, and send whoever reads the report to
+     * the password policy instead of the real fault.
      *
-     * The account itself is not lost: `app_register_customer` reissues on a
-     * PENDING row, so a later attempt succeeds once the real fault is fixed.
      * The text stays identical for every address — a message that varied would
      * be the enumeration oracle this whole path avoids.
      */
@@ -256,36 +252,6 @@ export async function registerAction(
 
   return { error: null, done: true };
 }
-
-export type ResendState = { error: string | null; done: boolean };
-
-/** Same silence as registration: a resend never confirms an address exists. */
-export async function resendVerificationAction(
-  _previous: ResendState,
-  formData: FormData,
-): Promise<ResendState> {
-  const email = z.string().trim().min(3).max(254).safeParse(formData.get('email'));
-  if (!email.success) return { error: 'بريد إلكتروني غير صالح', done: false };
-
-  const headerStore = await headers();
-  const ip = headerStore.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null;
-
-  try {
-    await resendVerification({ email: email.data, ip });
-  } catch (error) {
-    if (error instanceof RateLimitedError) {
-      return {
-        error: `محاولات كثيرة. أعد المحاولة بعد ${waitLabelAr(error.retryAfterSeconds)}.`,
-        done: false,
-      };
-    }
-    logger.error({ err: error }, 'Resending a verification email failed');
-    return { error: 'تعذّر الإرسال. حاول مرة أخرى.', done: false };
-  }
-
-  return { error: null, done: true };
-}
-
 
 const twoFactorSchema = z.object({
   // Six digits. Trimmed and stripped of spaces because authenticator apps

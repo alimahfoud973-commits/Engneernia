@@ -393,6 +393,13 @@
       "when": 1789510000000,
       "tag": "0055_payment_method_snapshot",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1789600000000,
+      "tag": "0056_register_without_email_confirmation",
+      "breakpoints": true
     }
   ]
 }
