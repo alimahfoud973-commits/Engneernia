@@ -12,6 +12,7 @@ import { approvePayment, createOrder, placeOrder } from '@/commerce/orders';
 import { GUEST, type Actor } from '@/authz/actor';
 import { invoiceDocument, myInvoices } from './invoice-queries';
 import { renderInvoicePdf } from './invoice-pdf';
+import { readTaxPolicy } from './tax-policy';
 
 /**
  * ===========================================================================
@@ -35,10 +36,12 @@ const PRICE = 11_500n; // $115.00 — contains exactly $15.00 at 15%.
 const ids = {
   owner: '', customer: randomUUID(), engineerUser: randomUUID(),
   contributor: randomUUID(), discipline: randomUUID(),
-  productZero: randomUUID(), productTaxed: randomUUID(), method: randomUUID(),
+  productZero: randomUUID(), productTaxed: randomUUID(), productIdentity: randomUUID(),
+  method: randomUUID(),
 };
 const slugZero = `tax-zero-${suffix}`;
 const slugTaxed = `tax-real-${suffix}`;
+const slugIdentity = `tax-identity-${suffix}`;
 
 let OWNER_RAW: { actorId: string; actorRole: string };
 const base = { kind: 'USER', displayName: 'T', locale: 'ar', sessionId: 's', twoFactorSatisfied: true, totpEnabled: false } as const;
@@ -52,6 +55,15 @@ async function setTaxRate(bp: number): Promise<void> {
     tx.execute(sql`UPDATE settings SET value = ${String(bp)}::jsonb WHERE key = 'tax.rateBp'`),
   );
 }
+
+/** Writes a setting as the owner is told to: a JSON value, here a JSON string. */
+async function setSetting(key: string, json: string): Promise<void> {
+  await withRawActorContext(OWNER_RAW, (tx) =>
+    tx.execute(sql`UPDATE settings SET value = ${json}::jsonb WHERE key = ${key}`),
+  );
+}
+
+const readPolicy = () => withRawActorContext(OWNER_RAW, (tx) => readTaxPolicy(tx));
 
 async function buy(slug: string): Promise<string> {
   const order = await createOrder(customer, { productSlugs: [slug], buyerCountry: 'SY' });
@@ -95,7 +107,9 @@ beforeAll(async () => {
       id: ids.discipline, slug: `tax-disc-${suffix}`, nameAr: 'تخصص', nameEn: 'T', sortOrder: 94,
     });
 
-    for (const [id, slug] of [[ids.productZero, slugZero], [ids.productTaxed, slugTaxed]] as const) {
+    for (const [id, slug] of [
+      [ids.productZero, slugZero], [ids.productTaxed, slugTaxed], [ids.productIdentity, slugIdentity],
+    ] as const) {
       await tx.insert(products).values({
         id, slug, titleAr: 'مورد هندسي', disciplineId: ids.discipline,
         fileType: 'PDF', status: 'PUBLISHED', currency: 'USD', publishedAt: new Date(),
@@ -120,14 +134,17 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await setTaxRate(0);
+  // The values 0042 ships, so no later file sees this one's identity.
+  await setSetting('tax.registration', '""');
+  await setSetting('invoice.prefix', '"INV"');
   await withRawActorContext(OWNER_RAW, async (tx) => {
     // Invoices are append-only and are NOT deleted — the same treatment the
     // ledger gets, and the reason they carry no foreign key to the order.
     await tx.delete(entitlements).where(eq(entitlements.customerId, ids.customer));
     await tx.delete(orders).where(eq(orders.customerId, ids.customer));
-    await tx.delete(productPrices).where(sql`product_id IN (${ids.productZero}, ${ids.productTaxed})`);
-    await tx.delete(productContributors).where(sql`product_id IN (${ids.productZero}, ${ids.productTaxed})`);
-    await tx.delete(products).where(sql`id IN (${ids.productZero}, ${ids.productTaxed})`);
+    await tx.delete(productPrices).where(sql`product_id IN (${ids.productZero}, ${ids.productTaxed}, ${ids.productIdentity})`);
+    await tx.delete(productContributors).where(sql`product_id IN (${ids.productZero}, ${ids.productTaxed}, ${ids.productIdentity})`);
+    await tx.delete(products).where(sql`id IN (${ids.productZero}, ${ids.productTaxed}, ${ids.productIdentity})`);
     await tx.delete(disciplines).where(eq(disciplines.id, ids.discipline));
     await tx.delete(commissionAgreements).where(eq(commissionAgreements.contributorId, ids.contributor));
     await tx.delete(contributors).where(eq(contributors.id, ids.contributor));
@@ -245,6 +262,56 @@ describe('once the owner sets a rate', () => {
     expect(after.taxBp).toBe(1500);
     expect(after.taxMinor).toBe(1_500n);
     expect(after.taxNameAr).toBe(before.taxNameAr);
+  });
+});
+
+describe('the seller identity the owner sets (Stage 2 audit, F4)', () => {
+  /**
+   * Tax numbers are commonly digits only. Stored as the JSON string the
+   * owner is told to write, such a value used to come back from the jsonb
+   * decoder as a number, fail the string check, and be replaced by the
+   * fallback — silently, on an invoice that can never be corrected.
+   */
+  it('reads a digits-only tax number exactly as written', async () => {
+    await setSetting('tax.registration', '"300123456700003"');
+    expect((await readPolicy()).tax.registration).toBe('300123456700003');
+  });
+
+  it('reads a digits-only invoice prefix exactly as written', async () => {
+    // Read only. Issuing an invoice under it would leave a permanent row with
+    // another prefix, and invoices are never deleted.
+    await setSetting('invoice.prefix', '"2026"');
+    try {
+      expect((await readPolicy()).invoice.prefix).toBe('2026');
+    } finally {
+      await setSetting('invoice.prefix', '"INV"');
+    }
+  });
+
+  it('reads a tax number with letters in it exactly as written', async () => {
+    await setSetting('tax.registration', '"SY-300123456700003"');
+    expect((await readPolicy()).tax.registration).toBe('SY-300123456700003');
+  });
+
+  it('reads tax.rateBp as before: a number, and a number written as a string', async () => {
+    await setTaxRate(1500);
+    expect((await readPolicy()).tax.rateBp).toBe(1500);
+    // Pinned so the fix above demonstrably leaves the rate's reading alone.
+    await setSetting('tax.rateBp', '"1500"');
+    expect((await readPolicy()).tax.rateBp).toBe(1500);
+    await setTaxRate(1500);
+  });
+
+  it('prints a digits-only tax number on the invoice and its document', async () => {
+    await setSetting('tax.registration', '"300123456700003"');
+    const orderId = await buy(slugIdentity);
+
+    const invoice = await invoiceOf(orderId);
+    expect(invoice.invoiceNumber).toMatch(/^INV-\d{4}-\d{5}$/);
+    expect(invoice.taxRegistration).toBe('300123456700003');
+
+    const document = await invoiceDocument(owner, invoice.id);
+    expect(document!.taxRegistration).toBe('300123456700003');
   });
 });
 

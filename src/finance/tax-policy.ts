@@ -1,5 +1,5 @@
 import 'server-only';
-import { inArray } from 'drizzle-orm';
+import { inArray, sql } from 'drizzle-orm';
 import { settings } from '@/db/schema';
 import type { Transaction } from '@/db/actor-context';
 import { assertTaxRateBp } from '@/lib/money/tax';
@@ -48,13 +48,32 @@ export async function readTaxPolicy(
   tx: Transaction,
 ): Promise<{ readonly tax: TaxPolicy; readonly invoice: InvoiceIdentity }> {
   const rows = await tx
-    .select({ key: settings.key, value: settings.value })
+    .select({
+      key: settings.key,
+      value: settings.value,
+      json: sql<string>`${settings.value}::text`,
+    })
     .from(settings)
     .where(inArray(settings.key, [...KEYS]));
 
   const map = new Map(rows.map((row) => [row.key, row.value]));
+
+  /*
+   * THE TEXT SETTINGS ARE READ AS TEXT, PARSED ONCE (Stage 2 audit, F4).
+   *
+   * `value` comes through Drizzle's jsonb decoder, which runs JSON.parse on a
+   * string the driver has already decoded. A tax number stored as the string
+   * "300123456700003" came back as a NUMBER, failed the string check below,
+   * and every invoice was issued — permanently — without it. The same happened
+   * to a digits-only invoice prefix. `getPublicSettings` reads the same way
+   * for the same reason (W2).
+   *
+   * `tax.rateBp` is deliberately still read from `value`, so the rate behaves
+   * exactly as it did before this fix.
+   */
+  const text = new Map(rows.map((row) => [row.key, JSON.parse(row.json) as unknown]));
   const str = (key: string, fallback: string) => {
-    const value = map.get(key);
+    const value = text.get(key);
     return typeof value === 'string' && value.length > 0 ? value : fallback;
   };
 
