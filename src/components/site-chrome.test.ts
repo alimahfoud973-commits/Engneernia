@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { GUEST, type Actor } from '@/authz/actor';
 import { accountEntry } from './site-chrome';
 
@@ -45,5 +47,37 @@ describe('accountEntry', () => {
   it('treats a session still owing its second factor as signed in', () => {
     // /account then sends it to /login/two-factor — the step it has to take.
     expect(accountEntry(ownerOwingSecondFactor).href).toBe('/account');
+  });
+});
+
+/**
+ * ===========================================================================
+ * THE HEADER LISTS NO DISCIPLINE OF ITS OWN (D3)
+ * ===========================================================================
+ * Disciplines are data (owner decisions §12, D-12). The header once wrote the
+ * four into this file, so disabling one left a header link to a 404 and adding
+ * one never reached the header. It now renders `navDisciplines()`; this keeps
+ * a literal list from coming back. Source-level, so it runs without a server;
+ * `src/catalog/nav-disciplines.itest.ts` checks what the function returns.
+ * ===========================================================================
+ */
+describe('the header reads its disciplines from the database (D3)', () => {
+  const source = readFileSync(join(process.cwd(), 'src/components/site-chrome.tsx'), 'utf8');
+  const SEEDED_SLUGS = ['electrical', 'civil', 'architecture', 'mechanical'];
+
+  it('names no discipline slug', () => {
+    for (const slug of SEEDED_SLUGS) {
+      expect(source, slug).not.toMatch(new RegExp(`['"\`/]${slug}['"\`]`));
+    }
+  });
+
+  it('keeps no hard-coded discipline list', () => {
+    expect(source).not.toMatch(/DISCIPLINE_NAV/);
+    expect(source).not.toMatch(/\{\s*slug:\s*['"]/);
+  });
+
+  it('renders navDisciplines() and shows name_ar as stored', () => {
+    expect(source).toMatch(/await navDisciplines\(\)/);
+    expect(source).toMatch(/\{item\.nameAr\}/);
   });
 });

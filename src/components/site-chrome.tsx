@@ -4,13 +4,7 @@ import { BrandMark } from '@/components/brand-mark';
 import { currentActor } from '@/auth/current';
 import { isOwner, type Actor } from '@/authz/actor';
 import { unreadNotificationCount } from '@/notifications/queries';
-
-const DISCIPLINE_NAV = [
-  { slug: 'electrical', label: 'كهربائية' },
-  { slug: 'civil', label: 'مدنية' },
-  { slug: 'architecture', label: 'معمارية' },
-  { slug: 'mechanical', label: 'ميكانيكية' },
-] as const;
+import { navDisciplines } from '@/catalog/public-queries';
 
 /**
  * The header's way in: sign-in for a visitor, the account for anyone signed
@@ -30,6 +24,9 @@ export function accountEntry(actor: Actor): { href: '/login' | '/account'; label
  */
 export async function SiteHeader() {
   const settings = await getPublicSettings();
+  // Read from the `disciplines` table, never listed here (D3): the owner adds,
+  // renames, disables and reorders disciplines as data.
+  const disciplineNav = await navDisciplines();
 
   // A signed-in visitor needs to know a sale happened without hunting for it.
   // `currentActor` is request-cached, and the count swallows its own failures,
@@ -52,13 +49,13 @@ export async function SiteHeader() {
         </Link>
 
         <nav aria-label="التخصصات" className="flex flex-wrap items-center gap-1 text-sm">
-          {DISCIPLINE_NAV.map((item) => (
+          {disciplineNav.map((item) => (
             <Link
               key={item.slug}
               href={`/${item.slug}`}
               className="rounded-sm px-2.5 py-1.5 text-[var(--color-ink-soft)] transition-colors hover:bg-[var(--color-surface-muted)] hover:text-[var(--color-ink)]"
             >
-              {item.label}
+              {item.nameAr}
             </Link>
           ))}
         </nav>

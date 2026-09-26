@@ -1,5 +1,6 @@
 import 'server-only';
-import { and, desc, eq, isNull, or, ilike, sql } from 'drizzle-orm';
+import { cache } from 'react';
+import { and, asc, desc, eq, isNull, or, ilike, sql } from 'drizzle-orm';
 import { withActor } from '@/db/actor-context';
 import { GUEST } from '@/authz/actor';
 import { categories, contributors, disciplines, productFiles, productPrices, products } from '@/db/schema';
@@ -160,6 +161,41 @@ export async function listDisciplines(): Promise<readonly PublicDiscipline[]> {
     return rows.map((row) => ({ ...row, productCount: Number(row.productCount) }));
   });
 }
+
+export interface NavDiscipline {
+  readonly slug: string;
+  readonly nameAr: string;
+}
+
+/**
+ * The disciplines the site header links to (D3).
+ *
+ * The header wrote the four disciplines into its own source, so the owner's
+ * right to add, rename, disable and reorder them (owner decisions §12; D-12:
+ * "disciplines are data, not code") stopped at the one element on every
+ * page: a disabled discipline stayed in the header and led to a 404, a new
+ * one never appeared, a rename or a reorder did not show.
+ *
+ * Deliberately not `listDisciplines`: the header needs no product counts, and
+ * those cost a grouped scan of the products table on every page. This reads
+ * two columns through `disciplines_active_order_idx`.
+ *
+ * `is_active` is filtered here AND by the GUEST policy (`disciplines_select`),
+ * so a disabled discipline is absent twice over. `name_ar` is shown exactly as
+ * the owner wrote it. `slug` breaks ties in `sort_order`, so two disciplines
+ * sharing a position cannot swap places between requests.
+ *
+ * `cache()` deduplicates within one render pass, as `getPublicSettings` does.
+ */
+export const navDisciplines = cache(async (): Promise<readonly NavDiscipline[]> =>
+  withActor(GUEST, (tx) =>
+    tx
+      .select({ slug: disciplines.slug, nameAr: disciplines.nameAr })
+      .from(disciplines)
+      .where(eq(disciplines.isActive, true))
+      .orderBy(asc(disciplines.sortOrder), asc(disciplines.slug)),
+  ),
+);
 
 /**
  * "Newest first", written the one way the whole catalogue writes it.
