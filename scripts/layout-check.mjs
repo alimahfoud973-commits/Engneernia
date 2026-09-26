@@ -43,6 +43,16 @@ const PATHS = [
 ];
 
 /**
+ * The platform's own 404 page (D1), measured like any other page: it is the
+ * page a mistyped link lands on, so it is seen on phones as often as any. One
+ * path through each of its two documents — the root one, which renders its
+ * own `<html>`, and the one inside the `[locale]` layout. A 404 is the
+ * expected answer here; anything else fails.
+ */
+const NOT_FOUND_PATHS = ['/a/b/c', '/ar/products/no-such-product'];
+const EXPECTED_STATUS = new Map(NOT_FOUND_PATHS.map((path) => [path, 404]));
+
+/**
  * One pixel of slack, and no more. Sub-pixel rounding can add a fraction; a
  * threshold generous enough to hide a stray element is a threshold that lets
  * this defect back in.
@@ -57,11 +67,12 @@ for (const width of WIDTHS) {
   const context = await browser.newContext({ viewport: { width, height: 900 }, locale: 'ar' });
   const page = await context.newPage();
 
-  for (const path of PATHS) {
+  for (const path of [...PATHS, ...NOT_FOUND_PATHS]) {
     let measured;
     try {
       const response = await page.goto(BASE + path, { waitUntil: 'networkidle', timeout: 45_000 });
-      if (!response || response.status() >= 400) {
+      const expected = EXPECTED_STATUS.get(path);
+      if (!response || (expected ? response.status() !== expected : response.status() >= 400)) {
         console.log(`  FAIL  ${width}px ${path} — HTTP ${response ? response.status() : 'no response'}`);
         failures += 1;
         continue;

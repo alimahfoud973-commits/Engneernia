@@ -2,30 +2,11 @@ import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { NextIntlClientProvider } from 'next-intl';
 import { getMessages, setRequestLocale } from 'next-intl/server';
-import { IBM_Plex_Sans_Arabic, IBM_Plex_Mono } from 'next/font/google';
 import { routing, directionOf } from '@/i18n/routing';
 import { getPublicSettings } from '@/platform/settings';
 import { languageAlternates, publicRobots, siteUrl } from '@/seo/config';
+import { fontVariables } from '../fonts';
 import '../globals.css';
-
-/**
- * IBM Plex Sans Arabic carries both Arabic and Latin glyphs from one
- * superfamily, which keeps English engineering terms inside Arabic copy
- * visually consistent rather than falling back to an unrelated face.
- */
-const plexArabic = IBM_Plex_Sans_Arabic({
-  subsets: ['arabic', 'latin'],
-  weight: ['400', '500', '600', '700'],
-  variable: '--font-plex-arabic',
-  display: 'swap',
-});
-
-const plexMono = IBM_Plex_Mono({
-  subsets: ['latin'],
-  weight: ['400', '500', '600'],
-  variable: '--font-plex-mono',
-  display: 'swap',
-});
 
 /**
  * The metadata every page inherits.
@@ -97,7 +78,7 @@ export default async function LocaleLayout({
 
   return (
     <html lang={locale} dir={directionOf(locale)} suppressHydrationWarning>
-      <body className={`${plexArabic.variable} ${plexMono.variable}`}>
+      <body className={fontVariables}>
         <NextIntlClientProvider messages={messages}>{children}</NextIntlClientProvider>
       </body>
     </html>
