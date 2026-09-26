@@ -213,6 +213,21 @@ describe('3. the public reaches the preview and never the original', () => {
     expect(Buffer.from(body.subarray(0, 5)).toString()).toBe('%PDF-');
   });
 
+  it('serves the preview from this origin, never by a redirect to storage', async () => {
+    /**
+     * The product page frames this response, and its CSP allows frames from
+     * this origin only. A signed-URL redirect sends the frame to the storage
+     * host and the browser refuses it: the preview was blank on every product
+     * page wherever storage was S3-compatible (Preview Display). With the
+     * filesystem adapter this always held; against S3 — CI, R2 — it did not.
+     */
+    const result = await deliverProductFile(GUEST, { productSlug: slugs.pdf, role: 'PREVIEW' });
+    expect(result.grant.kind).toBe('stream');
+    if (result.grant.kind !== 'stream') return;
+    expect(result.grant.contentType).toBe('application/pdf');
+    expect(Buffer.from(result.grant.body.subarray(0, 5)).toString()).toBe('%PDF-');
+  });
+
   it('REFUSES an anonymous visitor the original', async () => {
     await expect(
       deliverProductFile(GUEST, { productSlug: slugs.pdf, role: 'ORIGINAL' }),

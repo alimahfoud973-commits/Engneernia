@@ -17,7 +17,6 @@ const withNextIntl = createNextIntlPlugin('./src/i18n/request.ts');
  */
 const securityHeaders = [
   { key: 'X-Content-Type-Options', value: 'nosniff' },
-  { key: 'X-Frame-Options', value: 'DENY' },
   { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
   { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=(), payment=()' },
   {
@@ -45,7 +44,19 @@ const nextConfig: NextConfig = {
    */
   serverExternalPackages: ['@napi-rs/canvas', 'mupdf'],
   async headers() {
-    return [{ source: '/:path*', headers: securityHeaders }];
+    return [
+      { source: '/:path*', headers: securityHeaders },
+      /**
+       * Nothing may frame this site — except the product preview, which the
+       * product page on this origin frames. A header set here overrides the
+       * one a route sets, so the preview path is left out and its route sends
+       * `X-Frame-Options: SAMEORIGIN` with `frame-ancestors 'self'` itself.
+       */
+      {
+        source: '/:path((?!api/files/[^/]+/preview$).*)',
+        headers: [{ key: 'X-Frame-Options', value: 'DENY' }],
+      },
+    ];
   },
 };
 

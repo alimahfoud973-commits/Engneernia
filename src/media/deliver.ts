@@ -197,6 +197,32 @@ export async function deliverProductFile(
     };
   }
 
+  /**
+   * ===========================================================================
+   * THE PREVIEW IS SERVED FROM THIS ORIGIN, NEVER BY REDIRECT (Preview Display)
+   * ===========================================================================
+   * The product page shows the preview in an iframe, and its CSP allows frames
+   * from this origin only (`frame-src 'self'`). A signed-URL redirect moves the
+   * frame to the storage host — R2 in production — and the browser refuses to
+   * display it: the preview was blank on every product page wherever storage
+   * was S3-compatible. Streaming it here keeps the frame on this origin, so the
+   * policy stays as narrow as it is instead of naming a storage host.
+   *
+   * A preview is a few generated pages, public by design, and already
+   * authorised above; the original never takes this path.
+   */
+  if (file.role === 'PREVIEW') {
+    return {
+      grant: {
+        kind: 'stream',
+        body: await getStorage().get(file.bucket as BucketName, file.storageKey),
+        contentType: file.contentType,
+      },
+      filename: file.originalFilename,
+      contentType: file.contentType,
+    };
+  }
+
   const grant = await getStorage().grantDelivery(file.bucket as BucketName, file.storageKey, {
     ttlSeconds: isOriginal ? ORIGINAL_URL_TTL_SECONDS : PREVIEW_URL_TTL_SECONDS,
     /**

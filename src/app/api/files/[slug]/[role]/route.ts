@@ -57,6 +57,18 @@ export async function GET(
         // the authorisation is not.
         'Cache-Control': 'private, no-store',
         'X-Content-Type-Options': 'nosniff',
+        /**
+         * The preview is the one response on this site meant to be framed — by
+         * the product page, on this origin, and by nothing else. Every other
+         * response keeps `X-Frame-Options: DENY` from next.config.ts, which
+         * refused even this origin and left the preview blank.
+         */
+        ...(upper === 'PREVIEW'
+          ? {
+              'Content-Security-Policy': "frame-ancestors 'self'",
+              'X-Frame-Options': 'SAMEORIGIN',
+            }
+          : {}),
       },
     });
   } catch (error) {
