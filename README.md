@@ -8,13 +8,13 @@
 
 - Node.js 22+
 - PostgreSQL 16 (أو `docker compose up -d`)
-- تخزين متوافق مع S3 (MinIO محلياً)
+- تخزين متوافق مع S3 (RustFS محلياً عبر `docker compose`)، أو ملفات على القرص بـ `file://`
 
 ## التشغيل
 
 ```bash
 cp .env.example .env.local     # ثم املأ القيم
-docker compose up -d           # PostgreSQL + MinIO
+docker compose up -d           # PostgreSQL + تخزين S3 (RustFS)
 npm ci
 npm run dev
 ```
