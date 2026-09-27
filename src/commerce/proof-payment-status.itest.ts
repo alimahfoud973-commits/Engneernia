@@ -14,6 +14,7 @@ import { approvePayment, completeFreeOrder, createOrder, placeOrder, rejectPayme
 import { submitPaymentProof } from './proofs';
 import { NotFoundError, RuleViolationError } from '@/lib/errors';
 import type { Actor } from '@/authz/actor';
+import { insertProductsWithVersion } from '@/db/testing/product-versions';
 
 /**
  * ===========================================================================
@@ -123,7 +124,7 @@ beforeAll(async () => {
       id: ids.discipline, slug: `w7-disc-${suffix}`, nameAr: 'تخصص', nameEn: 'T', sortOrder: 93,
     });
     const published = { disciplineId: ids.discipline, fileType: 'PDF' as const, status: 'PUBLISHED' as const, currency: 'USD', publishedAt: new Date() };
-    await tx.insert(products).values([
+    await insertProductsWithVersion(tx, [
       { id: ids.paid, slug: slugs.paid, titleAr: 'دليل مدفوع', ...published },
       { id: ids.second, slug: slugs.second, titleAr: 'دليل ثانٍ', ...published },
       { id: ids.free, slug: slugs.free, titleAr: 'دليل مجاني', ...published },

@@ -17,6 +17,7 @@ import {
 import { changeProductStatus, createProduct, setProductContributors } from '@/catalog/products';
 import { RuleViolationError, ValidationError } from '@/lib/errors';
 import { GUEST, type Actor } from '@/authz/actor';
+import { insertProductsWithVersion } from '@/db/testing/product-versions';
 
 /**
  * ===========================================================================
@@ -118,7 +119,7 @@ beforeAll(async () => {
       { id: ids.discipline, slug: `eng-disc-${suffix}`, nameAr: 'تخصص أول', nameEn: 'One', sortOrder: 94 },
       { id: ids.otherDiscipline, slug: `eng-disc2-${suffix}`, nameAr: 'تخصص ثانٍ', nameEn: 'Two', sortOrder: 95 },
     ]);
-    await tx.insert(products).values([
+    await insertProductsWithVersion(tx, [
       { id: ids.productA, slug: `eng-pa-${suffix}`, titleAr: 'منتج أ', disciplineId: ids.discipline, fileType: 'PDF', status: 'PUBLISHED', currency: 'USD', publishedAt: new Date() },
       { id: ids.productB, slug: `eng-pb-${suffix}`, titleAr: 'منتج ب', disciplineId: ids.discipline, fileType: 'PDF', status: 'PUBLISHED', currency: 'USD', publishedAt: new Date() },
     ]);

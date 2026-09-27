@@ -4,6 +4,7 @@ import { resolveActor, sessionCookie } from '@/auth/session';
 import { deliverProductFile } from '@/media/deliver';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
+import { isUuid } from '@/lib/uuid';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,13 +18,20 @@ const ROLES = new Set(['ORIGINAL', 'PREVIEW', 'THUMBNAIL']);
  * Security says may have it, and everything else gets 404.
  */
 export async function GET(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ slug: string; role: string }> },
 ) {
   const { slug, role } = await context.params;
   const upper = role.toUpperCase();
 
   if (!ROLES.has(upper)) {
+    return NextResponse.json({ error: 'NOT_FOUND' }, { status: 404 });
+  }
+
+  // `?v=` names one version (a buyer's own, from "my purchases"). A malformed
+  // id is a 404 at the edge, never a database error.
+  const version = new URL(request.url).searchParams.get('v');
+  if (version !== null && !isUuid(version)) {
     return NextResponse.json({ error: 'NOT_FOUND' }, { status: 404 });
   }
 
@@ -35,6 +43,7 @@ export async function GET(
     const result = await deliverProductFile(actor, {
       productSlug: slug,
       role: upper as 'ORIGINAL' | 'PREVIEW' | 'THUMBNAIL',
+      versionId: version,
       ip: headerStore.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null,
       userAgent: headerStore.get('user-agent'),
     });

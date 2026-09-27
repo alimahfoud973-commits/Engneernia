@@ -16,6 +16,7 @@ import { contributorStatement } from '@/finance/balances';
 import { outstandingPayables, revenueByPeriod } from '@/finance/reports';
 import { periodKeyOf, nextPeriodKey, periodBounds } from '@/lib/time/period';
 import type { Actor } from '@/authz/actor';
+import { insertProductsWithVersion } from '@/db/testing/product-versions';
 
 /**
  * ===========================================================================
@@ -145,7 +146,7 @@ beforeAll(async () => {
     await tx.insert(disciplines).values({
       id: ids.discipline, slug: `iso-disc-${suffix}`, nameAr: 'تخصص', nameEn: 'T', sortOrder: 93,
     });
-    await tx.insert(products).values([
+    await insertProductsWithVersion(tx, [
       { id: ids.productA, slug: slugA, titleAr: 'منتج المهندس أ', disciplineId: ids.discipline, fileType: 'PDF', status: 'PUBLISHED', currency: 'USD', publishedAt: new Date() },
       { id: ids.productB, slug: slugB, titleAr: 'منتج المهندس ب', disciplineId: ids.discipline, fileType: 'PDF', status: 'PUBLISHED', currency: 'USD', publishedAt: new Date() },
       { id: ids.productShared, slug: slugShared, titleAr: 'منتج مشترك', disciplineId: ids.discipline, fileType: 'PDF', status: 'PUBLISHED', currency: 'USD', publishedAt: new Date() },

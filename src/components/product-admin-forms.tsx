@@ -1,11 +1,13 @@
 'use client';
 
 import { useActionState, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
-  changePriceAction, changeStatusAction, createProductAction, setCreditsAction,
-  updateProductAction, uploadProductFileAction, type ProductActionState,
+  changePriceAction, changeStatusAction, createProductAction, productVersionAction,
+  setCreditsAction, updateProductAction, type ProductActionState,
 } from '@/catalog/product-actions';
 import { formKey } from './form-key';
+import { uploadFile } from './upload-file';
 
 const INITIAL: ProductActionState = { error: null };
 const FIELD =
@@ -145,18 +147,51 @@ export function ProductDetailsForm({
   );
 }
 
-export function UploadFileForm({ productId, declaredType }: { productId: string; declaredType: string }) {
-  const [state, action, pending] = useActionState(uploadProductFileAction, INITIAL);
+/**
+ * Upload a product file (S4-01). Not a Server Action: an action's body is
+ * capped at 1 MB before any of our code runs, so the file goes to a Route
+ * Handler that streams it against the product type's own ceiling.
+ */
+export function UploadFileForm({ productId }: { productId: string }) {
+  const router = useRouter();
+  const [pending, setPending] = useState(false);
+  const [state, setState] = useState<ProductActionState & { waiting?: number }>(INITIAL);
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const file = (form.elements.namedItem('file') as HTMLInputElement | null)?.files?.[0];
+    if (!file || file.size === 0) {
+      setState({ error: 'اختر ملفاً أولاً' });
+      return;
+    }
+    setPending(true);
+    const answer = await uploadFile(`/api/admin/products/${productId}/file`, file);
+    setPending(false);
+    if (answer.error) {
+      setState({ error: answer.error });
+      return;
+    }
+    form.reset();
+    setState({ error: null, ok: true, ...(answer.waiting ? { waiting: answer.waiting } : {}) });
+    router.refresh();
+  }
+
   return (
-    <form action={action} className="flex flex-col gap-3">
-      <input type="hidden" name="productId" value={productId} />
-      <input type="hidden" name="declaredType" value={declaredType} />
+    <form onSubmit={submit} className="flex flex-col gap-3">
       <input type="file" name="file" required className={FIELD} />
       <p className="text-xs text-[var(--color-ink-faint)]">
         يُفحص الملف ويُخزَّن في تخزين خاص بلا رابط عام، وتُولَّد معاينة للـPDF تلقائياً.
+        رفع ملف لمنتج معروض للبيع أو مُباع يُنشئ إصداراً جديداً ينتظر اعتمادك، ويبقى الإصدار الحالي معروضاً.
       </p>
       <div><button type="submit" disabled={pending} className={BTN}>{pending ? 'جارٍ الرفع…' : 'رفع الملف'}</button></div>
-      <Note state={state} />
+      {state.waiting ? (
+        <p className="rounded-[var(--radius-card)] border border-[var(--color-warn)] bg-[var(--color-warn-soft)] px-3 py-2 text-sm text-[var(--color-warn)]">
+          رُفع الإصدار {state.waiting} وينتظر اعتمادك في قائمة الإصدارات. المنتج ما زال يبيع الإصدار الحالي.
+        </p>
+      ) : (
+        <Note state={state} />
+      )}
     </form>
   );
 }
@@ -265,5 +300,91 @@ export function StatusForm({
       ) : null}
       <Note state={state} />
     </form>
+  );
+}
+
+export interface VersionRow {
+  readonly id: string;
+  readonly versionNo: number;
+  readonly createdAt: string;
+  readonly isCurrent: boolean;
+  readonly pending: boolean;
+  readonly superseded: boolean;
+  readonly deleted: boolean;
+  readonly filesPurged: boolean;
+  readonly filename: string | null;
+  readonly scanStatus: string | null;
+  readonly buyers: number;
+  readonly buyersInWindow: number;
+  readonly blockers: readonly string[];
+}
+
+/**
+ * The versions of a product (S4-04, S4-09, S4-10): release a waiting one,
+ * delete any. Nothing here decides — `activateVersion` re-runs the file checks
+ * and `deleteVersion` keeps every order, grant and invoice.
+ */
+export function VersionControls({ productId, version }: { productId: string; version: VersionRow }) {
+  const [activateState, activate, activating] = useActionState(productVersionAction, INITIAL);
+  const [deleteState, remove, removing] = useActionState(productVersionAction, INITIAL);
+  const status = version.deleted
+    ? 'محذوف'
+    : version.isCurrent
+      ? 'المعروض للبيع'
+      : version.pending
+        ? 'ينتظر الاعتماد'
+        : version.superseded
+          ? 'سابق'
+          : '—';
+  return (
+    <li className="flex flex-col gap-2 rounded-[var(--radius-card)] border border-[var(--color-line)] p-3 text-sm">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <span className="font-semibold">الإصدار {version.versionNo}</span>
+        <span className="rounded-sm bg-[var(--color-surface-muted)] px-2 py-0.5 text-xs">{status}</span>
+      </div>
+      <p className="text-xs text-[var(--color-ink-faint)]">
+        {version.filename ?? 'بلا ملف أصلي'}
+        {version.scanStatus ? ` · ${version.scanStatus}` : ''}
+        {` · ${version.createdAt.slice(0, 10)}`}
+        {` · المشترون ${version.buyers} (ضمن مدة التنزيل ${version.buyersInWindow})`}
+        {version.filesPurged ? ' · أُزيلت ملفاته من التخزين' : ''}
+      </p>
+      {version.pending && version.blockers.length > 0 ? (
+        <p className="rounded-[var(--radius-card)] border border-[var(--color-warn)] bg-[var(--color-warn-soft)] px-3 py-2 text-xs text-[var(--color-warn)]">
+          لا يمكن اعتماده بعد: {version.blockers.join('، ')}
+        </p>
+      ) : null}
+      {!version.deleted ? (
+        <div className="flex flex-wrap items-center gap-3">
+          {version.pending ? (
+            <form action={activate}>
+              <input type="hidden" name="productId" value={productId} />
+              <input type="hidden" name="versionId" value={version.id} />
+              <input type="hidden" name="op" value="activate" />
+              <button type="submit" disabled={activating} className={BTN}>
+                {activating ? '…' : 'اعتماده للبيع'}
+              </button>
+            </form>
+          ) : null}
+          <form action={remove} className="flex flex-wrap items-center gap-2">
+            <input type="hidden" name="productId" value={productId} />
+            <input type="hidden" name="versionId" value={version.id} />
+            <input type="hidden" name="op" value="delete" />
+            <label className="flex items-center gap-1.5 text-xs">
+              <input type="checkbox" name="confirm" value="yes" required />
+              {version.isCurrent ? 'أؤكد الحذف وإيقاف عرض المنتج' : 'أؤكد الحذف'}
+            </label>
+            <button
+              type="submit"
+              disabled={removing}
+              className="rounded-[var(--radius-card)] border border-[var(--color-danger)] px-3 py-2 text-xs text-[var(--color-danger)] disabled:opacity-60"
+            >
+              {removing ? '…' : 'حذف الإصدار'}
+            </button>
+          </form>
+        </div>
+      ) : null}
+      <Note state={activateState.error ? activateState : deleteState} />
+    </li>
   );
 }

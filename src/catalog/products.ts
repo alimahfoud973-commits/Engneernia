@@ -144,6 +144,12 @@ export async function updateProductDetails(
   if (!isOwner(actor)) {
     throw new RuleViolationError('تعديل المنتجات من صلاحية مالك المنصة وحده');
   }
+  // The same rule as createProduct, here where every caller passes (S4-06):
+  // the action's schema is one caller, not the guard. The database refuses
+  // it too (products_title_present, migration 0059).
+  if (input.titleAr.trim() === '') {
+    throw new RuleViolationError('عنوان المنتج مطلوب');
+  }
 
   await withActor(actor, async (tx) => {
     const [before] = await tx
@@ -393,9 +399,16 @@ async function publishReadiness(tx: Transaction, productId: string): Promise<Pub
     .where(eq(products.id, productId))
     .limit(1);
 
+  // The file half is checked on the CURRENT version (migration 0059): a
+  // waiting replacement is released by `activateVersion`, which runs the
+  // same checks, and never goes on sale through a publication.
   const files = await tx
     .select({ role: productFiles.role, scanStatus: productFiles.scanStatus })
     .from(productFiles)
+    .innerJoin(products, and(
+      eq(products.id, productFiles.productId),
+      eq(products.currentVersionId, productFiles.versionId),
+    ))
     .where(eq(productFiles.productId, productId));
 
   const original = files.find((f) => f.role === 'ORIGINAL');

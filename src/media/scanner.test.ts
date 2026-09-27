@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import net from 'node:net';
 import type { AddressInfo } from 'node:net';
-import { ClamAvScanner, UnconfiguredScanner, isServable, type ScanStatus } from './scanner';
+import { ClamAvScanner, UnconfiguredScanner, clamdReply, isServable, type ScanStatus } from './scanner';
 
 /**
  * ===========================================================================
@@ -24,7 +24,7 @@ afterEach(async () => {
 });
 
 /** A fake clamd that replies with whatever the test wants, and records what it got. */
-async function fakeClamd(reply: string | null): Promise<{ port: number; received: () => Buffer }> {
+async function fakeClamd(reply: string | null, terminator = '\n'): Promise<{ port: number; received: () => Buffer }> {
   const chunks: Buffer[] = [];
   const server = net.createServer((socket) => {
     socket.on('data', (chunk: Buffer) => chunks.push(chunk));
@@ -32,7 +32,7 @@ async function fakeClamd(reply: string | null): Promise<{ port: number; received
     socket.on('error', () => {});
     if (reply === null) return; // connect, say nothing, let the timeout bite
     socket.on('data', () => {});
-    setTimeout(() => socket.end(`${reply}\n`), 30);
+    setTimeout(() => socket.end(`${reply}${terminator}`), 30);
   });
   servers.push(server);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -154,5 +154,55 @@ describe('ClamAvScanner', () => {
 
     expect(Buffer.concat(reassembled).equals(body)).toBe(true);
     expect(offset).toBe(wire.length);
+  });
+});
+
+/**
+ * WHAT A REAL CLAMD SENDS (Stage 4, S4-02).
+ *
+ * The adapter sends `zINSTREAM`, and clamd answers a z-prefixed command with a
+ * NUL-terminated reply. The fake above used to end every reply with a newline,
+ * so all of these passed while every real scan was recorded as FAILED — the
+ * audit proved it against the protocol, not against this file.
+ */
+describe('ClamAvScanner — the NUL-terminated replies of a real clamd', () => {
+  it('reads "stream: OK\\0" as CLEAN', async () => {
+    const { port } = await fakeClamd('stream: OK', '\0');
+    const verdict = await new ClamAvScanner('127.0.0.1', port).scan(Buffer.from('harmless'));
+    expect(verdict).toMatchObject({ status: 'CLEAN', detail: null });
+  });
+
+  it('reads "stream: <sig> FOUND\\0" as INFECTED with the signature', async () => {
+    const { port } = await fakeClamd('stream: Eicar-Test-Signature FOUND', '\0');
+    const verdict = await new ClamAvScanner('127.0.0.1', port).scan(Buffer.from('x'));
+    expect(verdict).toMatchObject({ status: 'INFECTED', detail: 'Eicar-Test-Signature' });
+  });
+
+  it('keeps an error reply a FAILURE — never CLEAN', async () => {
+    const { port } = await fakeClamd('INSTREAM size limit exceeded. ERROR', '\0');
+    const verdict = await new ClamAvScanner('127.0.0.1', port).scan(Buffer.from('x'));
+    expect(verdict.status).toBe('FAILED');
+    expect(verdict.detail).toBe('INSTREAM size limit exceeded. ERROR');
+  });
+
+  it('keeps an unknown reply a FAILURE', async () => {
+    const { port } = await fakeClamd('something else', '\0');
+    expect((await new ClamAvScanner('127.0.0.1', port).scan(Buffer.from('x'))).status).toBe('FAILED');
+  });
+});
+
+describe('clamdReply — removes the terminator and nothing else', () => {
+  it.each([
+    ['stream: OK\0', 'stream: OK'],
+    ['stream: OK\n', 'stream: OK'],
+    ['stream: OK', 'stream: OK'],
+    ['stream: X FOUND\0\0', 'stream: X FOUND'],
+  ])('%j → %j', (raw, expected) => {
+    expect(clamdReply(Buffer.from(raw))).toBe(expected);
+  });
+
+  it('does not turn a NUL in the middle into a clean verdict', () => {
+    // "OK" followed by more bytes is not an OK reply.
+    expect(/\bOK\s*$/.test(clamdReply(Buffer.from('stream: OK\0garbage')))).toBe(false);
   });
 });

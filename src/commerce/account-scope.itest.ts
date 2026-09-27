@@ -12,6 +12,7 @@ import { approvePayment, createOrder, placeOrder } from './orders';
 import { myPurchases, verificationQueue } from './queries';
 import { myInvoices } from '@/finance/invoice-queries';
 import { type Actor } from '@/authz/actor';
+import { insertProductsWithVersion } from '@/db/testing/product-versions';
 
 /**
  * ===========================================================================
@@ -86,7 +87,7 @@ beforeAll(async () => {
     });
     await tx.insert(disciplines).values({ id: ids.discipline, slug: `w12-disc-${suffix}`, nameAr: 'تخصص', nameEn: 'T', sortOrder: 93 });
     for (const [id, slug] of [[ids.p1, SLUG1], [ids.p2, SLUG2]] as const) {
-      await tx.insert(products).values({
+      await insertProductsWithVersion(tx, {
         id, slug, titleAr: 'مورد هندسي', disciplineId: ids.discipline,
         fileType: 'PDF', status: 'PUBLISHED', currency: 'USD', publishedAt: new Date(),
       });

@@ -7,7 +7,6 @@ import { currentActor, requireActor, requireOwner } from '@/auth/current';
 import {
   createOrder, completeFreeOrder, placeOrder, approvePayment, rejectPayment,
 } from './orders';
-import { submitPaymentProof } from './proofs';
 import { toUserMessage } from '@/lib/action-errors';
 import { submittedValues, type SubmittedValues } from '@/lib/form-values';
 
@@ -111,45 +110,6 @@ export async function choosePaymentMethodAction(
   // promising a chat that never opened (W2). The order page keeps a link too.
   if (initiation.kind === 'ASSISTED') redirect(initiation.url);
 
-  return { error: null, ok: true };
-}
-
-const proofSchema = z.object({
-  orderId: z.string().uuid(),
-  paymentId: z.string().uuid(),
-  referenceNote: z.string().max(200).optional(),
-});
-
-export async function submitProofAction(
-  _previous: ActionState,
-  formData: FormData,
-): Promise<ActionState> {
-  const parsed = proofSchema.safeParse({
-    orderId: formData.get('orderId'),
-    paymentId: formData.get('paymentId'),
-    referenceNote: formData.get('referenceNote') ?? undefined,
-  });
-  if (!parsed.success) return { error: 'بيانات غير صالحة' };
-
-  const file = formData.get('proof');
-  if (!(file instanceof File) || file.size === 0) {
-    return { error: 'يرجى اختيار صورة الإيصال' };
-  }
-
-  const actor = await requireActor(`/checkout/${parsed.data.orderId}`);
-
-  try {
-    await submitPaymentProof(actor, {
-      paymentId: parsed.data.paymentId,
-      filename: file.name,
-      body: new Uint8Array(await file.arrayBuffer()),
-      referenceNote: parsed.data.referenceNote ?? null,
-    });
-  } catch (error) {
-    return { error: toMessage(error) };
-  }
-
-  revalidatePath(`/checkout/${parsed.data.orderId}`);
   return { error: null, ok: true };
 }
 

@@ -25,7 +25,7 @@ import { moveOrderForProof } from './proof-transition';
  * ===========================================================================
  */
 
-const PROOF_MAX_BYTES = 10 * 1024 * 1024;
+export const PROOF_MAX_BYTES = 10 * 1024 * 1024;
 
 /** Deliberately narrow: a receipt is a photo or a PDF. Nothing else. */
 const PROOF_TYPES: Readonly<Record<string, string>> = {

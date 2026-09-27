@@ -71,20 +71,39 @@ export default async function AccountPage({ params }: { params: Promise<{ locale
                     </Link>
                     <span className="text-xs text-[var(--color-ink-faint)]">
                       <span className="technical-term">{item.fileType}</span>
+                      {item.versionNo !== null ? ` · الإصدار ${item.versionNo}` : ''}
                       {item.downloadCount > 0 ? ` · نُزّل ${item.downloadCount} مرة` : ''}
+                    </span>
+                    {/* S4-03: the right to download lasts six months from the purchase. */}
+                    <span className="text-xs text-[var(--color-ink-faint)]">
+                      {item.windowOpen
+                        ? `التنزيل متاح حتى ${item.expiresAt.toISOString().slice(0, 10)}`
+                        : `انتهت مدة التنزيل في ${item.expiresAt.toISOString().slice(0, 10)}`}
                     </span>
                   </div>
 
-                  {item.revokedAt ? (
-                    <span className="text-sm text-[var(--color-danger)]">الوصول ملغى</span>
-                  ) : (
-                    <a
-                      href={`/api/files/${item.productSlug}/original`}
-                      className="rounded-[var(--radius-card)] bg-[var(--color-accent)] px-4 py-2 text-sm font-semibold text-[var(--color-accent-contrast)] transition-opacity hover:opacity-90"
-                    >
-                      تنزيل الملف
-                    </a>
-                  )}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {item.revokedAt ? (
+                      <span className="text-sm text-[var(--color-danger)]">الوصول ملغى</span>
+                    ) : item.downloadable ? (
+                      <a
+                        href={`/api/files/${item.productSlug}/original${item.versionId ? `?v=${item.versionId}` : ''}`}
+                        className="rounded-[var(--radius-card)] bg-[var(--color-accent)] px-4 py-2 text-sm font-semibold text-[var(--color-accent-contrast)] transition-opacity hover:opacity-90"
+                      >
+                        تنزيل الملف
+                      </a>
+                    ) : (
+                      <span className="text-sm text-[var(--color-ink-faint)]">غير متاح للتنزيل</span>
+                    )}
+                    {item.upgradeAvailable ? (
+                      <Link
+                        href={`/products/${item.productSlug}`}
+                        className="rounded-[var(--radius-card)] border border-[var(--color-line-strong)] px-4 py-2 text-sm transition-colors hover:border-[var(--color-accent)]"
+                      >
+                        إصدار أحدث متاح
+                      </Link>
+                    ) : null}
+                  </div>
                 </li>
               ))}
             </ul>

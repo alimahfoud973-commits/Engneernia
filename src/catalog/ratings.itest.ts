@@ -12,6 +12,7 @@ import { GUEST, type Actor } from '@/authz/actor';
 import { RuleViolationError, ValidationError } from '@/lib/errors';
 import { myRating, rateProduct, ratingSummary } from './ratings';
 import { getPublicSettings } from '@/platform/settings';
+import { insertProductsWithVersion } from '@/db/testing/product-versions';
 
 /**
  * ===========================================================================
@@ -78,7 +79,7 @@ beforeAll(async () => {
     await tx.insert(disciplines).values({
       id: ids.discipline, slug: `rate-disc-${suffix}`, nameAr: 'تخصص', nameEn: 'R', sortOrder: 97,
     });
-    await tx.insert(products).values([
+    await insertProductsWithVersion(tx, [
       { id: ids.product, slug: `rate-prod-${suffix}`, titleAr: 'مورد', disciplineId: ids.discipline, fileType: 'PDF', status: 'PUBLISHED', currency: 'USD' },
       { id: ids.otherProduct, slug: `rate-other-${suffix}`, titleAr: 'مورد آخر', disciplineId: ids.discipline, fileType: 'PDF', status: 'PUBLISHED', currency: 'USD' },
     ]);

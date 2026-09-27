@@ -1,8 +1,11 @@
 import 'server-only';
 import { and, desc, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
 import {
-  entitlements, orderItems, orders, paymentMethods, paymentProofs, payments, products,
+  entitlements, orderItems, orders, paymentMethods, paymentProofs, payments, productPrices,
+  products, productVersions,
 } from '@/db/schema';
+import { money, percentOf, subtract } from '@/lib/money/money';
+import { readUpgradeDiscountBp } from './version-policy';
 import { withActor } from '@/db/actor-context';
 import { availableMethods, whatsappHelpLink } from '@/payments/registry';
 import type { Actor } from '@/authz/actor';
@@ -100,7 +103,21 @@ export async function checkoutView(actor: Actor, orderId: string) {
  */
 export type PurchaseState =
   | { readonly kind: 'BUYABLE' }
-  | { readonly kind: 'OWNED' }
+  /** Holds the version on sale. `windowOpen` false: bought, but the six months are over. */
+  | { readonly kind: 'OWNED'; readonly expiresAt: Date; readonly windowOpen: boolean }
+  /**
+   * Holds an earlier version (S4-09): offered the version on sale at the
+   * upgrade price. `priceMinor` null when the policy row is missing — the
+   * order itself then refuses with a sentence rather than guess a price.
+   */
+  | {
+    readonly kind: 'UPGRADE';
+    readonly heldVersionNo: number | null;
+    readonly heldWindowOpen: boolean;
+    readonly listMinor: bigint;
+    readonly priceMinor: bigint | null;
+    readonly currency: string;
+  }
   | { readonly kind: 'IN_ORDER'; readonly orderId: string };
 
 export async function purchaseState(actor: Actor, productId: string): Promise<PurchaseState> {
@@ -124,31 +141,74 @@ export async function purchaseState(actor: Actor, productId: string): Promise<Pu
      * saying so. Filtering here is the fix; RLS still decides what the query
      * may see at all.
      */
-    const [owned] = await tx
-      .select({ id: entitlements.id })
+    const [product] = await tx
+      .select({
+        currentVersionId: products.currentVersionId,
+        priceMinor: productPrices.amountMinor,
+        currency: productPrices.currency,
+      })
+      .from(products)
+      .leftJoin(productPrices, and(eq(productPrices.productId, products.id), isNull(productPrices.effectiveTo)))
+      .where(eq(products.id, productId))
+      .limit(1);
+
+    const held = await tx
+      .select({
+        versionId: entitlements.versionId,
+        versionNo: productVersions.versionNo,
+        expiresAt: entitlements.expiresAt,
+        windowOpen: sql<boolean>`${entitlements.expiresAt} > now()`,
+      })
       .from(entitlements)
+      .leftJoin(productVersions, eq(productVersions.id, entitlements.versionId))
       .where(and(
         eq(entitlements.productId, productId),
         eq(entitlements.customerId, me),
         isNull(entitlements.revokedAt),
       ))
-      .limit(1);
+      .orderBy(desc(entitlements.grantedAt));
 
-    if (owned) return { kind: 'OWNED' } as const;
+    const current = held.find((h) => h.versionId !== null && h.versionId === product?.currentVersionId);
+    if (current) {
+      return { kind: 'OWNED', expiresAt: current.expiresAt, windowOpen: Boolean(current.windowOpen) } as const;
+    }
 
     const [pending] = await tx
-      .select({ orderId: orders.id })
+      .select({ orderId: orders.id, versionId: orderItems.versionId, status: orders.status })
       .from(orderItems)
       .innerJoin(orders, eq(orders.id, orderItems.orderId))
       .where(and(
         eq(orderItems.productId, productId),
         eq(orders.customerId, me),
         ne(orders.status, 'CANCELLED'),
+        // A completed order on an earlier version is the purchase an upgrade
+        // is offered on, not an order in progress (the rule createOrder applies).
+        sql`(${orders.status} <> 'COMPLETED' OR ${orderItems.versionId} IS NULL OR ${orderItems.versionId} IS NOT DISTINCT FROM ${product?.currentVersionId ?? null})`,
       ))
       .orderBy(desc(orders.createdAt))
       .limit(1);
 
     if (pending) return { kind: 'IN_ORDER', orderId: pending.orderId } as const;
+
+    const earlier = held[0];
+    if (earlier && product?.currentVersionId && product.priceMinor !== null && product.currency) {
+      let priceMinor: bigint | null = null;
+      try {
+        const bp = await readUpgradeDiscountBp(tx);
+        const list = money(product.priceMinor, product.currency);
+        priceMinor = subtract(list, percentOf(list, bp)).amountMinor;
+      } catch {
+        priceMinor = null;
+      }
+      return {
+        kind: 'UPGRADE',
+        heldVersionNo: earlier.versionNo ?? null,
+        heldWindowOpen: held.some((h) => Boolean(h.windowOpen)),
+        listMinor: product.priceMinor,
+        priceMinor,
+        currency: product.currency,
+      } as const;
+    }
 
     return { kind: 'BUYABLE' } as const;
   });
@@ -170,20 +230,58 @@ export async function myPurchases(actor: Actor) {
   const me = actor.userId;
 
   return withActor(actor, async (tx) => {
-    const owned = await tx
+    /*
+     * One row per version bought (S4-09), with its six-month window (S4-03).
+     * The product row is visible to its buyer even after it leaves the
+     * catalogue (0059), so an unpublished or archived purchase still lists.
+     */
+    const rows = await tx
       .select({
         id: entitlements.id,
         grantedAt: entitlements.grantedAt,
+        expiresAt: entitlements.expiresAt,
+        windowOpen: sql<boolean>`${entitlements.expiresAt} > now()`,
         revokedAt: entitlements.revokedAt,
         downloadCount: entitlements.downloadCount,
         productSlug: products.slug,
         productTitle: products.titleAr,
+        productStatus: products.status,
         fileType: products.fileType,
+        versionId: entitlements.versionId,
+        versionNo: productVersions.versionNo,
+        filesPurgedAt: productVersions.filesPurgedAt,
+        currentVersionId: products.currentVersionId,
       })
       .from(entitlements)
       .innerJoin(products, eq(products.id, entitlements.productId))
+      .leftJoin(productVersions, eq(productVersions.id, entitlements.versionId))
       .where(eq(entitlements.customerId, me))
       .orderBy(desc(entitlements.grantedAt));
+
+    const heldVersions = new Set(rows.map((r) => r.versionId).filter(Boolean));
+    const owned = rows.map((row) => {
+      const windowOpen = Boolean(row.windowOpen);
+      const isCurrent = row.versionId !== null && row.versionId === row.currentVersionId;
+      return {
+        id: row.id,
+        grantedAt: row.grantedAt,
+        expiresAt: row.expiresAt,
+        revokedAt: row.revokedAt,
+        downloadCount: row.downloadCount,
+        productSlug: row.productSlug,
+        productTitle: row.productTitle,
+        fileType: row.fileType,
+        versionId: row.versionId,
+        versionNo: row.versionNo,
+        windowOpen,
+        downloadable: windowOpen && row.revokedAt === null && row.filesPurgedAt === null,
+        // A newer version is on sale and this buyer does not hold it yet.
+        upgradeAvailable: !isCurrent
+          && row.productStatus === 'PUBLISHED'
+          && row.currentVersionId !== null
+          && !heldVersions.has(row.currentVersionId),
+      };
+    });
 
     const orderRows = await tx
       .select({

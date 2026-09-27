@@ -12,6 +12,7 @@ import { approvePayment, createOrder, placeOrder } from '@/commerce/orders';
 import { markNotificationsRead, myNotifications, unreadNotificationCount } from './queries';
 import { renderNotification } from './render';
 import type { Actor } from '@/authz/actor';
+import { insertProductsWithVersion } from '@/db/testing/product-versions';
 
 /**
  * ===========================================================================
@@ -73,7 +74,7 @@ beforeAll(async () => {
     await tx.insert(disciplines).values({
       id: ids.discipline, slug: `nf-disc-${suffix}`, nameAr: 'تخصص', nameEn: 'T', sortOrder: 92,
     });
-    await tx.insert(products).values({
+    await insertProductsWithVersion(tx, {
       id: ids.product, slug, titleAr: 'مخطط مشترك', disciplineId: ids.discipline,
       fileType: 'PDF', status: 'PUBLISHED', currency: 'USD', publishedAt: new Date(),
     });

@@ -136,6 +136,12 @@ export const products = pgTable(
     isFree: boolean('is_free').notNull().default(false),
 
     publishedAt: utcTimestamp('published_at'),
+    /**
+     * The version on sale (migration 0059). A foreign key to product_versions
+     * in the database; not declared here because that table is defined in
+     * media.ts, which imports this module.
+     */
+    currentVersionId: uuid('current_version_id'),
     /** Denormalised counter, maintained by the sales path in phase P6. */
     salesCount: integer('sales_count').notNull().default(0),
 

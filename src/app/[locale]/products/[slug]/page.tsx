@@ -248,14 +248,35 @@ export default async function ProductPage({
             {purchase.kind === 'OWNED' ? (
               <div className="flex flex-col gap-2">
                 <p className="rounded-[var(--radius-card)] border border-[var(--color-ok)] bg-[var(--color-ok-soft)] px-3 py-2 text-sm text-[var(--color-ok)]">
-                  هذا المنتج ضمن مشترياتك.
+                  {purchase.windowOpen
+                    ? `هذا الإصدار ضمن مشترياتك، ويمكن تنزيله حتى ${purchase.expiresAt.toISOString().slice(0, 10)}.`
+                    : `اشتريت هذا الإصدار، وانتهت مدة تنزيله في ${purchase.expiresAt.toISOString().slice(0, 10)}.`}
                 </p>
-                <Link
-                  href="/account"
-                  className="rounded-[var(--radius-card)] bg-[var(--color-accent)] px-4 py-2.5 text-center text-sm font-semibold text-[var(--color-accent-contrast)] transition-opacity hover:opacity-90"
-                >
-                  انتقل إلى مشترياتي للتنزيل
-                </Link>
+                {purchase.windowOpen ? (
+                  <Link
+                    href="/account"
+                    className="rounded-[var(--radius-card)] bg-[var(--color-accent)] px-4 py-2.5 text-center text-sm font-semibold text-[var(--color-accent-contrast)] transition-opacity hover:opacity-90"
+                  >
+                    انتقل إلى مشترياتي للتنزيل
+                  </Link>
+                ) : null}
+              </div>
+            ) : purchase.kind === 'UPGRADE' ? (
+              <div className="flex flex-col gap-2">
+                {/*
+                  S4-09 — a buyer of an earlier version is offered the version
+                  on sale at the upgrade price. The price shown is courtesy;
+                  `createOrder` computes it again from the settings row.
+                */}
+                <p className="rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-surface-muted)] px-3 py-2 text-sm">
+                  {purchase.heldVersionNo !== null
+                    ? `لديك الإصدار ${purchase.heldVersionNo} من هذا المنتج. `
+                    : 'لديك إصدار سابق من هذا المنتج. '}
+                  {purchase.priceMinor !== null
+                    ? `الإصدار الحالي لك بسعر ${formatPrice(String(purchase.priceMinor), purchase.currency, false)} بدل ${formatPrice(String(purchase.listMinor), purchase.currency, false)}.`
+                    : 'الإصدار الحالي متاح لك.'}
+                </p>
+                <BuyButton slug={product.slug} label="الترقية إلى الإصدار الحالي" />
               </div>
             ) : purchase.kind === 'IN_ORDER' ? (
               <div className="flex flex-col gap-2">

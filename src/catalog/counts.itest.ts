@@ -5,6 +5,7 @@ import { withRawActorContext } from '@/db/actor-context';
 import { closeDb } from '@/db';
 import { categories, disciplines, products } from '@/db/schema';
 import { disciplineBySlug, listDisciplines } from './public-queries';
+import { insertProductsWithVersion } from '@/db/testing/product-versions';
 
 /**
  * ===========================================================================
@@ -53,7 +54,7 @@ beforeAll(async () => {
       { id: ids.categoryEmpty, disciplineId: ids.discipline, slug: `cnt-empty-${suffix}`,
         nameAr: 'قسم فارغ', nameEn: 'Empty', sortOrder: 2, isActive: true },
     ]);
-    await tx.insert(products).values([
+    await insertProductsWithVersion(tx, [
       ...ids.published.map((id, index) => ({
         id, slug: `cnt-pub-${index}-${suffix}`, titleAr: `منتج منشور ${index}`,
         disciplineId: ids.discipline, categoryId: ids.categoryUsed,

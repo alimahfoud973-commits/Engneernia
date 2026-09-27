@@ -46,6 +46,20 @@ export interface ScannerPort {
  * length-prefixed stream and a one-line reply, and the scanning path is not
  * where an extra dependency earns its risk.
  */
+/**
+ * clamd's reply, without its terminator (Stage 4, S4-02).
+ *
+ * A command prefixed with `z` — `zINSTREAM`, as sent below — is answered with
+ * a NUL-terminated reply ("Clamd replies will honour the requested terminator",
+ * clamd(8)). `trim()` does not remove NUL, so "stream: OK\0" matched neither
+ * OK nor FOUND and every scan was recorded as FAILED: with a real clamd, no
+ * file could be uploaded at all. Only the terminator is removed — a reply
+ * with anything else in it still fails to match and stays a failure.
+ */
+export function clamdReply(raw: Buffer): string {
+  return raw.toString('utf8').replace(/[\0\r\n]+$/, '').trim();
+}
+
 export class ClamAvScanner implements ScannerPort {
   readonly name = 'clamav';
   private readonly host: string;
@@ -91,7 +105,7 @@ export class ClamAvScanner implements ScannerPort {
       });
       socket.on('error', reject);
       socket.on('data', (chunk) => chunks.push(chunk));
-      socket.on('end', () => resolve(Buffer.concat(chunks).toString('utf8').trim()));
+      socket.on('end', () => resolve(clamdReply(Buffer.concat(chunks))));
 
       socket.on('connect', () => {
         socket.write('zINSTREAM\0');

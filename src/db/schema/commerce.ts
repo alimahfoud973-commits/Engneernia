@@ -4,6 +4,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { createdAt, updatedAt, utcTimestamp } from './columns';
 import { products } from './catalog';
+import { productVersions } from './media';
 import { contributors, users } from './identity';
 
 /**
@@ -218,12 +219,16 @@ export const orderItems = pgTable(
      * time is an apportionment that can disagree with the one that was booked.
      * Frozen with the rest of the snapshot, so it cannot.
      *
-     * Always zero today: nothing in the platform grants a discount yet (§43).
-     * The pipeline, the constraints and the tests carry a non-zero one so that
-     * whatever grants one later plugs in without touching money code.
+     * Zero except on an upgrade line (Stage 4 repair, S4-09): a buyer of an
+     * earlier version pays the current price less `catalog.upgradeDiscountBp`.
+     * Coupons and promotions (§43) are still not built; they would plug into
+     * the same column without touching money code.
      */
     discountMinor: bigint('discount_minor', { mode: 'bigint' }).notNull().default(sql`0`),
     currency: text('currency').notNull(),
+    /** The version sold, and whether it was sold as an upgrade (0059). Fixed once written. */
+    versionId: uuid('version_id').references(() => productVersions.id, { onDelete: 'set null' }),
+    isUpgrade: boolean('is_upgrade').notNull().default(false),
 
     // --- the snapshot ---
     commissionModel: commissionModelEnum('commission_model'),
@@ -426,8 +431,17 @@ export const entitlements = pgTable(
       .notNull()
       .references(() => products.id, { onDelete: 'restrict' }),
     orderItemId: uuid('order_item_id').references(() => orderItems.id, { onDelete: 'set null' }),
+    /** The version bought (0059); filled from the order line by a trigger. */
+    versionId: uuid('version_id').references(() => productVersions.id, { onDelete: 'set null' }),
 
     grantedAt: utcTimestamp('granted_at').notNull().defaultNow(),
+    /**
+     * The end of the download window: purchase date + `downloads.entitlementMonths`
+     * (owner decision, 0059). Filled by a trigger at the grant, fixed afterwards.
+     */
+    // `default NULL` only makes the column optional to an insert: the trigger
+    // `entitlements_fill_guard` computes it from the setting, never the code.
+    expiresAt: utcTimestamp('expires_at').notNull().default(sql`NULL`),
     /** Set on refund; the row is never deleted (§37). */
     revokedAt: utcTimestamp('revoked_at'),
     revokedReason: text('revoked_reason'),
@@ -456,8 +470,12 @@ export const entitlements = pgTable(
      * plain unique index cannot express that.
      */
     uniqueIndex('entitlements_live_unique')
+      .on(table.customerId, table.versionId)
+      .where(sql`${table.revokedAt} IS NULL AND ${table.versionId} IS NOT NULL`),
+    uniqueIndex('entitlements_live_unversioned_unique')
       .on(table.customerId, table.productId)
-      .where(sql`${table.revokedAt} IS NULL`),
+      .where(sql`${table.revokedAt} IS NULL AND ${table.versionId} IS NULL`),
+    index('entitlements_customer_product_idx').on(table.customerId, table.productId),
   ],
 );
 

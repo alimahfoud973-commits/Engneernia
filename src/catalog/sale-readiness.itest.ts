@@ -20,6 +20,7 @@ import { submitPaymentProof } from '@/commerce/proofs';
 import { ingestProductFile } from '@/media/ingest';
 import { NotFoundError, RuleViolationError } from '@/lib/errors';
 import type { Actor } from '@/authz/actor';
+import { insertProductsWithVersion } from '@/db/testing/product-versions';
 
 /**
  * ===========================================================================
@@ -341,7 +342,7 @@ describe('6. a product published before this rule can be repaired, not frozen', 
     // Written directly, as older data and the seeds were: published, paid, and
     // neither engineer has terms. The rule does not rewrite existing rows.
     await asOwner(async (tx) => {
-      await tx.insert(products).values({
+      await insertProductsWithVersion(tx, {
         id: ids.legacy, slug: `f2-legacy-${suffix}`, titleAr: 'منتج قديم', disciplineId: ids.discipline,
         fileType: 'PDF', status: 'PUBLISHED', currency: 'USD', publishedAt: new Date(),
       });

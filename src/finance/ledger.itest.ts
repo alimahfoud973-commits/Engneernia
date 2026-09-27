@@ -17,6 +17,7 @@ import { CONTRIBUTOR_SCOPED_ACCOUNTS, LEDGER_ACCOUNTS } from '@/ledger/accounts'
 import { PLATFORM_TIMEZONE } from '@/lib/time/period';
 import { RuleViolationError } from '@/lib/errors';
 import type { Actor } from '@/authz/actor';
+import { insertProductsWithVersion } from '@/db/testing/product-versions';
 
 /**
  * The full text of a rejection, driver wrapper included.
@@ -155,7 +156,7 @@ beforeAll(async () => {
     await tx.insert(disciplines).values({
       id: ids.discipline, slug: `p6-disc-${suffix}`, nameAr: 'تخصص', nameEn: 'T', sortOrder: 94,
     });
-    await tx.insert(products).values([
+    await insertProductsWithVersion(tx, [
       { id: ids.product, slug, titleAr: 'مخطط الاختبار', disciplineId: ids.discipline, fileType: 'PDF', status: 'PUBLISHED', currency: 'USD', publishedAt: new Date() },
       { id: ids.otherProduct, slug: otherSlug, titleAr: 'مخطط آخر', disciplineId: ids.discipline, fileType: 'PDF', status: 'PUBLISHED', currency: 'USD', publishedAt: new Date() },
     ]);

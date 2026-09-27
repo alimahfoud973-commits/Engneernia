@@ -19,6 +19,7 @@ import { myNotifications } from '@/notifications/queries';
 import { periodKeyOf, previousPeriodKey } from '@/lib/time/period';
 import { RuleViolationError, ValidationError } from '@/lib/errors';
 import type { Actor } from '@/authz/actor';
+import { insertProductsWithVersion } from '@/db/testing/product-versions';
 
 /**
  * ===========================================================================
@@ -97,7 +98,7 @@ beforeAll(async () => {
     await tx.insert(disciplines).values({
       id: ids.discipline, slug: `adj-disc-${suffix}`, nameAr: 'تخصص', nameEn: 'T', sortOrder: 91,
     });
-    await tx.insert(products).values({
+    await insertProductsWithVersion(tx, {
       id: ids.product, slug, titleAr: 'مخطط التصحيح', disciplineId: ids.discipline,
       fileType: 'PDF', status: 'PUBLISHED', currency: 'USD', publishedAt: new Date(),
     });

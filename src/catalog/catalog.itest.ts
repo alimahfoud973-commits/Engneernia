@@ -6,7 +6,7 @@ import { ensureTestOwner } from '@/db/testing/single-owner';
 import { closeDb } from '@/db';
 import {
   auditLogs, commissionAgreements, contributors, disciplines, notifications,
-  productContributors, productFiles, productPrices, products, users,
+  productContributors, productFiles, productPrices, productVersions, products, users,
 } from '@/db/schema';
 import { changeProductPrice, changeProductStatus, setProductContributors } from './products';
 import { productBySlug } from './public-queries';
@@ -88,16 +88,22 @@ beforeAll(async () => {
     // on the workflow rather than on the media pipeline, which has its own.
     const now = new Date();
     for (const [index, productId] of [ids.productA, ids.productB].entries()) {
+      // Files belong to a version since migration 0059, and the version on
+      // sale is the product's current one.
+      const [version] = await tx.insert(productVersions)
+        .values({ productId, versionNo: 1, activatedAt: now })
+        .returning({ id: productVersions.id });
+      await tx.update(products).set({ currentVersionId: version!.id }).where(eq(products.id, productId));
       await tx.insert(productFiles).values([
         {
-          productId, role: 'ORIGINAL',
+          productId, versionId: version!.id, role: 'ORIGINAL',
           storageKey: `original/${String(index).padStart(2, '0')}/${randomUUID()}`,
           bucket: 'originals', originalFilename: 'doc.pdf', contentType: 'application/pdf',
           container: 'PDF', byteSize: 1024n, sha256: 'x'.repeat(64), pageCount: 40,
           scanStatus: 'CLEAN', scannedAt: now,
         },
         {
-          productId, role: 'PREVIEW',
+          productId, versionId: version!.id, role: 'PREVIEW',
           storageKey: `preview/${String(index).padStart(2, '0')}/${randomUUID()}`,
           bucket: 'derivatives', originalFilename: 'preview-doc.pdf',
           contentType: 'application/pdf', container: 'PDF', byteSize: 512n,

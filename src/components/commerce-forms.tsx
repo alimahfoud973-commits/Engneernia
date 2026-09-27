@@ -1,11 +1,13 @@
 'use client';
 
-import { useActionState } from 'react';
+import { useActionState, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   approvePaymentAction, choosePaymentMethodAction, completeFreeOrderAction, rejectPaymentAction,
-  startPurchaseAction, submitProofAction, type ActionState,
+  startPurchaseAction, type ActionState,
 } from '@/commerce/actions';
 import { formKey } from './form-key';
+import { uploadFile } from './upload-file';
 
 const INITIAL: ActionState = { error: null };
 
@@ -117,19 +119,42 @@ export function PaymentMethodPicker({
   );
 }
 
-export function ProofUploadForm({
-  orderId,
-  paymentId,
-}: {
-  orderId: string;
-  paymentId: string;
-}) {
-  const [state, formAction, pending] = useActionState(submitProofAction, INITIAL);
+export function ProofUploadForm({ paymentId }: { paymentId: string }) {
+  /*
+   * Not a Server Action (S4-01): an action's body is capped at 1 MB before
+   * any of our code runs, and a phone photo of a receipt is routinely more.
+   * The file goes to a Route Handler that streams it against 10 MB.
+   */
+  const router = useRouter();
+  const [pending, setPending] = useState(false);
+  const [state, setState] = useState<ActionState>(INITIAL);
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const file = (form.elements.namedItem('proof') as HTMLInputElement | null)?.files?.[0];
+    if (!file || file.size === 0) {
+      setState({ error: 'يرجى اختيار صورة الإيصال' });
+      return;
+    }
+    const note = (form.elements.namedItem('referenceNote') as HTMLInputElement | null)?.value.trim() ?? '';
+    setPending(true);
+    const answer = await uploadFile(
+      `/api/payments/${paymentId}/proof`,
+      file,
+      note ? { 'x-reference-note': encodeURIComponent(note) } : {},
+    );
+    setPending(false);
+    if (answer.error) {
+      setState({ error: answer.error });
+      return;
+    }
+    setState({ error: null, ok: true });
+    router.refresh();
+  }
 
   return (
-    <form action={formAction} className="flex flex-col gap-3">
-      <input type="hidden" name="orderId" value={orderId} />
-      <input type="hidden" name="paymentId" value={paymentId} />
+    <form onSubmit={submit} className="flex flex-col gap-3">
 
       <div className="flex flex-col gap-1.5">
         <label htmlFor="proof" className="text-sm font-medium">

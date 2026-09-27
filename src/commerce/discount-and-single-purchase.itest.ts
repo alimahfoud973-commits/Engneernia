@@ -13,6 +13,7 @@ import { approvePayment, createOrder, placeOrder } from './orders';
 import { purchaseState } from './queries';
 import { RuleViolationError } from '@/lib/errors';
 import type { Actor } from '@/authz/actor';
+import { insertProductsWithVersion } from '@/db/testing/product-versions';
 
 /**
  * ===========================================================================
@@ -108,7 +109,7 @@ beforeAll(async () => {
     await tx.insert(disciplines).values({
       id: ids.discipline, slug: `d1-disc-${suffix}`, nameAr: 'تخصص', nameEn: 'T', sortOrder: 94,
     });
-    await tx.insert(products).values([
+    await insertProductsWithVersion(tx, [
       { id: ids.product, slug, titleAr: 'دليل الخصم', disciplineId: ids.discipline, fileType: 'PDF', status: 'PUBLISHED', currency: 'USD', publishedAt: new Date() },
       { id: ids.second, slug: secondSlug, titleAr: 'دليل ثانٍ', disciplineId: ids.discipline, fileType: 'PDF', status: 'PUBLISHED', currency: 'USD', publishedAt: new Date() },
     ]);
@@ -384,7 +385,7 @@ describe('OPEN-11 — a product is bought once', () => {
         });
       }),
     );
-    expect(message).toMatch(/already owns this product/i);
+    expect(message).toMatch(/already owns this version/i);
   });
 
   it('refuses a second LIVE ENTITLEMENT outright, whatever wrote it', async () => {
@@ -472,7 +473,7 @@ describe('OPEN-11 — a product is bought once', () => {
      * buyerA owns `slug` from the first describe in this file.
      */
     expect(await purchaseState(owner, ids.product)).toEqual({ kind: 'BUYABLE' });
-    expect(await purchaseState(buyerA, ids.product)).toEqual({ kind: 'OWNED' });
+    expect(await purchaseState(buyerA, ids.product)).toMatchObject({ kind: 'OWNED', windowOpen: true });
   });
 
   it('refuses the same product twice inside ONE order', async () => {

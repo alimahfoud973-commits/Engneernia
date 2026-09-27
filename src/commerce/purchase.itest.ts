@@ -21,8 +21,10 @@ import { changeProductPrice } from '@/catalog/products';
 import { setCommissionAgreement } from '@/finance/commission-resolver';
 import { deliverProductFile } from '@/media/deliver';
 import { ingestProductFile } from '@/media/ingest';
+import { activateVersion } from '@/media/versions';
 import { NotFoundError, RuleViolationError } from '@/lib/errors';
 import type { Actor } from '@/authz/actor';
+import { insertProductsWithVersion } from '@/db/testing/product-versions';
 
 /**
  * ===========================================================================
@@ -95,7 +97,7 @@ beforeAll(async () => {
     await tx.insert(disciplines).values({
       id: ids.discipline, slug: `p5-disc-${suffix}`, nameAr: 'تخصص', nameEn: 'T', sortOrder: 95,
     });
-    await tx.insert(products).values({
+    await insertProductsWithVersion(tx, {
       id: ids.product, slug, titleAr: 'دليل الاختبار', disciplineId: ids.discipline,
       fileType: 'PDF', status: 'PUBLISHED', currency: 'USD', publishedAt: new Date(),
     });
@@ -129,10 +131,13 @@ beforeAll(async () => {
 
   // A real original, through the real pipeline, so the download gate has
   // something to gate.
-  await ingestProductFile(owner, {
+  const uploaded = await ingestProductFile(owner, {
     productId: ids.product, filename: 'guide.pdf', declaredType: 'PDF',
     body: await buildPdf(), contentType: 'application/pdf',
   });
+  // The product is already on sale, so the upload is a version that waits for
+  // the owner's release (S4-04) — released here through the real path.
+  if (!uploaded.activated) await activateVersion(owner, { productId: ids.product, versionId: uploaded.versionId });
 }, 120_000);
 
 afterAll(async () => {

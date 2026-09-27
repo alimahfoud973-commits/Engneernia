@@ -16,8 +16,10 @@ import { myPurchases } from './queries';
 import { changeProductPrice } from '@/catalog/products';
 import { deliverProductFile } from '@/media/deliver';
 import { ingestProductFile } from '@/media/ingest';
+import { activateVersion } from '@/media/versions';
 import { NotFoundError, RuleViolationError, UnauthenticatedError } from '@/lib/errors';
 import { GUEST, type Actor } from '@/authz/actor';
+import { insertProductsWithVersion } from '@/db/testing/product-versions';
 
 /**
  * ===========================================================================
@@ -79,7 +81,7 @@ beforeAll(async () => {
       settlementCode: `F1E${suffix}`, displayName: 'Engineer', isActive: true,
     });
     await tx.insert(disciplines).values({ id: ids.discipline, slug: `f1-disc-${suffix}`, nameAr: 'تخصص', nameEn: 'T', sortOrder: 96 });
-    await tx.insert(products).values([
+    await insertProductsWithVersion(tx, [
       { id: ids.free, slug: FREE_SLUG, titleAr: 'دليل مجاني', disciplineId: ids.discipline, fileType: 'PDF', status: 'PUBLISHED', currency: 'USD', isFree: true, publishedAt: new Date() },
       { id: ids.paid, slug: PAID_SLUG, titleAr: 'دليل مدفوع', disciplineId: ids.discipline, fileType: 'PDF', status: 'PUBLISHED', currency: 'USD', publishedAt: new Date() },
     ]);
@@ -101,9 +103,11 @@ beforeAll(async () => {
     });
   });
 
-  await ingestProductFile(owner, {
+  const uploaded = await ingestProductFile(owner, {
     productId: ids.free, filename: 'free.pdf', declaredType: 'PDF', body: await buildPdf(), contentType: 'application/pdf',
   });
+  // Already on sale, so the upload waits for release (S4-04); released here.
+  if (!uploaded.activated) await activateVersion(owner, { productId: ids.free, versionId: uploaded.versionId });
 }, 120_000);
 
 afterAll(async () => {

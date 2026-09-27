@@ -9,6 +9,8 @@ import { isOwner, type Actor } from '@/authz/actor';
 import { NotFoundError, RuleViolationError } from '@/lib/errors';
 import { publishBlockers, transitionsFrom, type ProductStatus } from './publication';
 import { supportsPreview } from '@/media/file-types';
+import { productVersionsForOwner } from '@/media/versions';
+import type { ProductFileType } from '@/media/file-types';
 import { isServable } from '@/media/scanner';
 import { serverEnv } from '@/lib/config/env';
 import { productSaleBlockers } from '@/finance/commission-resolver';
@@ -79,6 +81,10 @@ export async function adminProductList(actor: Actor): Promise<readonly AdminProd
     const files = await tx
       .select({ productId: productFiles.productId, role: productFiles.role })
       .from(productFiles)
+      .innerJoin(products, and(
+        eq(products.id, productFiles.productId),
+        eq(products.currentVersionId, productFiles.versionId),
+      ))
       .where(inArray(productFiles.productId, ids));
 
     const creditCount = new Map<string, number>();
@@ -125,6 +131,8 @@ export interface AdminProductDetail {
     readonly shareBp: number;
   }>;
   readonly files: ReadonlyArray<{ readonly role: string; readonly scanStatus: string }>;
+  /** Every version, newest first (migration 0059). */
+  readonly versions: Awaited<ReturnType<typeof productVersionsForOwner>>;
   /** What still stands between this product and being publishable. */
   readonly blockers: readonly string[];
   /** The moves the owner may make from here, with their Arabic labels. */
@@ -177,10 +185,17 @@ export async function adminProductDetail(
       .innerJoin(contributors, eq(contributors.id, productContributors.contributorId))
       .where(eq(productContributors.productId, productId));
 
+    // The version on sale is the current one; waiting and retired versions
+    // are listed separately with their own checks (migration 0059).
     const files = await tx
       .select({ role: productFiles.role, scanStatus: productFiles.scanStatus })
       .from(productFiles)
+      .innerJoin(products, and(
+        eq(products.id, productFiles.productId),
+        eq(products.currentVersionId, productFiles.versionId),
+      ))
       .where(eq(productFiles.productId, productId));
+    const versions = await productVersionsForOwner(tx, productId, product.fileType as ProductFileType);
 
     const original = files.find((f) => f.role === 'ORIGINAL');
     const isProduction = serverEnv().NODE_ENV === 'production';
@@ -204,6 +219,7 @@ export async function adminProductDetail(
       priceHistory: prices,
       credits,
       files,
+      versions,
       blockers,
       nextStates: transitionsFrom(product.status as ProductStatus, 'OWNER').map((t) => ({
         to: t.to, label: t.label,

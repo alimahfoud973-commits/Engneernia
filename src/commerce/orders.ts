@@ -1,5 +1,5 @@
 import 'server-only';
-import { and, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, isNull, ne, sql } from 'drizzle-orm';
 import {
   entitlements, orderEvents, orderItemContributors, orderItems, orders,
   payments, productPrices, products, users,
@@ -18,6 +18,8 @@ import { assertOrderTransition, orderActorOf, type OrderStatus } from './order-s
 import { resolveMethod } from '@/payments/registry';
 import type { InitiationResult, PaymentContext } from '@/payments/port';
 import { isProviderRefTaken, normalizeProviderRef } from './provider-ref';
+import { readUpgradeDiscountBp } from './version-policy';
+import { money, percentOf } from '@/lib/money/money';
 
 /**
  * ===========================================================================
@@ -77,8 +79,9 @@ async function moveOrder(
  * ===========================================================================
  * A PRODUCT IS BOUGHT ONCE (owner decision on OPEN-11)
  * ===========================================================================
- * What is sold here is a file and a permanent right to download it. A second
- * purchase of the same file buys the buyer nothing they do not already have,
+ * What is sold here is ONE VERSION of a file and a six-month right to
+ * download it (Stage 4 repair, migration 0059). A second purchase of the same
+ * version buys the buyer nothing they do not already have,
  * so it is not a sale — it is a mistake that happens to take money, and the
  * platform has no refund with which to undo it (owner decision, §7 revoked).
  *
@@ -103,17 +106,31 @@ async function moveOrder(
  * decided on.
  * ===========================================================================
  */
+interface SaleRow {
+  readonly id: string;
+  readonly titleAr: string;
+  readonly currentVersionId: string;
+}
+
+/**
+ * Bought once PER VERSION (Stage 4 repair, owner decision): the version on
+ * sale may be bought by anyone who does not already hold it or have a live
+ * order for it. Returns the products on which this buyer holds an EARLIER
+ * version — those lines are sold as an upgrade. The offer has no time limit
+ * (owner decision): an expired window still proves the earlier purchase.
+ */
 async function assertNotAlreadyBought(
   tx: Transaction,
   customerId: string,
-  rows: ReadonlyArray<{ id: string; titleAr: string }>,
-): Promise<void> {
+  rows: readonly SaleRow[],
+): Promise<Set<string>> {
   const productIds = rows.map((row) => row.id);
   const titleOf = (productId: string) =>
     rows.find((row) => row.id === productId)?.titleAr ?? 'هذا المنتج';
+  const currentOf = (productId: string) => rows.find((row) => row.id === productId)?.currentVersionId;
 
-  const owned = await tx
-    .select({ productId: entitlements.productId })
+  const held = await tx
+    .select({ productId: entitlements.productId, versionId: entitlements.versionId })
     .from(entitlements)
     .where(
       and(
@@ -123,15 +140,22 @@ async function assertNotAlreadyBought(
       ),
     );
 
-  if (owned.length > 0) {
+  const owned = held.find((h) => h.versionId !== null && h.versionId === currentOf(h.productId));
+  if (owned) {
     throw new RuleViolationError(
-      `«${titleOf(owned[0]!.productId)}» ضمن مشترياتك بالفعل — يمكنك تنزيله من صفحة مشترياتي.`,
-      { productId: owned[0]!.productId },
+      `«${titleOf(owned.productId)}» بإصداره الحالي ضمن مشترياتك بالفعل — يمكنك تنزيله من صفحة مشترياتي.`,
+      { productId: owned.productId },
     );
   }
 
+  /*
+   * A live order on the product blocks a second one whatever version it
+   * names: one still waiting for payment, or any order on the version on
+   * sale. A COMPLETED order on an earlier version is the purchase that makes
+   * this one an upgrade, not a reason to refuse it.
+   */
   const pending = await tx
-    .select({ productId: orderItems.productId, orderId: orders.id })
+    .select({ productId: orderItems.productId, orderId: orders.id, versionId: orderItems.versionId, status: orders.status })
     .from(orderItems)
     .innerJoin(orders, eq(orders.id, orderItems.orderId))
     .where(
@@ -140,15 +164,20 @@ async function assertNotAlreadyBought(
         inArray(orderItems.productId, productIds),
         ne(orders.status, 'CANCELLED'),
       ),
-    )
-    .limit(1);
+    );
+  const blocking = pending.find((line) =>
+    line.status !== 'COMPLETED'
+    || line.versionId === null
+    || line.versionId === currentOf(line.productId));
 
-  if (pending.length > 0) {
+  if (blocking) {
     throw new RuleViolationError(
-      `لديك طلب قائم على «${titleOf(pending[0]!.productId)}» — أكمِل ذلك الطلب أو ألغِه قبل إنشاء طلب جديد.`,
-      { productId: pending[0]!.productId, orderId: pending[0]!.orderId },
+      `لديك طلب قائم على «${titleOf(blocking.productId)}» — أكمِل ذلك الطلب أو ألغِه قبل إنشاء طلب جديد.`,
+      { productId: blocking.productId, orderId: blocking.orderId },
     );
   }
+
+  return new Set(held.map((h) => h.productId));
 }
 
 /** Build a draft order from a set of products, priced at today's price. */
@@ -178,6 +207,7 @@ export async function createOrder(
         titleAr: products.titleAr,
         status: products.status,
         currency: products.currency,
+        currentVersionId: products.currentVersionId,
         priceMinor: productPrices.amountMinor,
         priceCurrency: productPrices.currency,
       })
@@ -186,16 +216,27 @@ export async function createOrder(
         productPrices,
         and(eq(productPrices.productId, products.id), isNull(productPrices.effectiveTo)),
       )
-      .where(inArray(products.slug, [...input.productSlugs]));
+      .where(and(
+        inArray(products.slug, [...input.productSlugs]),
+        /*
+         * Stated here, not left to RLS: since migration 0059 a buyer can SEE
+         * an unpublished product they hold (to keep downloading it for six
+         * months), and seeing is not buying. A product on sale also has a
+         * version on sale — the one this order will name.
+         */
+        eq(products.status, 'PUBLISHED'),
+        isNotNull(products.currentVersionId),
+      ));
 
     if (rows.length !== input.productSlugs.length) {
-      // RLS already hid anything unpublished, so a missing row means the
-      // product does not exist OR is not for sale — indistinguishable, and
-      // deliberately so.
+      // A missing row means the product does not exist OR is not for sale —
+      // indistinguishable, and deliberately so.
       throw new NotFoundError('أحد المنتجات غير متاح للشراء');
     }
 
-    await assertNotAlreadyBought(tx, customerId, rows);
+    const saleRows = rows.map((row) => ({ ...row, currentVersionId: row.currentVersionId! }));
+    const upgrades = await assertNotAlreadyBought(tx, customerId, saleRows);
+    const upgradeBp = upgrades.size > 0 ? await readUpgradeDiscountBp(tx) : null;
 
     const currencies = new Set(rows.map((r) => r.priceCurrency ?? r.currency));
     if (currencies.size > 1) {
@@ -207,31 +248,36 @@ export async function createOrder(
     const currency = [...currencies][0]!;
 
     let subtotal = 0n;
-    for (const row of rows) {
+    let discount = 0n;
+    const lines = saleRows.map((row) => {
       if (row.priceMinor === null) {
         throw new RuleViolationError('أحد المنتجات بلا سعر حالي', { slug: row.slug });
       }
+      const isUpgrade = upgrades.has(row.id);
+      /*
+       * The upgrade price (S4-09): the discount is the rounded side,
+       * `percentOf` the current price, and what is paid is the remainder
+       * (CLAUDE.md rule 3). It rides the per-line discount OPEN-1 built, so
+       * commission is taken on the price AFTER it and no money code changes.
+       */
+      const lineDiscount = isUpgrade
+        ? percentOf(money(row.priceMinor, currency), upgradeBp!).amountMinor
+        : 0n;
       subtotal += row.priceMinor;
-    }
+      discount += lineDiscount;
+      return { row, isUpgrade, lineDiscount };
+    });
 
     const [numberRow] = (await tx.execute(
       sql`SELECT app_next_order_number() AS number`,
     )) as unknown as Array<{ number: string }>;
 
-    /**
-     * NO DISCOUNT IS APPLIED HERE, AND NONE CAN BE (OPEN-1).
-     *
-     * The commission base for a discount is decided — it is computed after the
-     * discount — and the whole pipeline below carries one correctly. What does
-     * not exist yet is anything that GRANTS one: coupons, promotions and
-     * limited-time offers are §43, deliberately not in the first release.
-     *
-     * So the three money columns are written as three separate statements of
-     * fact rather than one value reused. `totalMinor: subtotal` would be true
-     * today and silently wrong the day a discount arrives; `subtotal - discount`
-     * is the definition, and the database checks it holds.
+    /*
+     * The three money columns are three separate statements of fact:
+     * `subtotal - discount` is the definition, and the database checks it
+     * holds. The only discount the platform grants is the upgrade price
+     * (S4-09); coupons and promotions are still §43, not built.
      */
-    const discount = 0n;
 
     const [order] = await tx
       .insert(orders)
@@ -250,13 +296,18 @@ export async function createOrder(
     if (!order) throw new RuleViolationError('تعذّر إنشاء الطلب');
 
     await tx.insert(orderItems).values(
-      rows.map((row) => ({
+      lines.map(({ row, isUpgrade, lineDiscount }) => ({
         orderId: order.id,
         productId: row.id,
         // Copied now: renaming a product later must not rewrite an old order.
         titleSnapshot: row.titleAr,
         unitPriceMinor: row.priceMinor!,
+        discountMinor: lineDiscount,
         currency,
+        // The version sold, fixed once written (0059): the buyer is granted
+        // THIS file even if another is released before the payment clears.
+        versionId: row.currentVersionId,
+        isUpgrade,
       })),
     );
 

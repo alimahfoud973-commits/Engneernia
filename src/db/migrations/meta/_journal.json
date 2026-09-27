@@ -414,6 +414,27 @@
       "when": 1789800000000,
       "tag": "0058_payment_provider_ref_empty_to_null",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1789900000000,
+      "tag": "0059_product_versions_and_download_window",
+      "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1790000000000,
+      "tag": "0060_definer_search_path_stage4",
+      "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1790100000000,
+      "tag": "0061_download_counter_respects_window",
+      "breakpoints": true
     }
   ]
 }

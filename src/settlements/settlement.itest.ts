@@ -7,7 +7,7 @@ import { closeDb } from '@/db';
 import {
   commissionAgreements, contributors, disciplines, entitlements,
   orders, paymentMethods, payments, productContributors,
-  productPrices, products, settlementLines, settlements, users,
+  productPrices, settlementLines, settlements, users,
 } from '@/db/schema';
 import { approvePayment, createOrder, placeOrder } from '@/commerce/orders';
 import { generateSettlements } from './generate';
@@ -19,6 +19,7 @@ import { checkLedgerHealth } from '@/ledger/verify';
 import { revenueByDiscipline, revenueByPeriod } from '@/finance/reports';
 import { RuleViolationError } from '@/lib/errors';
 import { GUEST, type Actor } from '@/authz/actor';
+import { insertProductsWithVersion } from '@/db/testing/product-versions';
 
 /**
  * ===========================================================================
@@ -206,7 +207,7 @@ beforeAll(async () => {
     await tx.insert(disciplines).values({
       id: ids.discipline, slug: `p7-disc-${suffix}`, nameAr: 'تخصص', nameEn: 'T', sortOrder: 93,
     });
-    await tx.insert(products).values(
+    await insertProductsWithVersion(tx, 
       ids.products.map((id, index) => ({
         id, slug: slugs[index]!, titleAr: `مخطط ${index + 1}`, disciplineId: ids.discipline,
         fileType: 'PDF' as const, status: 'PUBLISHED' as const, currency: 'USD',

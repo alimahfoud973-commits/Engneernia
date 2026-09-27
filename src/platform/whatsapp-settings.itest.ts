@@ -14,6 +14,7 @@ import { createOrder, placeOrder } from '@/commerce/orders';
 import { checkoutView } from '@/commerce/queries';
 import { RuleViolationError, ValidationError } from '@/lib/errors';
 import { GUEST, type Actor } from '@/authz/actor';
+import { insertProductsWithVersion } from '@/db/testing/product-versions';
 
 /**
  * ===========================================================================
@@ -83,7 +84,7 @@ beforeAll(async () => {
       settlementCode: `W2E${suffix}`, displayName: 'E', isActive: true,
     });
     await tx.insert(disciplines).values({ id: ids.discipline, slug: `w2-disc-${suffix}`, nameAr: 'تخصص', nameEn: 'T', sortOrder: 93 });
-    await tx.insert(products).values({
+    await insertProductsWithVersion(tx, {
       id: ids.product, slug: SLUG, titleAr: 'دليل مدفوع', disciplineId: ids.discipline, fileType: 'PDF',
       status: 'PUBLISHED', currency: 'USD', publishedAt: new Date(),
     });

@@ -29,6 +29,35 @@ export const scanStatusEnum = pgEnum('scan_status', [
   'FAILED',
 ]);
 
+/**
+ * A version of a product's file (Stage 4 repair, migration 0059).
+ *
+ * A replaced file is a new version, never an overwrite: the version a customer
+ * bought stays stored and downloadable for their six-month window, whatever
+ * happens to the product afterwards. `products.current_version_id` names the
+ * one on sale; a version uploaded to a product already on sale waits
+ * (`activated_at` NULL) until the owner releases it through the publication
+ * checks. A deleted version keeps its row: purchase history points at it.
+ */
+export const productVersions = pgTable(
+  'product_versions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    productId: uuid('product_id')
+      .notNull()
+      .references(() => products.id, { onDelete: 'cascade' }),
+    versionNo: integer('version_no').notNull(),
+    createdAt: createdAt(),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    activatedAt: utcTimestamp('activated_at'),
+    supersededAt: utcTimestamp('superseded_at'),
+    deletedAt: utcTimestamp('deleted_at'),
+    deletedBy: uuid('deleted_by').references(() => users.id, { onDelete: 'set null' }),
+    filesPurgedAt: utcTimestamp('files_purged_at'),
+  },
+  (table) => [uniqueIndex('product_versions_number_unique').on(table.productId, table.versionNo)],
+);
+
 export const productFiles = pgTable(
   'product_files',
   {
@@ -36,6 +65,10 @@ export const productFiles = pgTable(
     productId: uuid('product_id')
       .notNull()
       .references(() => products.id, { onDelete: 'cascade' }),
+
+    versionId: uuid('version_id')
+      .notNull()
+      .references(() => productVersions.id, { onDelete: 'cascade' }),
 
     role: fileRoleEnum('role').notNull(),
 
@@ -67,7 +100,7 @@ export const productFiles = pgTable(
   (table) => [
     uniqueIndex('product_files_storage_key_unique').on(table.storageKey),
     // One live file per role per product; replacing means deleting first.
-    uniqueIndex('product_files_role_unique').on(table.productId, table.role),
+    uniqueIndex('product_files_version_role_unique').on(table.versionId, table.role),
     index('product_files_product_idx').on(table.productId),
     index('product_files_scan_idx').on(table.scanStatus),
   ],

@@ -19,6 +19,7 @@ import { checkoutView } from '@/commerce/queries';
 import { submitPaymentProof } from '@/commerce/proofs';
 import { ConflictError, RuleViolationError, ValidationError } from '@/lib/errors';
 import { GUEST, type Actor } from '@/authz/actor';
+import { insertProductsWithVersion } from '@/db/testing/product-versions';
 
 /**
  * ===========================================================================
@@ -104,7 +105,7 @@ beforeAll(async () => {
       settlementCode: `F3E${suffix}`, displayName: 'Engineer', isActive: true,
     });
     await tx.insert(disciplines).values({ id: ids.discipline, slug: `f3-disc-${suffix}`, nameAr: 'تخصص', nameEn: 'T', sortOrder: 94 });
-    await tx.insert(products).values({
+    await insertProductsWithVersion(tx, {
       id: ids.product, slug: SLUG, titleAr: 'دليل مدفوع', disciplineId: ids.discipline, fileType: 'PDF',
       status: 'PUBLISHED', currency: 'USD', publishedAt: new Date(),
     });

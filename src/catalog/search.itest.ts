@@ -5,6 +5,7 @@ import { withRawActorContext } from '@/db/actor-context';
 import { closeDb } from '@/db';
 import { categories, disciplines, productPrices, products } from '@/db/schema';
 import { searchCatalogue } from './search';
+import { insertProductsWithVersion } from '@/db/testing/product-versions';
 
 /**
  * ===========================================================================
@@ -45,7 +46,7 @@ beforeAll(async () => {
       id: ids.category, disciplineId: ids.discipline, slug: `s4-cat-${suffix}`,
       nameAr: 'قسم البحث', nameEn: 'Search Category', sortOrder: 10, isActive: true,
     });
-    await tx.insert(products).values([
+    await insertProductsWithVersion(tx, [
       {
         id: ids.published, slug: slugs.published,
         titleAr: 'المحولات الكهربائية في شبكات التوزيع',

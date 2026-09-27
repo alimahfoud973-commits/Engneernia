@@ -29,9 +29,11 @@ const ids = {
   owner: '', engineerUser: randomUUID(), contributor: randomUUID(),
   discipline: randomUUID(),
   pdfProduct: randomUUID(), dwgProduct: randomUUID(), zipProduct: randomUUID(),
+  rvtProduct: randomUUID(),
 };
 const slugs = {
   pdf: `p3-pdf-${suffix}`, dwg: `p3-dwg-${suffix}`, zip: `p3-zip-${suffix}`,
+  rvt: `p3-rvt-${suffix}`,
 };
 
 let OWNER_RAW: { actorId: string; actorRole: string };
@@ -79,8 +81,11 @@ beforeAll(async () => {
       { id: ids.pdfProduct, slug: slugs.pdf, titleAr: 'كتاب PDF', disciplineId: ids.discipline, fileType: 'PDF', status: 'APPROVED', currency: 'USD' },
       { id: ids.dwgProduct, slug: slugs.dwg, titleAr: 'مخطط أوتوكاد', disciplineId: ids.discipline, fileType: 'CAD', status: 'APPROVED', currency: 'USD' },
       { id: ids.zipProduct, slug: slugs.zip, titleAr: 'مشروع مضغوط', disciplineId: ids.discipline, fileType: 'ARCHIVE', status: 'APPROVED', currency: 'USD' },
+      // A Revit model is uploaded to a Revit product: the declared type must be
+      // the product's own (S4-04), so a model no longer rides on the CAD one.
+      { id: ids.rvtProduct, slug: slugs.rvt, titleAr: 'نموذج ريفِت', disciplineId: ids.discipline, fileType: 'REVIT_BIM', status: 'APPROVED', currency: 'USD' },
     ]);
-    for (const productId of [ids.pdfProduct, ids.dwgProduct, ids.zipProduct]) {
+    for (const productId of [ids.pdfProduct, ids.dwgProduct, ids.zipProduct, ids.rvtProduct]) {
       await tx.insert(productContributors).values({ productId, contributorId: ids.contributor, shareBp: 10000 });
       await tx.insert(productPrices).values({ productId, amountMinor: 1000n, currency: 'USD' });
     }
@@ -98,8 +103,8 @@ afterAll(async () => {
     // purchase can never be erased by removing a product). Section 5 creates
     // them, so teardown clears them first.
     await tx.delete(entitlements)
-      .where(sql`product_id IN (${ids.pdfProduct}, ${ids.dwgProduct}, ${ids.zipProduct})`);
-    await tx.delete(products).where(sql`id IN (${ids.pdfProduct}, ${ids.dwgProduct}, ${ids.zipProduct})`);
+      .where(sql`product_id IN (${ids.pdfProduct}, ${ids.dwgProduct}, ${ids.zipProduct}, ${ids.rvtProduct})`);
+    await tx.delete(products).where(sql`id IN (${ids.pdfProduct}, ${ids.dwgProduct}, ${ids.zipProduct}, ${ids.rvtProduct})`);
     await tx.delete(disciplines).where(eq(disciplines.id, ids.discipline));
     await tx.delete(commissionAgreements).where(eq(commissionAgreements.contributorId, ids.contributor));
     await tx.delete(contributors).where(eq(contributors.id, ids.contributor));
@@ -170,7 +175,7 @@ describe('2. the formats the owner asked for', () => {
 
   it('accepts a Revit model declared as such', async () => {
     const result = await ingestProductFile(owner, {
-      productId: ids.dwgProduct, filename: 'tower.rvt', declaredType: 'REVIT_BIM',
+      productId: ids.rvtProduct, filename: 'tower.rvt', declaredType: 'REVIT_BIM',
       body: RVT_BYTES, contentType: 'application/octet-stream',
     });
     expect(result.previewFileId).toBeNull();
@@ -179,7 +184,7 @@ describe('2. the formats the owner asked for', () => {
   it('refuses an executable wearing a Revit extension', async () => {
     await expect(
       ingestProductFile(owner, {
-        productId: ids.dwgProduct, filename: 'evil.rvt', declaredType: 'REVIT_BIM',
+        productId: ids.rvtProduct, filename: 'evil.rvt', declaredType: 'REVIT_BIM',
         body: pad([0x7f, 0x45, 0x4c, 0x46]), contentType: 'application/octet-stream',
       }),
     ).rejects.toThrow();

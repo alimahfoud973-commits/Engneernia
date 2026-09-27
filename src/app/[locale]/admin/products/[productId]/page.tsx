@@ -5,7 +5,7 @@ import { setRequestLocale } from 'next-intl/server';
 import { SiteHeader, SiteFooter } from '@/components/site-chrome';
 import { AdminNav } from '../../admin-nav';
 import {
-  CreditsForm, PriceForm, ProductDetailsForm, StatusForm, UploadFileForm,
+  CreditsForm, PriceForm, ProductDetailsForm, StatusForm, UploadFileForm, VersionControls,
 } from '@/components/product-admin-forms';
 import { formatMinor } from '@/components/money-display';
 import { requireOwner } from '@/auth/current';
@@ -110,7 +110,39 @@ export default async function AdminProductPage({
           ) : (
             <p className="text-sm text-[var(--color-danger)]">لم يُرفع ملف بعد.</p>
           )}
-          <UploadFileForm productId={product.id} declaredType={product.fileType} />
+          <UploadFileForm productId={product.id} />
+          {product.versions.length > 0 ? (
+            <div className="flex flex-col gap-2 border-t border-[var(--color-line)] pt-4">
+              <h3 className="text-xs font-semibold text-[var(--color-ink-soft)]">الإصدارات</h3>
+              <p className="text-xs text-[var(--color-ink-faint)]">
+                يحتفظ كل مشترٍ بالإصدار الذي اشتراه ستة أشهر من تاريخ شرائه، حتى بعد حذفه أو إيقاف المنتج.
+                ولا تُزال ملفات إصدار من التخزين ما دام لأحد حقٌّ فيها.
+              </p>
+              <ul className="flex flex-col gap-2">
+                {product.versions.map((v) => (
+                  <VersionControls
+                    key={v.id}
+                    productId={product.id}
+                    version={{
+                      id: v.id,
+                      versionNo: v.versionNo,
+                      createdAt: v.createdAt.toISOString(),
+                      isCurrent: v.isCurrent,
+                      pending: v.pending,
+                      superseded: v.supersededAt !== null,
+                      deleted: v.deletedAt !== null,
+                      filesPurged: v.filesPurged,
+                      filename: v.filename,
+                      scanStatus: v.scanStatus,
+                      buyers: v.buyers,
+                      buyersInWindow: v.buyersInWindow,
+                      blockers: v.blockers,
+                    }}
+                  />
+                ))}
+              </ul>
+            </div>
+          ) : null}
         </section>
 
         {/* --- 2. the engineers ------------------------------------------- */}

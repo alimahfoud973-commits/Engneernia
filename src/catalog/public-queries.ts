@@ -375,9 +375,15 @@ export async function productBySlug(slug: string): Promise<PublicProductDetail |
 
     // RLS decides what resolves here: a PREVIEW row of a published product is
     // public, an ORIGINAL row is not, so this query cannot see one.
+    // Only the version on sale describes the product; a buyer who can see an
+    // earlier version's original must not be shown its page count.
     const files = await tx
       .select({ role: productFiles.role, pageCount: productFiles.pageCount })
       .from(productFiles)
+      .innerJoin(products, and(
+        eq(products.id, productFiles.productId),
+        eq(products.currentVersionId, productFiles.versionId),
+      ))
       .where(eq(productFiles.productId, row.id));
 
     const preview = files.find((f) => f.role === 'PREVIEW');

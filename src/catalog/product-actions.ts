@@ -2,13 +2,13 @@
 
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
+import { activateVersion, deleteVersion } from '@/media/versions';
 import { z } from 'zod';
 import { requireOwner } from '@/auth/current';
 import {
   changeProductPrice, changeProductStatus, createProduct,
   setProductContributors, updateProductDetails,
 } from './products';
-import { ingestProductFile } from '@/media/ingest';
 import { parseMajorUnits } from '@/lib/money/money';
 import { submittedValues, type SubmittedValues } from '@/lib/form-values';
 import { toUserMessage } from '@/lib/action-errors';
@@ -36,7 +36,8 @@ function toMessage(error: unknown): string {
 
 const createSchema = z.object({
   slug: z.string().min(2).max(120),
-  titleAr: z.string().min(2).max(300),
+  // Trimmed before it is measured (S4-06): two spaces are not a title.
+  titleAr: z.string().trim().min(2).max(300),
   subtitleAr: z.string().max(300).optional(),
   descriptionAr: z.string().max(4000).optional(),
   disciplineId: z.string().uuid(),
@@ -90,7 +91,8 @@ export async function createProductAction(
 
 const detailsSchema = z.object({
   productId: z.string().uuid(),
-  titleAr: z.string().min(2).max(300),
+  // Trimmed before it is measured (S4-06): two spaces are not a title.
+  titleAr: z.string().trim().min(2).max(300),
   subtitleAr: z.string().max(300).optional(),
   descriptionAr: z.string().max(4000).optional(),
   level: z.enum(LEVELS).or(z.literal('')).optional(),
@@ -124,53 +126,6 @@ export async function updateProductAction(
     });
   } catch (error) {
     return { error: toMessage(error), values: submittedValues(formData) };
-  }
-
-  revalidatePath(`/admin/products/${parsed.data.productId}`);
-  return { error: null, ok: true };
-}
-
-const uploadSchema = z.object({
-  productId: z.string().uuid(),
-  // The product's own declared type: the pipeline checks the bytes against it
-  // rather than trusting the extension a browser reported.
-  declaredType: z.enum(FILE_TYPES),
-});
-
-/**
- * Upload the product's file.
- *
- * The bytes go through `ingestProductFile`, the same path everything else
- * uses: it fixes the storage key, scans, and renders the preview. Nothing here
- * writes to storage itself — a second way into the bucket is a second set of
- * rules to keep in step.
- */
-export async function uploadProductFileAction(
-  _previous: ProductActionState,
-  formData: FormData,
-): Promise<ProductActionState> {
-  const parsed = uploadSchema.safeParse({
-    productId: formData.get('productId'),
-    declaredType: formData.get('declaredType'),
-  });
-  if (!parsed.success) return { error: 'منتج غير صالح' };
-
-  const file = formData.get('file');
-  if (!(file instanceof File) || file.size === 0) {
-    return { error: 'اختر ملفاً أولاً' };
-  }
-
-  const actor = await requireOwner('/admin/products');
-  try {
-    await ingestProductFile(actor, {
-      productId: parsed.data.productId,
-      filename: file.name,
-      declaredType: parsed.data.declaredType,
-      body: new Uint8Array(await file.arrayBuffer()),
-      contentType: file.type || 'application/octet-stream',
-    });
-  } catch (error) {
-    return { error: toMessage(error) };
   }
 
   revalidatePath(`/admin/products/${parsed.data.productId}`);
@@ -299,6 +254,51 @@ export async function changeStatusAction(
     });
   } catch (error) {
     return { error: toMessage(error), values: submittedValues(formData) };
+  }
+
+  revalidatePath(`/admin/products/${parsed.data.productId}`);
+  revalidatePath('/admin/products');
+  return { error: null, ok: true };
+}
+
+const versionSchema = z.object({
+  productId: z.string().uuid(),
+  versionId: z.string().uuid(),
+  op: z.enum(['activate', 'delete']),
+  confirm: z.literal('yes').optional(),
+});
+
+/**
+ * Release a waiting version, or delete a version (S4-04, S4-10).
+ *
+ * Both are owner-only in the service as well as here. Deleting asks for an
+ * explicit confirmation: taking the version on sale off the product also takes
+ * the product off sale (owner decision), and that is not a one-click accident.
+ */
+export async function productVersionAction(
+  _previous: ProductActionState,
+  formData: FormData,
+): Promise<ProductActionState> {
+  const parsed = versionSchema.safeParse({
+    productId: formData.get('productId'),
+    versionId: formData.get('versionId'),
+    op: formData.get('op'),
+    confirm: formData.get('confirm') ?? undefined,
+  });
+  if (!parsed.success) return { error: 'طلب غير صالح' };
+  if (parsed.data.op === 'delete' && parsed.data.confirm !== 'yes') {
+    return { error: 'أكّد الحذف أولاً' };
+  }
+
+  const actor = await requireOwner('/admin/products');
+  try {
+    if (parsed.data.op === 'activate') {
+      await activateVersion(actor, { productId: parsed.data.productId, versionId: parsed.data.versionId });
+    } else {
+      await deleteVersion(actor, { productId: parsed.data.productId, versionId: parsed.data.versionId });
+    }
+  } catch (error) {
+    return { error: toMessage(error) };
   }
 
   revalidatePath(`/admin/products/${parsed.data.productId}`);

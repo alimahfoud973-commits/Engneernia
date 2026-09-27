@@ -13,6 +13,7 @@ import { GUEST, type Actor } from '@/authz/actor';
 import { invoiceDocument, myInvoices } from './invoice-queries';
 import { renderInvoicePdf } from './invoice-pdf';
 import { readTaxPolicy } from './tax-policy';
+import { insertProductsWithVersion } from '@/db/testing/product-versions';
 
 /**
  * ===========================================================================
@@ -110,7 +111,7 @@ beforeAll(async () => {
     for (const [id, slug] of [
       [ids.productZero, slugZero], [ids.productTaxed, slugTaxed], [ids.productIdentity, slugIdentity],
     ] as const) {
-      await tx.insert(products).values({
+      await insertProductsWithVersion(tx, {
         id, slug, titleAr: 'مورد هندسي', disciplineId: ids.discipline,
         fileType: 'PDF', status: 'PUBLISHED', currency: 'USD', publishedAt: new Date(),
       });

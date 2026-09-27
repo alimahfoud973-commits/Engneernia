@@ -15,6 +15,7 @@ import { checkoutView } from './queries';
 import { getStorage } from '@/media/storage';
 import { NotFoundError, RuleViolationError } from '@/lib/errors';
 import type { Actor } from '@/authz/actor';
+import { insertProductsWithVersion } from '@/db/testing/product-versions';
 
 /**
  * ===========================================================================
@@ -129,7 +130,7 @@ beforeAll(async () => {
     });
     await tx.insert(disciplines).values({ id: ids.discipline, slug: `w14-disc-${suffix}`, nameAr: 'تخصص', nameEn: 'T', sortOrder: 91 });
     const all = [ids.p1, ids.p2, ids.p3, ids.p4];
-    await tx.insert(products).values(all.map((id, i) => ({
+    await insertProductsWithVersion(tx, all.map((id, i) => ({
       id, slug: slug(`p${i + 1}`), titleAr: 'مورد هندسي', disciplineId: ids.discipline,
       fileType: 'PDF' as const, status: 'PUBLISHED' as const, currency: 'USD', publishedAt: new Date(),
     })));

@@ -34,8 +34,8 @@ const ADMIN_PAGES = join(ROOT, 'src/app/[locale]/admin');
  * Each has a reason that makes echoing meaningless — not merely inconvenient.
  */
 const EXEMPT_COMPONENTS: Record<string, string> = {
-  // Its one field is a file; browsers forbid putting a file back into an input.
-  UploadFileForm: 'file input only',
+  // Hidden fields and a confirmation box: there is nothing typed to keep.
+  VersionControls: 'hidden fields only',
   // Hidden fields only: the preview it confirms is re-derived on the server.
   AdjustmentSummary: 'hidden fields only',
   // A button and hidden fields: there is nothing typed to keep.
@@ -45,12 +45,11 @@ const EXEMPT_COMPONENTS: Record<string, string> = {
   BuyButton: 'buyer form, not admin',
   FreeOrderForm: 'buyer form, not admin',
   PaymentMethodPicker: 'buyer form, not admin',
-  ProofUploadForm: 'buyer form, not admin',
 };
 
 /** Actions whose refusal need not echo, for the reason named. */
 const EXEMPT_ACTIONS: Record<string, string> = {
-  uploadProductFileAction: 'file input only',
+  productVersionAction: 'hidden fields only',
   // Its rows live in component state (a repeated field name), not in a record.
   setCreditsAction: 'rows kept in component state',
   confirmAdjustmentAction: 'hidden fields only',

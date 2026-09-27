@@ -14,6 +14,7 @@ import { generateSettlements } from './generate';
 import { statementDocument } from './queries';
 import { renderStatementPdf } from './statement-pdf';
 import type { Actor } from '@/authz/actor';
+import { insertProductsWithVersion } from '@/db/testing/product-versions';
 
 /**
  * ===========================================================================
@@ -132,7 +133,7 @@ beforeAll(async () => {
     await tx.insert(disciplines).values({
       id: ids.discipline, slug: `slice-disc-${suffix}`, nameAr: 'تخصص', nameEn: 'T', sortOrder: 93,
     });
-    await tx.insert(products).values({
+    await insertProductsWithVersion(tx, {
       id: ids.shared, slug: `slice-shared-${suffix}`, titleAr: 'مخطط مشترك',
       disciplineId: ids.discipline, fileType: 'PDF', status: 'PUBLISHED',
       currency: 'USD', publishedAt: new Date(),

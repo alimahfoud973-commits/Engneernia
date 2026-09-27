@@ -12,6 +12,7 @@ import { approvePayment, createOrder, placeOrder } from './orders';
 import { ConflictError } from '@/lib/errors';
 import { toUserMessage } from '@/lib/action-errors';
 import type { Actor } from '@/authz/actor';
+import { insertProductsWithVersion } from '@/db/testing/product-versions';
 
 /**
  * ===========================================================================
@@ -108,7 +109,7 @@ beforeAll(async () => {
       settlementCode: `W13${suffix}`, displayName: 'Engineer', isActive: true,
     });
     await tx.insert(disciplines).values({ id: ids.discipline, slug: `w13-disc-${suffix}`, nameAr: 'تخصص', nameEn: 'T', sortOrder: 92 });
-    await tx.insert(products).values({
+    await insertProductsWithVersion(tx, {
       id: ids.product, slug: SLUG, titleAr: 'مورد هندسي', disciplineId: ids.discipline,
       fileType: 'PDF', status: 'PUBLISHED', currency: 'USD', publishedAt: new Date(),
     });

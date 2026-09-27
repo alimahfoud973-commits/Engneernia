@@ -163,7 +163,7 @@ export default async function CheckoutPage({
             </div>
 
             {payment.requiresProof && order.status !== 'PROOF_SUBMITTED' ? (
-              <ProofUploadForm orderId={order.id} paymentId={payment.id} />
+              <ProofUploadForm paymentId={payment.id} />
             ) : order.status === 'PROOF_SUBMITTED' ? (
               <p className="rounded-[var(--radius-card)] border border-[var(--color-warn)] bg-[var(--color-warn-soft)] px-4 py-3 text-sm text-[var(--color-warn)]">
                 استلمنا الإيصال. تُراجَع الطلبات يدوياً، وسيُفعَّل الوصول فور تأكيد وصول المبلغ.
