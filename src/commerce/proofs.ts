@@ -145,8 +145,11 @@ export async function submitPaymentProof(
    * exactly what a working platform looks like.
    *
    * This read costs one round trip and resolves under the caller's own
-   * context, so it answers the ownership question with the same authority the
-   * write below would have.
+   * context. For a customer that settles ownership; for the OWNER it does
+   * not, because the policies admit the owner to every payment and order —
+   * so the owner's upload was stored and only then refused by
+   * `app_mark_payment_proof_submitted`, leaving an orphan object (W14). The
+   * order's customer is therefore compared here, explicitly, before storage.
    */
   await withActor(actor, async (tx) => {
     const [payment] = await tx
@@ -160,11 +163,15 @@ export async function submitPaymentProof(
     assertAwaitingProof(payment.status);
 
     const [order] = await tx
-      .select({ id: orders.id })
+      .select({ id: orders.id, customerId: orders.customerId })
       .from(orders)
       .where(eq(orders.id, payment.orderId))
       .limit(1);
     if (!order) throw new NotFoundError('الطلب غير موجود');
+    // Uploading the receipt is the customer's own step (W14), as in placeOrder.
+    if (order.customerId !== actor.userId) {
+      throw new RuleViolationError('رفع إيصال الدفع خطوة صاحب الطلب وحده', { paymentId: payment.id });
+    }
   });
 
   // The extension is a claim; the bytes are the evidence.

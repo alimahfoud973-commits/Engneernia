@@ -8,7 +8,7 @@ import { withActor, type Transaction } from '@/db/actor-context';
 import { recordAudit } from '@/audit/log';
 import { notifyContributor, notifyUser } from '@/notifications/notify';
 import { isOwner, type Actor } from '@/authz/actor';
-import { NotFoundError, RuleViolationError, UnauthenticatedError } from '@/lib/errors';
+import { ConflictError, NotFoundError, RuleViolationError, UnauthenticatedError } from '@/lib/errors';
 import { resolveTermsForSale } from '@/finance/commission-resolver';
 import { readTaxPolicy } from '@/finance/tax-policy';
 import { issueInvoice } from '@/finance/invoices';
@@ -17,6 +17,7 @@ import { saleEntry, type ContributorShare } from '@/ledger/entries';
 import { assertOrderTransition, orderActorOf, type OrderStatus } from './order-status';
 import { resolveMethod } from '@/payments/registry';
 import type { InitiationResult, PaymentContext } from '@/payments/port';
+import { isProviderRefTaken, normalizeProviderRef } from './provider-ref';
 
 /**
  * ===========================================================================
@@ -276,12 +277,15 @@ export async function createOrder(
   });
 }
 
+/** The order states from which the customer may choose how to pay (W14). */
+const PAYMENT_CAN_START: readonly OrderStatus[] = ['DRAFT', 'AWAITING_PAYMENT', 'PAYMENT_ISSUE'];
+
 /** Choose how to pay, and get the instructions or the handoff (§24). */
 export async function placeOrder(
   actor: Actor,
   input: { orderId: string; paymentMethodId: string },
 ): Promise<InitiationResult> {
-  requireUser(actor);
+  const customerId = requireUser(actor);
 
   return withActor(actor, async (tx) => {
     const [order] = await tx
@@ -291,6 +295,24 @@ export async function placeOrder(
       .limit(1);
 
     if (!order) throw new NotFoundError('الطلب غير موجود');
+
+    /*
+     * THE CHECKOUT IS THE CUSTOMER'S OWN STEP (Stage 3, W14). Named here, not
+     * left to row-level security: the policies on `orders` and `payments`
+     * admit the owner to every row — rightly, the owner reads every order —
+     * so for the owner RLS alone let this open a payment on a customer's
+     * order and move it to AWAITING_PAYMENT. Reading stays; acting as the
+     * customer does not. Both checks run before anything is written.
+     */
+    if (order.customerId !== customerId) {
+      throw new RuleViolationError('إتمام الدفع خطوة صاحب الطلب وحده', { orderId: order.id });
+    }
+    // A payment starts only where the order still waits for one. The insert
+    // below used to run for any status, so a completed order could gain a
+    // fresh payment row.
+    if (!PAYMENT_CAN_START.includes(order.status)) {
+      throw new RuleViolationError('لا يمكن بدء الدفع لطلب في هذه الحالة', { orderId: order.id, status: order.status });
+    }
 
     // A free order is taken, never paid for: `completeFreeOrder` below. A
     // payment of zero is refused by the database (payments_amount_positive),
@@ -422,6 +444,9 @@ export async function approvePayment(
   if (!isOwner(actor)) {
     throw new RuleViolationError('اعتماد الدفع من صلاحية مالك المنصة وحده');
   }
+
+  // Optional, trimmed, and NULL when absent — never '' (W13, provider-ref.ts).
+  const providerRef = normalizeProviderRef(input.providerRef);
 
   return withActor(actor, async (tx) => {
     const [payment] = await tx
@@ -774,16 +799,26 @@ export async function approvePayment(
       },
     });
 
-    await tx
-      .update(payments)
-      .set({
-        status: 'APPROVED',
-        providerRef: input.providerRef ?? payment.providerRef,
-        approvedBy: actor.kind === 'USER' ? actor.userId : null,
-        approvedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(eq(payments.id, payment.id));
+    try {
+      await tx
+        .update(payments)
+        .set({
+          status: 'APPROVED',
+          providerRef: providerRef ?? payment.providerRef,
+          approvedBy: actor.kind === 'USER' ? actor.userId : null,
+          approvedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(payments.id, payment.id));
+    } catch (error) {
+      // The unique index stays the guard against one receipt settling two
+      // orders; this only names its refusal. Throwing rolls back the whole
+      // sale above — invoice number included (W13).
+      if (isProviderRefTaken(error)) {
+        throw new ConflictError('رقم العملية هذا مستخدم لدفعة أخرى بالطريقة نفسها.', { paymentId: payment.id });
+      }
+      throw error;
+    }
 
     await moveOrder(
       tx, actor,
@@ -806,7 +841,7 @@ export async function approvePayment(
         orderNumber: order.orderNumber,
         amountMinor: payment.amountMinor.toString(),
         currency: payment.currency,
-        providerRef: input.providerRef ?? null,
+        providerRef,
         itemsSettled: items.length,
         ledgerTransactionId,
       },
