@@ -33,16 +33,16 @@ export function isKnownCurrency(code: string): boolean {
 
 export function assertCurrency(code: string): CurrencyCode {
   if (!/^[A-Z]{3}$/.test(code)) {
-    throw new ValidationError('Currency must be a 3-letter ISO-4217 code', { code });
+    throw new ValidationError('رمز العملة غير صالح', { code });
   }
   if (!isKnownCurrency(code)) {
-    throw new ValidationError('Currency is not enabled on this platform', { code });
+    throw new ValidationError('هذه العملة غير مفعّلة على المنصة', { code });
   }
   return code;
 }
 
 export function minorDigitsOf(code: CurrencyCode): number {
   const def = CURRENCY_SEED[code];
-  if (!def) throw new ValidationError('Unknown currency', { code });
+  if (!def) throw new ValidationError('عملة غير معروفة', { code });
   return def.minorDigits;
 }

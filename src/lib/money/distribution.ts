@@ -37,7 +37,7 @@ export interface ContributorAllocation {
  */
 export function assertSharesValid(shares: readonly ContributorShare[]): void {
   if (shares.length === 0) {
-    throw new RuleViolationError('A product must have at least one contributor');
+    throw new RuleViolationError('يجب أن يُنسب المنتج إلى مهندس واحد على الأقل');
   }
 
   const seen = new Set<string>();
@@ -45,7 +45,7 @@ export function assertSharesValid(shares: readonly ContributorShare[]): void {
 
   for (const share of shares) {
     if (seen.has(share.contributorId)) {
-      throw new RuleViolationError('A contributor may appear only once on a product', {
+      throw new RuleViolationError('لا يُذكر المهندس أكثر من مرة على المنتج نفسه', {
         contributorId: share.contributorId,
       });
     }
@@ -53,7 +53,7 @@ export function assertSharesValid(shares: readonly ContributorShare[]): void {
 
     assertBasisPoints(share.shareBp);
     if (share.shareBp <= 0) {
-      throw new RuleViolationError('Each contributor share must be greater than zero', {
+      throw new RuleViolationError('حصة كل مهندس يجب أن تكون أكبر من صفر', {
         contributorId: share.contributorId,
         shareBp: share.shareBp,
       });
@@ -62,7 +62,7 @@ export function assertSharesValid(shares: readonly ContributorShare[]): void {
   }
 
   if (totalBp !== 10_000) {
-    throw new RuleViolationError('Contributor shares must total exactly 100% (10000 basis points)', {
+    throw new RuleViolationError('مجموع حصص المهندسين يجب أن يكون ١٠٠٪ تماماً', {
       totalBp,
       shortfallBp: 10_000 - totalBp,
     });

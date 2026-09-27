@@ -33,7 +33,7 @@ export function money(amountMinor: bigint | number, currency: string): Money {
   // Validate BEFORE converting: BigInt() throws a bare RangeError on a
   // fractional input, which would escape the domain error taxonomy.
   if (typeof amountMinor === 'number' && !Number.isSafeInteger(amountMinor)) {
-    throw new ValidationError('Monetary amounts must be safe integers in minor units', {
+    throw new ValidationError('المبلغ خارج النطاق المسموح', {
       amountMinor,
     });
   }
@@ -131,10 +131,10 @@ export function percentOf(amount: Money, bp: BasisPoints): Money {
 
 export function assertBasisPoints(bp: number): BasisPoints {
   if (!Number.isInteger(bp)) {
-    throw new ValidationError('Basis points must be an integer (80% === 8000)', { bp });
+    throw new ValidationError('النسبة تُكتب بنقاط أساس صحيحة (٨٠٪ = 8000)', { bp });
   }
   if (bp < 0 || bp > 10_000) {
-    throw new ValidationError('Basis points must be between 0 and 10000 inclusive', { bp });
+    throw new ValidationError('النسبة يجب أن تكون بين 0 و 10000 نقطة أساس', { bp });
   }
   return bp;
 }
@@ -167,11 +167,12 @@ export function parseMajorUnits(input: string, currency: string): Money {
   const trimmed = input.trim().replace(/[٫٬,]/g, (m) => (m === ',' ? '' : '.'));
   const match = /^(-)?(\d+)(?:\.(\d+))?$/.exec(trimmed);
   if (!match) {
-    throw new ValidationError('Amount must be a plain decimal number', { input });
+    throw new ValidationError('اكتب المبلغ رقماً عشرياً بسيطاً، مثل 35.00', { input });
   }
   const [, sign, whole = '0', fraction = ''] = match;
   if (fraction.length > digits) {
-    throw new ValidationError(`Amount has more than ${digits} decimal places`, { input });
+    const places = digits === 2 ? 'خانتين عشريتين' : `${digits} خانات عشرية`;
+    throw new ValidationError(`المبلغ يقبل ${places} على الأكثر، مثل 35.25`, { input, digits });
   }
   const padded = fraction.padEnd(digits, '0');
   const minor = BigInt(whole) * BigInt(10 ** digits) + BigInt(padded === '' ? '0' : padded);

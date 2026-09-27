@@ -1,7 +1,7 @@
 import 'server-only';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { orders, paymentProofs, payments } from '@/db/schema';
-import { withActor } from '@/db/actor-context';
+import { withActor, type Transaction } from '@/db/actor-context';
 import { recordAudit } from '@/audit/log';
 import { notifyUser } from '@/notifications/notify';
 import type { Actor } from '@/authz/actor';
@@ -59,6 +59,55 @@ function detectProofType(head: Uint8Array, extension: string): string {
   throw new ValidationError('يجب أن يكون إثبات الدفع صورة أو ملف PDF', { extension });
 }
 
+/**
+ * Only a payment waiting for its receipt takes one (W7).
+ *
+ * A second receipt on a payment already under review, or one on a payment the
+ * owner rejected, used to be stored and then refused further down by the
+ * order's state machine, leaving the object behind. The retry after a
+ * rejection is a new attempt from the order page, not a second receipt here.
+ */
+function assertAwaitingProof(status: string): void {
+  if (status !== 'AWAITING_PROOF') {
+    throw new RuleViolationError(
+      'لا تقبل هذه الدفعة إيصالاً الآن: إيصالها قيد التحقق أو أنها رُفضت. تابع من صفحة الطلب.',
+      { status },
+    );
+  }
+}
+
+/**
+ * The payment follows its receipt to PROOF_SUBMITTED (W7).
+ *
+ * A plain UPDATE here ran as the customer, and `payments_update` admits the
+ * owner alone — so it matched zero rows, raised nothing, and every payment
+ * stayed AWAITING_PROOF beside a receipt and an order that said otherwise.
+ * `app_mark_payment_proof_submitted` (migration 0057) is the one narrow move:
+ * it checks ownership, status and the receipt as the customer, changes one
+ * column of one row, and raises unless exactly one row moved. Its answer is
+ * checked here too, because a write whose effect is not checked is how this
+ * defect lived unnoticed.
+ */
+async function markPaymentProofSubmitted(tx: Transaction, paymentId: string): Promise<void> {
+  let rows: Array<{ moved: string | null }>;
+  try {
+    rows = (await tx.execute(
+      sql`SELECT app_mark_payment_proof_submitted(${paymentId}::uuid) AS moved`,
+    )) as unknown as typeof rows;
+  } catch (error) {
+    const code = (error as { cause?: { code?: string }; code?: string })?.cause?.code
+      ?? (error as { code?: string })?.code;
+    // P0002 no_data_found: not the caller's payment, or no such payment.
+    if (code === 'P0002') throw new NotFoundError('الدفعة غير موجودة');
+    // 23514 check_violation: not awaiting a receipt, or no receipt on it.
+    if (code === '23514') throw new RuleViolationError('تعذّر تسجيل الإيصال على هذه الدفعة');
+    throw error;
+  }
+  if (rows[0]?.moved !== paymentId) {
+    throw new RuleViolationError('تعذّر تسجيل الإيصال على هذه الدفعة');
+  }
+}
+
 export async function submitPaymentProof(
   actor: Actor,
   input: {
@@ -101,11 +150,14 @@ export async function submitPaymentProof(
    */
   await withActor(actor, async (tx) => {
     const [payment] = await tx
-      .select({ id: payments.id, orderId: payments.orderId })
+      .select({ id: payments.id, orderId: payments.orderId, status: payments.status })
       .from(payments)
       .where(eq(payments.id, input.paymentId))
       .limit(1);
     if (!payment) throw new NotFoundError('الدفعة غير موجودة');
+    // Before storage, for the same reason as ownership: a receipt the payment
+    // cannot take must not leave an object behind (W7).
+    assertAwaitingProof(payment.status);
 
     const [order] = await tx
       .select({ id: orders.id })
@@ -141,6 +193,7 @@ export async function submitPaymentProof(
       .where(eq(payments.id, input.paymentId))
       .limit(1);
     if (!payment) throw new NotFoundError('الدفعة غير موجودة');
+    assertAwaitingProof(payment.status);
 
     const [order] = await tx.select().from(orders).where(eq(orders.id, payment.orderId)).limit(1);
     if (!order) throw new NotFoundError('الطلب غير موجود');
@@ -159,10 +212,7 @@ export async function submitPaymentProof(
 
     if (!proof) throw new RuleViolationError('تعذّر حفظ إثبات الدفع');
 
-    await tx
-      .update(payments)
-      .set({ status: 'PROOF_SUBMITTED', updatedAt: new Date() })
-      .where(eq(payments.id, payment.id));
+    await markPaymentProofSubmitted(tx, payment.id);
 
     await moveOrderForProof(tx, actor, order);
 

@@ -215,6 +215,16 @@ export async function saveCommissionAgreement(
   if (actor.kind !== 'USER') {
     throw new RuleViolationError('تحديد نسبة العمولة من صلاحية مالك المنصة وحده');
   }
+  // A fixed share below zero was SAVED — no constraint covers it — and then
+  // refused by the split at the first sale under these terms (W8). Refused
+  // here instead, where the owner can correct it.
+  const { agreement } = input;
+  if (
+    (agreement.model === 'FIXED_ENGINEER' && agreement.engineerFixedMinor < 0n)
+    || (agreement.model === 'FIXED_PLATFORM' && agreement.platformFixedMinor < 0n)
+  ) {
+    throw new ValidationError('المبلغ الثابت في اتفاق العمولة لا يكون سالباً');
+  }
 
   return withActor(actor, async (tx) => {
     // The engineer must exist. Otherwise a mistyped id writes terms for

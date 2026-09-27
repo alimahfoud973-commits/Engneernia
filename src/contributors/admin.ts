@@ -444,8 +444,11 @@ export async function addEngineer(
       .limit(1);
 
     if (!user) {
+      // The engineer's own registration is the whole step: an account is
+      // ACTIVE the moment it is created (migration 0056 removed the email
+      // confirmation), so there is nothing else to ask of them (W10).
       throw new ValidationError(
-        'لا يوجد حساب بهذا البريد. اطلب من المهندس التسجيل وتأكيد بريده أولاً، ثم أضفه هنا.',
+        'لا يوجد حساب بهذا البريد. اطلب من المهندس إنشاء حساب بهذا البريد نفسه، ثم أضفه هنا.',
       );
     }
     if (user.role === 'OWNER') {

@@ -94,17 +94,17 @@ export function computeCommissionSnapshot(input: SplitInput): CommissionSnapshot
 
   if (agreement.currency !== currency) {
     throw new RuleViolationError(
-      'Commission agreement currency does not match the sale currency',
+      'عملة اتفاق العمولة لا تطابق عملة البيع',
       { agreementCurrency: agreement.currency, saleCurrency: currency },
     );
   }
   if (listPrice.amountMinor < 0n) {
-    throw new ValidationError('Sale price cannot be negative', {
+    throw new ValidationError('سعر البيع لا يكون سالباً', {
       listPriceMinor: listPrice.amountMinor.toString(),
     });
   }
   if (discount.currency !== currency) {
-    throw new RuleViolationError('Discount currency does not match the sale currency', {
+    throw new RuleViolationError('عملة الخصم لا تطابق عملة البيع', {
       discountCurrency: discount.currency,
       saleCurrency: currency,
     });
@@ -112,12 +112,12 @@ export function computeCommissionSnapshot(input: SplitInput): CommissionSnapshot
   if (discount.amountMinor < 0n) {
     // A negative discount is a surcharge wearing a discount's name, and it
     // would raise the pot above the price the customer agreed to.
-    throw new ValidationError('Discount cannot be negative', {
+    throw new ValidationError('الخصم لا يكون سالباً', {
       discountMinor: discount.amountMinor.toString(),
     });
   }
   if (discount.amountMinor > listPrice.amountMinor) {
-    throw new ValidationError('Discount cannot exceed the price', {
+    throw new ValidationError('الخصم لا يتجاوز السعر', {
       discountMinor: discount.amountMinor.toString(),
       listPriceMinor: listPrice.amountMinor.toString(),
     });
@@ -141,7 +141,7 @@ export function computeCommissionSnapshot(input: SplitInput): CommissionSnapshot
     case 'FIXED_ENGINEER': {
       const fixed = money(agreement.engineerFixedMinor, currency);
       if (fixed.amountMinor < 0n) {
-        throw new ValidationError('Fixed engineer share cannot be negative', {
+        throw new ValidationError('حصة المهندس الثابتة لا تكون سالبة', {
           engineerFixedMinor: fixed.amountMinor.toString(),
         });
       }
@@ -153,7 +153,7 @@ export function computeCommissionSnapshot(input: SplitInput): CommissionSnapshot
     case 'FIXED_PLATFORM': {
       const fixed = money(agreement.platformFixedMinor, currency);
       if (fixed.amountMinor < 0n) {
-        throw new ValidationError('Fixed platform share cannot be negative', {
+        throw new ValidationError('حصة المنصة الثابتة لا تكون سالبة', {
           platformFixedMinor: fixed.amountMinor.toString(),
         });
       }

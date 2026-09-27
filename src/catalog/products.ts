@@ -13,7 +13,7 @@ import { assertTransition, type ProductStatus, type PublishReadiness } from './p
 import { money, type Money } from '@/lib/money/money';
 import { assertSharesValid, type ContributorShare } from '@/lib/money/distribution';
 import { keepPublishedSellable, productSaleBlockers } from '@/finance/commission-resolver';
-import { NotFoundError, RuleViolationError } from '@/lib/errors';
+import { ConflictError, NotFoundError, RuleViolationError, ValidationError } from '@/lib/errors';
 
 /**
  * Owner-facing catalogue operations.
@@ -55,6 +55,15 @@ export interface CreateProductInput {
 
 const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
+/** The insert hit `products_slug_unique` — and only that index. */
+function isSlugTaken(error: unknown): boolean {
+  const cause = (error as { cause?: { code?: string; constraint_name?: string } })?.cause;
+  const direct = error as { code?: string; constraint_name?: string };
+  const code = cause?.code ?? direct?.code;
+  const constraint = cause?.constraint_name ?? direct?.constraint_name;
+  return code === '23505' && constraint === 'products_slug_unique';
+}
+
 export async function createProduct(
   actor: Actor,
   input: CreateProductInput,
@@ -75,24 +84,34 @@ export async function createProduct(
   }
 
   return withActor(actor, async (tx) => {
-    const [created] = await tx
-      .insert(products)
-      .values({
-        slug,
-        titleAr: input.titleAr.trim(),
-        subtitleAr: input.subtitleAr?.trim() || null,
-        descriptionAr: input.descriptionAr?.trim() || null,
-        disciplineId: input.disciplineId,
-        categoryId: input.categoryId || null,
-        fileType: input.fileType,
-        level: input.level || null,
-        currency: input.currency,
-        softwareTags: [...(input.softwareTags ?? [])],
-        // Born a draft, always. Everything else is a later, checked transition.
-        status: 'DRAFT',
-        createdBy: actor.kind === 'USER' ? actor.userId : null,
-      })
-      .returning({ id: products.id, slug: products.slug });
+    let created: { id: string; slug: string } | undefined;
+    try {
+      [created] = await tx
+        .insert(products)
+        .values({
+          slug,
+          titleAr: input.titleAr.trim(),
+          subtitleAr: input.subtitleAr?.trim() || null,
+          descriptionAr: input.descriptionAr?.trim() || null,
+          disciplineId: input.disciplineId,
+          categoryId: input.categoryId || null,
+          fileType: input.fileType,
+          level: input.level || null,
+          currency: input.currency,
+          softwareTags: [...(input.softwareTags ?? [])],
+          // Born a draft, always. Everything else is a later, checked transition.
+          status: 'DRAFT',
+          createdBy: actor.kind === 'USER' ? actor.userId : null,
+        })
+        .returning({ id: products.id, slug: products.slug });
+    } catch (error) {
+      // The unique index is the guard (two requests can pass any check made
+      // before the insert); this only names its refusal for the owner (W9).
+      if (isSlugTaken(error)) {
+        throw new ConflictError('هذا العنوان اللطيف مستخدم لمنتج آخر. اختر عنواناً آخر.', { slug });
+      }
+      throw error;
+    }
 
     if (!created) {
       // RLS refuses a write by returning zero rows rather than raising.
@@ -205,6 +224,12 @@ export async function changeProductPrice(
   authorize(actor, 'contributor.readAnyFinancials');
   if (!isOwner(actor)) {
     throw new RuleViolationError('تغيير السعر من صلاحية مالك المنصة وحده');
+  }
+  // Refused here, where the owner typed it (W8). The database refuses it too
+  // (`product_prices_non_negative`), but its refusal reaches the owner only as
+  // "try again", which names neither the field nor the problem.
+  if (input.newAmountMinor < 0n) {
+    throw new ValidationError('السعر لا يكون سالباً');
   }
 
   return withActor(actor, async (tx) => {
