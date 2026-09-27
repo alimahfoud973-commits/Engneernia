@@ -5,6 +5,8 @@ import {
   createPaymentMethodAction, setPaymentMethodActiveAction, updatePaymentMethodAction,
   type PaymentMethodState,
 } from '@/payments/admin-actions';
+import type { SubmittedValues } from '@/lib/form-values';
+import { formKey } from './form-key';
 
 const INITIAL: PaymentMethodState = { error: null };
 
@@ -58,19 +60,27 @@ function Text({
   );
 }
 
-/** The fields every method has; which of the type-specific ones show depends on its type. */
-function Fields({ type, values }: { type: string; values?: PaymentMethodFormValues }) {
+/**
+ * The fields every method has; which of the type-specific ones show depends on its type.
+ *
+ * `typed` is what the owner submitted, handed back with a refusal (W11): it
+ * wins over the stored `values`, so a refused form shows what was typed. A
+ * checkbox left unticked is absent from a submission, so once `typed` exists
+ * its absence means "unticked", not "unknown".
+ */
+function Fields({ type, values, typed }: { type: string; values?: PaymentMethodFormValues; typed?: SubmittedValues | undefined }) {
+  const pick = (name: string, stored: string | null | undefined) => typed?.[name] ?? stored;
   return (
     <>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <Text name="displayNameAr" label="الاسم الظاهر للمشتري" defaultValue={values?.displayNameAr} required />
-        <Text name="displayNameEn" label="الاسم بالإنجليزية (اختياري)" defaultValue={values?.displayNameEn} />
+        <Text name="displayNameAr" label="الاسم الظاهر للمشتري" defaultValue={pick('displayNameAr', values?.displayNameAr)} required />
+        <Text name="displayNameEn" label="الاسم بالإنجليزية (اختياري)" defaultValue={pick('displayNameEn', values?.displayNameEn)} />
       </div>
-      <Text name="descriptionAr" label="الوصف" defaultValue={values?.descriptionAr} rows={2} />
+      <Text name="descriptionAr" label="الوصف" defaultValue={pick('descriptionAr', values?.descriptionAr)} rows={2} />
       <Text
         name="instructionsAr"
         label="تعليمات الدفع"
-        defaultValue={values?.instructionsAr}
+        defaultValue={pick('instructionsAr', values?.instructionsAr)}
         rows={3}
         hint={type === 'MANUAL' ? 'مطلوبة: بدونها لا تظهر الطريقة للمشترين.' : undefined}
       />
@@ -78,36 +88,36 @@ function Fields({ type, values }: { type: string; values?: PaymentMethodFormValu
         <Text
           name="accountDetailsAr"
           label="بيانات الحساب (رقم الحساب، IBAN، رقم المحفظة…)"
-          defaultValue={values?.accountDetailsAr}
+          defaultValue={pick('accountDetailsAr', values?.accountDetailsAr)}
           rows={2}
           hint="مطلوبة: بدونها لا تظهر الطريقة للمشترين. تُحفظ مع كل طلب لحظة إنشائه، فتعديلها لاحقاً لا يغيّر الطلبات السابقة."
         />
       ) : (
         // Not this type's field — carried unchanged, so a save does not clear it.
-        <input type="hidden" name="accountDetailsAr" value={values?.accountDetailsAr ?? ''} />
+        <input type="hidden" name="accountDetailsAr" value={pick('accountDetailsAr', values?.accountDetailsAr) ?? ''} />
       )}
       {type === 'ASSISTED' ? (
         <Text
           name="supportMessageAr"
           label="نص رسالة الدعم"
-          defaultValue={values?.supportMessageAr}
+          defaultValue={pick('supportMessageAr', values?.supportMessageAr)}
           rows={3}
           hint="يمكن استخدام {{items}} و{{order}} و{{amount}} و{{currency}}."
         />
       ) : (
-        <input type="hidden" name="supportMessageAr" value={values?.supportMessageAr ?? ''} />
+        <input type="hidden" name="supportMessageAr" value={pick('supportMessageAr', values?.supportMessageAr) ?? ''} />
       )}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <Text
           name="countries"
           label="الدول"
-          defaultValue={values?.countries.join(', ')}
+          defaultValue={pick('countries', values?.countries.join(', '))}
           hint="رموز من حرفين مثل SY, SA — فارغ = كل الدول."
         />
         <Text
           name="currencies"
           label="العملات"
-          defaultValue={values?.currencies.join(', ')}
+          defaultValue={pick('currencies', values?.currencies.join(', '))}
           hint="رموز من ثلاثة أحرف مثل USD — فارغ = كل العملات."
         />
         <label className="flex flex-col gap-1.5">
@@ -118,14 +128,14 @@ function Fields({ type, values }: { type: string; values?: PaymentMethodFormValu
             min={0}
             max={9999}
             required
-            defaultValue={values?.sortOrder ?? 10}
+            defaultValue={typed?.sortOrder ?? values?.sortOrder ?? 10}
             className={FIELD}
           />
           <span className="text-xs text-[var(--color-ink-faint)]">الأصغر يظهر أولاً.</span>
         </label>
       </div>
       <label className="flex items-center gap-2 text-sm">
-        <input type="checkbox" name="requiresProof" defaultChecked={values?.requiresProof ?? true} />
+        <input type="checkbox" name="requiresProof" defaultChecked={typed ? 'requiresProof' in typed : (values?.requiresProof ?? true)} />
         يطلب من المشتري رفع إيصال الدفع
       </label>
     </>
@@ -138,11 +148,11 @@ export function CreatePaymentMethodForm() {
   const [type, setType] = useState<string>('MANUAL');
 
   return (
-    <form action={formAction} className="flex flex-col gap-4">
+    <form key={formKey(state)} action={formAction} className="flex flex-col gap-4">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <label className="flex flex-col gap-1.5">
           <span className="text-xs text-[var(--color-ink-faint)]">الرمز (ثابت بعد الإنشاء)</span>
-          <input name="code" required pattern="[a-z0-9]+(-[a-z0-9]+)*" maxLength={50} className={FIELD} dir="ltr" />
+          <input name="code" required pattern="[a-z0-9]+(-[a-z0-9]+)*" maxLength={50} className={FIELD} dir="ltr" defaultValue={state.values?.code} />
           <span className="text-xs text-[var(--color-ink-faint)]">حروف لاتينية صغيرة وأرقام وشرطات، مثل local-wallet.</span>
         </label>
         <label className="flex flex-col gap-1.5">
@@ -153,9 +163,9 @@ export function CreatePaymentMethodForm() {
           </select>
         </label>
       </div>
-      <Fields type={type} />
+      <Fields type={type} typed={state.values} />
       <label className="flex items-center gap-2 text-sm">
-        <input type="checkbox" name="isActive" />
+        <input type="checkbox" name="isActive" defaultChecked={state.values ? 'isActive' in state.values : false} />
         مفعّلة فور الإنشاء
       </label>
       <div className="flex items-center gap-3">
@@ -172,9 +182,9 @@ export function EditPaymentMethodForm({ values }: { values: PaymentMethodFormVal
   const [state, formAction, pending] = useActionState(updatePaymentMethodAction, INITIAL);
 
   return (
-    <form action={formAction} className="flex flex-col gap-4">
+    <form key={formKey(state)} action={formAction} className="flex flex-col gap-4">
       <input type="hidden" name="methodId" value={values.id} />
-      <Fields type={values.type} values={values} />
+      <Fields type={values.type} values={values} typed={state.values} />
       <div className="flex items-center gap-3">
         <button type="submit" className={BUTTON} disabled={pending}>
           {pending ? 'جارٍ الحفظ…' : 'حفظ التعديلات'}

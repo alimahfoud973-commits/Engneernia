@@ -2,6 +2,7 @@
 
 import { useActionState, useState } from 'react';
 import { saveCommissionAction, type CommissionState } from '@/finance/commission-actions';
+import { formKey } from './form-key';
 
 const INITIAL: CommissionState = { error: null };
 
@@ -47,8 +48,10 @@ export function CommissionForm({
    */
   const scoped = products.filter((p) => p.contributorId === engineer);
 
+  const typed = state.values;
+
   return (
-    <form action={formAction} className="flex flex-col gap-4">
+    <form key={formKey(state)} action={formAction} className="flex flex-col gap-4">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <label className="flex flex-col gap-1.5">
           <span className="text-xs text-[var(--color-ink-faint)]">المهندس</span>
@@ -72,7 +75,7 @@ export function CommissionForm({
 
         <label className="flex flex-col gap-1.5">
           <span className="text-xs text-[var(--color-ink-faint)]">النطاق</span>
-          <select name="productId" className={FIELD} defaultValue="" disabled={engineer === ''}>
+          <select name="productId" className={FIELD} defaultValue={typed?.productId ?? ''} disabled={engineer === ''}>
             <option value="">كل منتجاته (الاتفاق الافتراضي)</option>
             {scoped.map((product) => (
               <option key={product.productId} value={product.productId}>
@@ -101,14 +104,14 @@ export function CommissionForm({
             <span className="text-xs text-[var(--color-ink-faint)]">
               حصة المهندس ٪ (مثال ٨٠ أو ٧٫٢٥)
             </span>
-            <input name="percent" inputMode="decimal" required className={FIELD} placeholder="80" />
+            <input name="percent" inputMode="decimal" required className={FIELD} placeholder="80" defaultValue={typed?.percent} />
           </label>
         ) : (
           <label className="flex flex-col gap-1.5">
             <span className="text-xs text-[var(--color-ink-faint)]">
               المبلغ الثابت ({currency})
             </span>
-            <input name="amount" inputMode="decimal" required className={FIELD} placeholder="11.00" />
+            <input name="amount" inputMode="decimal" required className={FIELD} placeholder="11.00" defaultValue={typed?.amount} />
           </label>
         )}
       </div>
@@ -117,7 +120,7 @@ export function CommissionForm({
 
       <label className="flex flex-col gap-1.5">
         <span className="text-xs text-[var(--color-ink-faint)]">ملاحظة (اختيارية)</span>
-        <input name="note" className={FIELD} placeholder="سبب التغيير" maxLength={400} />
+        <input name="note" className={FIELD} placeholder="سبب التغيير" maxLength={400} defaultValue={typed?.note} />
       </label>
 
       <p className="text-xs leading-relaxed text-[var(--color-ink-faint)]">

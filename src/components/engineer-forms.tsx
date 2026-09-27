@@ -5,6 +5,7 @@ import {
   addEngineerAction, setEngineerActiveAction, updateEngineerAction,
   type EngineerState,
 } from '@/contributors/engineer-actions';
+import { formKey } from './form-key';
 
 const INITIAL: EngineerState = { error: null };
 
@@ -34,7 +35,7 @@ function DisciplineSelect({
   defaultValue,
 }: {
   disciplines: readonly DisciplineOption[];
-  defaultValue?: string | null;
+  defaultValue?: string | null | undefined;
 }) {
   return (
     <label className="flex flex-col gap-1.5">
@@ -60,20 +61,21 @@ function DisciplineSelect({
  */
 export function AddEngineerForm({ disciplines }: { disciplines: readonly DisciplineOption[] }) {
   const [state, formAction, pending] = useActionState(addEngineerAction, INITIAL);
+  const typed = state.values;
 
   return (
-    <form action={formAction} className="flex flex-col gap-4">
+    <form key={formKey(state)} action={formAction} className="flex flex-col gap-4">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <label className="flex flex-col gap-1.5">
           <span className="text-xs text-[var(--color-ink-faint)]">
             بريد حساب مسجَّل على المنصة
           </span>
-          <input name="email" type="email" required className={FIELD} dir="ltr" />
+          <input name="email" type="email" required className={FIELD} dir="ltr" defaultValue={typed?.email} />
         </label>
 
         <label className="flex flex-col gap-1.5">
           <span className="text-xs text-[var(--color-ink-faint)]">الاسم المعروض</span>
-          <input name="displayName" required minLength={2} maxLength={120} className={FIELD} />
+          <input name="displayName" required minLength={2} maxLength={120} className={FIELD} defaultValue={typed?.displayName} />
         </label>
 
         <label className="flex flex-col gap-1.5">
@@ -87,6 +89,7 @@ export function AddEngineerForm({ disciplines }: { disciplines: readonly Discipl
             className={FIELD}
             dir="ltr"
             placeholder="ahmad-civil"
+            defaultValue={typed?.publicSlug}
           />
         </label>
 
@@ -99,16 +102,17 @@ export function AddEngineerForm({ disciplines }: { disciplines: readonly Discipl
             className={FIELD}
             dir="ltr"
             placeholder="CIVIL-01"
+            defaultValue={typed?.settlementCode}
           />
         </label>
 
-        <DisciplineSelect disciplines={disciplines} />
+        <DisciplineSelect disciplines={disciplines} defaultValue={typed?.disciplineId} />
 
         <label className="flex flex-col gap-1.5">
           <span className="text-xs text-[var(--color-ink-faint)]">
             التخصص الدقيق (اختياري)
           </span>
-          <input name="specialization" maxLength={120} className={FIELD} />
+          <input name="specialization" maxLength={120} className={FIELD} defaultValue={typed?.specialization} />
         </label>
       </div>
 
@@ -145,9 +149,11 @@ export function EditEngineerForm({
   disciplines: readonly DisciplineOption[];
 }) {
   const [state, formAction, pending] = useActionState(updateEngineerAction, INITIAL);
+  // A refusal shows what was typed; otherwise the stored profile.
+  const typed = state.values;
 
   return (
-    <form action={formAction} className="flex flex-col gap-4">
+    <form key={formKey(state)} action={formAction} className="flex flex-col gap-4">
       <input type="hidden" name="contributorId" value={contributorId} />
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -158,19 +164,19 @@ export function EditEngineerForm({
             required
             minLength={2}
             maxLength={120}
-            defaultValue={displayName}
+            defaultValue={typed?.displayName ?? displayName}
             className={FIELD}
           />
         </label>
 
-        <DisciplineSelect disciplines={disciplines} defaultValue={disciplineId} />
+        <DisciplineSelect disciplines={disciplines} defaultValue={typed?.disciplineId ?? disciplineId} />
 
         <label className="flex flex-col gap-1.5">
           <span className="text-xs text-[var(--color-ink-faint)]">التخصص الدقيق</span>
           <input
             name="specialization"
             maxLength={120}
-            defaultValue={specialization ?? ''}
+            defaultValue={typed?.specialization ?? specialization ?? ''}
             className={FIELD}
           />
         </label>
@@ -178,7 +184,7 @@ export function EditEngineerForm({
 
       <label className="flex flex-col gap-1.5">
         <span className="text-xs text-[var(--color-ink-faint)]">نبذة</span>
-        <textarea name="bio" maxLength={1000} rows={3} defaultValue={bio ?? ''} className={FIELD} />
+        <textarea name="bio" maxLength={1000} rows={3} defaultValue={typed?.bio ?? bio ?? ''} className={FIELD} />
       </label>
 
       <div className="flex items-center gap-3">

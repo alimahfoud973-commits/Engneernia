@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { requireOwner } from '@/auth/current';
 import { toUserMessage } from '@/lib/action-errors';
+import { submittedValues, type SubmittedValues } from '@/lib/form-values';
 import { updateWhatsappNumber } from './settings-admin';
 
 /**
@@ -11,7 +12,7 @@ import { updateWhatsappNumber } from './settings-admin';
  * session and re-reads the field; validation of the number is the service's.
  */
 
-export type SettingsState = { error: string | null; ok?: boolean };
+export type SettingsState = { error: string | null; ok?: boolean; values?: SubmittedValues };
 
 const ADMIN_PATH = '/admin/settings';
 
@@ -20,13 +21,13 @@ export async function updateWhatsappAction(
   formData: FormData,
 ): Promise<SettingsState> {
   const parsed = z.string().max(40).safeParse(formData.get('whatsapp') ?? '');
-  if (!parsed.success) return { error: 'رقم واتساب غير صالح' };
+  if (!parsed.success) return { error: 'رقم واتساب غير صالح', values: submittedValues(formData) };
 
   const actor = await requireOwner(ADMIN_PATH);
   try {
     await updateWhatsappNumber(actor, parsed.data);
   } catch (error) {
-    return { error: toUserMessage(error, 'Update WhatsApp number failed') };
+    return { error: toUserMessage(error, 'Update WhatsApp number failed'), values: submittedValues(formData) };
   }
 
   revalidatePath(ADMIN_PATH);

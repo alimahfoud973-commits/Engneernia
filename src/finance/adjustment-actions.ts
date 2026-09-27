@@ -11,6 +11,7 @@ import {
 import { parseMajorUnits } from '@/lib/money/money';
 import { ValidationError } from '@/lib/errors';
 import { toUserMessage } from '@/lib/action-errors';
+import { submittedValues, type SubmittedValues } from '@/lib/form-values';
 
 /**
  * Server actions for financial adjustments (OPEN-21).
@@ -30,6 +31,8 @@ export type AdjustmentState = {
   /** Carried through the confirmation so a refresh cannot post twice. */
   idempotencyKey?: string;
   posted?: { reference: string; ledgerTransactionId: string } | null;
+  /** What the owner typed, handed back with a refusal so the form keeps it (W11). */
+  values?: SubmittedValues;
 };
 
 /*
@@ -124,7 +127,7 @@ export async function previewAdjustmentAction(
       idempotencyKey: randomUUID(),
     };
   } catch (error) {
-    return { error: toMessage(error), preview: null };
+    return { error: toMessage(error), preview: null, values: submittedValues(formData) };
   }
 }
 

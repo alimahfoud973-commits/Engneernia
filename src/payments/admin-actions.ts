@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { requireOwner } from '@/auth/current';
 import { toUserMessage } from '@/lib/action-errors';
+import { submittedValues, type SubmittedValues } from '@/lib/form-values';
 import {
   createPaymentMethod, setPaymentMethodActive, updatePaymentMethod,
   type PaymentMethodFields,
@@ -17,7 +18,7 @@ import {
  * is only a string a browser sent.
  */
 
-export type PaymentMethodState = { error: string | null; ok?: boolean };
+export type PaymentMethodState = { error: string | null; ok?: boolean; values?: SubmittedValues };
 
 const ADMIN_PATH = '/admin/payment-methods';
 
@@ -77,7 +78,7 @@ export async function createPaymentMethodAction(
 ): Promise<PaymentMethodState> {
   const head = createSchema.safeParse({ code: formData.get('code'), type: formData.get('type') });
   const fields = readFields(formData);
-  if (!head.success || !fields) return { error: 'بيانات طريقة الدفع غير صالحة' };
+  if (!head.success || !fields) return { error: 'بيانات طريقة الدفع غير صالحة', values: submittedValues(formData) };
 
   const actor = await requireOwner(ADMIN_PATH);
   try {
@@ -88,7 +89,7 @@ export async function createPaymentMethodAction(
       isActive: formData.get('isActive') === 'on',
     });
   } catch (error) {
-    return { error: toUserMessage(error, 'Create payment method failed') };
+    return { error: toUserMessage(error, 'Create payment method failed'), values: submittedValues(formData) };
   }
 
   revalidatePath(ADMIN_PATH);
@@ -101,13 +102,13 @@ export async function updatePaymentMethodAction(
 ): Promise<PaymentMethodState> {
   const id = z.string().uuid().safeParse(formData.get('methodId'));
   const fields = readFields(formData);
-  if (!id.success || !fields) return { error: 'بيانات طريقة الدفع غير صالحة' };
+  if (!id.success || !fields) return { error: 'بيانات طريقة الدفع غير صالحة', values: submittedValues(formData) };
 
   const actor = await requireOwner(ADMIN_PATH);
   try {
     await updatePaymentMethod(actor, id.data, fields);
   } catch (error) {
-    return { error: toUserMessage(error, 'Update payment method failed') };
+    return { error: toUserMessage(error, 'Update payment method failed'), values: submittedValues(formData) };
   }
 
   revalidatePath(ADMIN_PATH);

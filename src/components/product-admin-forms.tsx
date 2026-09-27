@@ -5,6 +5,7 @@ import {
   changePriceAction, changeStatusAction, createProductAction, setCreditsAction,
   updateProductAction, uploadProductFileAction, type ProductActionState,
 } from '@/catalog/product-actions';
+import { formKey } from './form-key';
 
 const INITIAL: ProductActionState = { error: null };
 const FIELD =
@@ -41,18 +42,20 @@ export function CreateProductForm({
   const [discipline, setDiscipline] = useState('');
   const scoped = categories.filter((c) => c.disciplineId === discipline);
 
+  const typed = state.values;
+
   return (
-    <form action={action} className="flex flex-col gap-4">
+    <form key={formKey(state)} action={action} className="flex flex-col gap-4">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <label className="flex flex-col gap-1.5">
           <span className="text-xs text-[var(--color-ink-faint)]">عنوان المنتج</span>
-          <input name="titleAr" required maxLength={300} className={FIELD} placeholder="دليل تصميم الأساسات" />
+          <input name="titleAr" required maxLength={300} className={FIELD} placeholder="دليل تصميم الأساسات" defaultValue={typed?.titleAr} />
         </label>
         <label className="flex flex-col gap-1.5">
           <span className="text-xs text-[var(--color-ink-faint)]">
             العنوان في الرابط (لاتيني، دائم)
           </span>
-          <input name="slug" required className={FIELD} placeholder="foundation-design-guide" dir="ltr" />
+          <input name="slug" required className={FIELD} placeholder="foundation-design-guide" dir="ltr" defaultValue={typed?.slug} />
         </label>
         <label className="flex flex-col gap-1.5">
           <span className="text-xs text-[var(--color-ink-faint)]">التخصص</span>
@@ -64,27 +67,27 @@ export function CreateProductForm({
         </label>
         <label className="flex flex-col gap-1.5">
           <span className="text-xs text-[var(--color-ink-faint)]">القسم (اختياري)</span>
-          <select name="categoryId" className={FIELD} defaultValue="" disabled={discipline === ''}>
+          <select name="categoryId" className={FIELD} defaultValue={typed?.categoryId ?? ''} disabled={discipline === ''}>
             <option value="">—</option>
             {scoped.map((c) => <option key={c.id} value={c.id}>{c.nameAr}</option>)}
           </select>
         </label>
         <label className="flex flex-col gap-1.5">
           <span className="text-xs text-[var(--color-ink-faint)]">نوع الملف</span>
-          <select name="fileType" className={FIELD} defaultValue="PDF">
+          <select name="fileType" className={FIELD} defaultValue={typed?.fileType ?? 'PDF'}>
             {FILE_TYPES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
           </select>
         </label>
         <label className="flex flex-col gap-1.5">
           <span className="text-xs text-[var(--color-ink-faint)]">المستوى</span>
-          <select name="level" className={FIELD} defaultValue="">
+          <select name="level" className={FIELD} defaultValue={typed?.level ?? ''}>
             {LEVELS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
           </select>
         </label>
       </div>
       <label className="flex flex-col gap-1.5">
         <span className="text-xs text-[var(--color-ink-faint)]">وصف مختصر (اختياري)</span>
-        <input name="subtitleAr" maxLength={300} className={FIELD} />
+        <input name="subtitleAr" maxLength={300} className={FIELD} defaultValue={typed?.subtitleAr} />
       </label>
       <input type="hidden" name="currency" value={currency} />
       <p className="text-xs text-[var(--color-ink-faint)]">
@@ -107,31 +110,33 @@ export function ProductDetailsForm({
   descriptionAr: string | null; level: string | null; softwareTags: readonly string[];
 }) {
   const [state, action, pending] = useActionState(updateProductAction, INITIAL);
+  // A refusal shows what was typed; otherwise the stored values.
+  const typed = state.values;
   return (
-    <form action={action} className="flex flex-col gap-3">
+    <form key={formKey(state)} action={action} className="flex flex-col gap-3">
       <input type="hidden" name="productId" value={productId} />
       <label className="flex flex-col gap-1.5">
         <span className="text-xs text-[var(--color-ink-faint)]">العنوان</span>
-        <input name="titleAr" required defaultValue={titleAr} className={FIELD} />
+        <input name="titleAr" required defaultValue={typed?.titleAr ?? titleAr} className={FIELD} />
       </label>
       <label className="flex flex-col gap-1.5">
         <span className="text-xs text-[var(--color-ink-faint)]">وصف مختصر</span>
-        <input name="subtitleAr" defaultValue={subtitleAr ?? ''} className={FIELD} />
+        <input name="subtitleAr" defaultValue={typed?.subtitleAr ?? subtitleAr ?? ''} className={FIELD} />
       </label>
       <label className="flex flex-col gap-1.5">
         <span className="text-xs text-[var(--color-ink-faint)]">الوصف</span>
-        <textarea name="descriptionAr" rows={4} defaultValue={descriptionAr ?? ''} className={FIELD} />
+        <textarea name="descriptionAr" rows={4} defaultValue={typed?.descriptionAr ?? descriptionAr ?? ''} className={FIELD} />
       </label>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <label className="flex flex-col gap-1.5">
           <span className="text-xs text-[var(--color-ink-faint)]">المستوى</span>
-          <select name="level" defaultValue={level ?? ''} className={FIELD}>
+          <select name="level" defaultValue={typed?.level ?? level ?? ''} className={FIELD}>
             {LEVELS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
           </select>
         </label>
         <label className="flex flex-col gap-1.5">
           <span className="text-xs text-[var(--color-ink-faint)]">البرامج (بفواصل)</span>
-          <input name="softwareTags" defaultValue={softwareTags.join('، ')} className={FIELD} />
+          <input name="softwareTags" defaultValue={typed?.softwareTags ?? softwareTags.join('، ')} className={FIELD} />
         </label>
       </div>
       <div><button type="submit" disabled={pending} className={BTN}>{pending ? '…' : 'حفظ التعديلات'}</button></div>
@@ -171,7 +176,7 @@ export function CreditsForm({
   );
 
   return (
-    <form action={action} className="flex flex-col gap-3">
+    <form key={formKey(state)} action={action} className="flex flex-col gap-3">
       <input type="hidden" name="productId" value={productId} />
       {rows.map((row, index) => (
         <div key={index} className="grid grid-cols-[1fr_110px_auto] gap-2">
@@ -203,17 +208,17 @@ export function PriceForm({
 }: { productId: string; currency: string; currentMinor: bigint | null }) {
   const [state, action, pending] = useActionState(changePriceAction, INITIAL);
   return (
-    <form action={action} className="flex flex-col gap-3">
+    <form key={formKey(state)} action={action} className="flex flex-col gap-3">
       <input type="hidden" name="productId" value={productId} />
       <input type="hidden" name="currency" value={currency} />
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <label className="flex flex-col gap-1.5">
           <span className="text-xs text-[var(--color-ink-faint)]">السعر ({currency})</span>
-          <input name="amount" required inputMode="decimal" className={FIELD} placeholder="35.00" />
+          <input name="amount" required inputMode="decimal" className={FIELD} placeholder="35.00" defaultValue={state.values?.amount} />
         </label>
         <label className="flex flex-col gap-1.5">
           <span className="text-xs text-[var(--color-ink-faint)]">سبب التغيير (اختياري)</span>
-          <input name="reason" maxLength={300} className={FIELD} />
+          <input name="reason" maxLength={300} className={FIELD} defaultValue={state.values?.reason} />
         </label>
       </div>
       <p className="text-xs text-[var(--color-ink-faint)]">
@@ -238,18 +243,18 @@ export function StatusForm({
     return <p className="text-sm text-[var(--color-ink-faint)]">لا انتقالات متاحة من هذه الحالة.</p>;
   }
   return (
-    <form action={action} className="flex flex-col gap-3">
+    <form key={formKey(state)} action={action} className="flex flex-col gap-3">
       <input type="hidden" name="productId" value={productId} />
       <div className="flex flex-wrap items-end gap-3">
         <label className="flex flex-col gap-1.5">
           <span className="text-xs text-[var(--color-ink-faint)]">الانتقال</span>
-          <select name="to" className={FIELD} defaultValue={nextStates[0]!.to}>
+          <select name="to" className={FIELD} defaultValue={state.values?.to ?? nextStates[0]!.to}>
             {nextStates.map((s) => <option key={s.to} value={s.to}>{s.label}</option>)}
           </select>
         </label>
         <label className="flex flex-1 flex-col gap-1.5">
           <span className="text-xs text-[var(--color-ink-faint)]">ملاحظة (اختيارية)</span>
-          <input name="note" maxLength={400} className={FIELD} />
+          <input name="note" maxLength={400} className={FIELD} defaultValue={state.values?.note} />
         </label>
         <button type="submit" disabled={pending} className={BTN}>{pending ? '…' : 'تنفيذ'}</button>
       </div>

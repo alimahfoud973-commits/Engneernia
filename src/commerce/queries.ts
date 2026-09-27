@@ -154,8 +154,21 @@ export async function purchaseState(actor: Actor, productId: string): Promise<Pu
   });
 }
 
-/** The customer's purchases (specification §40). */
+/**
+ * The caller's OWN purchases and orders (specification §40) — `/account`.
+ *
+ * BOTH QUERIES NAME THE CUSTOMER, for the reason `purchaseState` above gives:
+ * the policies on `entitlements` and `orders` admit the owner to every row, so
+ * an unfiltered query answered the platform owner's "my purchases" with every
+ * customer's purchases and the latest 25 orders on the platform (Stage 3, W12).
+ * The owner's global view is the admin screens'; this is a personal page for
+ * everyone who opens it, the owner included. RLS still decides what the query
+ * may see at all — the filter only narrows it to the caller.
+ */
 export async function myPurchases(actor: Actor) {
+  if (actor.kind !== 'USER') return { owned: [], orders: [] };
+  const me = actor.userId;
+
   return withActor(actor, async (tx) => {
     const owned = await tx
       .select({
@@ -169,6 +182,7 @@ export async function myPurchases(actor: Actor) {
       })
       .from(entitlements)
       .innerJoin(products, eq(products.id, entitlements.productId))
+      .where(eq(entitlements.customerId, me))
       .orderBy(desc(entitlements.grantedAt));
 
     const orderRows = await tx
@@ -181,6 +195,7 @@ export async function myPurchases(actor: Actor) {
         createdAt: orders.createdAt,
       })
       .from(orders)
+      .where(eq(orders.customerId, me))
       .orderBy(desc(orders.createdAt))
       .limit(25);
 

@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { requireOwner } from '@/auth/current';
 import { addEngineer, setEngineerActive, updateEngineer } from './admin';
 import { toUserMessage } from '@/lib/action-errors';
+import { submittedValues, type SubmittedValues } from '@/lib/form-values';
 
 /**
  * The owner's engineers screen, server side (§19, §32, §46).
@@ -18,7 +19,7 @@ import { toUserMessage } from '@/lib/action-errors';
  * only what belongs to the engineer's own profile.
  */
 
-export type EngineerState = { error: string | null; ok?: boolean };
+export type EngineerState = { error: string | null; ok?: boolean; values?: SubmittedValues };
 
 const ADMIN_PATH = '/admin/engineers';
 
@@ -45,7 +46,7 @@ export async function addEngineerAction(
     specialization: formData.get('specialization') ?? undefined,
     bio: formData.get('bio') ?? undefined,
   });
-  if (!parsed.success) return { error: 'بيانات غير صالحة' };
+  if (!parsed.success) return { error: 'بيانات غير صالحة', values: submittedValues(formData) };
 
   const actor = await requireOwner(ADMIN_PATH);
 
@@ -60,7 +61,7 @@ export async function addEngineerAction(
       bio: parsed.data.bio ?? null,
     });
   } catch (error) {
-    return { error: toUserMessage(error, 'Add engineer failed') };
+    return { error: toUserMessage(error, 'Add engineer failed'), values: submittedValues(formData) };
   }
 
   revalidatePath(ADMIN_PATH);
@@ -86,7 +87,7 @@ export async function updateEngineerAction(
     specialization: formData.get('specialization') ?? undefined,
     bio: formData.get('bio') ?? undefined,
   });
-  if (!parsed.success) return { error: 'بيانات غير صالحة' };
+  if (!parsed.success) return { error: 'بيانات غير صالحة', values: submittedValues(formData) };
 
   const actor = await requireOwner(ADMIN_PATH);
 
@@ -99,7 +100,7 @@ export async function updateEngineerAction(
       bio: parsed.data.bio ?? null,
     });
   } catch (error) {
-    return { error: toUserMessage(error, 'Update engineer failed') };
+    return { error: toUserMessage(error, 'Update engineer failed'), values: submittedValues(formData) };
   }
 
   revalidatePath(ADMIN_PATH);

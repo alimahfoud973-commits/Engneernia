@@ -6,6 +6,7 @@ import { requireOwner } from '@/auth/current';
 import { generateSettlements } from './generate';
 import { approveSettlement, cancelSettlement, markSettlementPaid } from './lifecycle';
 import { toUserMessage } from '@/lib/action-errors';
+import { submittedValues, type SubmittedValues } from '@/lib/form-values';
 
 /**
  * Server actions for the settlement run.
@@ -15,7 +16,7 @@ import { toUserMessage } from '@/lib/action-errors';
  * not evidence of anything.
  */
 
-export type ActionState = { error: string | null; ok?: boolean; message?: string };
+export type ActionState = { error: string | null; ok?: boolean; message?: string; values?: SubmittedValues };
 
 function toMessage(error: unknown): string {
   return toUserMessage(error, 'Settlement action failed');
@@ -30,7 +31,7 @@ export async function generateSettlementsAction(
   formData: FormData,
 ): Promise<ActionState> {
   const parsed = periodSchema.safeParse({ periodKey: formData.get('periodKey') });
-  if (!parsed.success) return { error: 'الفترة تُكتب بالصيغة YYYY-MM' };
+  if (!parsed.success) return { error: 'الفترة تُكتب بالصيغة YYYY-MM', values: submittedValues(formData) };
 
   const actor = await requireOwner('/admin/settlements');
 
@@ -52,7 +53,7 @@ export async function generateSettlementsAction(
           : ''),
     };
   } catch (error) {
-    return { error: toMessage(error) };
+    return { error: toMessage(error), values: submittedValues(formData) };
   }
 }
 
@@ -63,7 +64,7 @@ export async function approveSettlementAction(
   formData: FormData,
 ): Promise<ActionState> {
   const parsed = idSchema.safeParse({ settlementId: formData.get('settlementId') });
-  if (!parsed.success) return { error: 'كشف غير صالح' };
+  if (!parsed.success) return { error: 'كشف غير صالح', values: submittedValues(formData) };
 
   const actor = await requireOwner('/admin/settlements');
   try {
@@ -72,7 +73,7 @@ export async function approveSettlementAction(
       note: (formData.get('note') as string | null) ?? null,
     });
   } catch (error) {
-    return { error: toMessage(error) };
+    return { error: toMessage(error), values: submittedValues(formData) };
   }
 
   revalidatePath('/admin/settlements');
@@ -94,7 +95,7 @@ export async function markSettlementPaidAction(
     payoutMethod: formData.get('payoutMethod') ?? undefined,
     payoutReference: formData.get('payoutReference') ?? undefined,
   });
-  if (!parsed.success) return { error: 'بيانات الصرف غير صالحة' };
+  if (!parsed.success) return { error: 'بيانات الصرف غير صالحة', values: submittedValues(formData) };
 
   const actor = await requireOwner('/admin/settlements');
   try {
@@ -104,7 +105,7 @@ export async function markSettlementPaidAction(
       payoutReference: parsed.data.payoutReference ?? null,
     });
   } catch (error) {
-    return { error: toMessage(error) };
+    return { error: toMessage(error), values: submittedValues(formData) };
   }
 
   revalidatePath('/admin/settlements');
@@ -125,7 +126,7 @@ export async function cancelSettlementAction(
     settlementId: formData.get('settlementId'),
     reason: formData.get('reason'),
   });
-  if (!parsed.success) return { error: 'اذكر سبب الإلغاء' };
+  if (!parsed.success) return { error: 'اذكر سبب الإلغاء', values: submittedValues(formData) };
 
   const actor = await requireOwner('/admin/settlements');
   try {
@@ -134,7 +135,7 @@ export async function cancelSettlementAction(
       reason: parsed.data.reason,
     });
   } catch (error) {
-    return { error: toMessage(error) };
+    return { error: toMessage(error), values: submittedValues(formData) };
   }
 
   revalidatePath('/admin/settlements');

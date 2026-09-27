@@ -66,9 +66,18 @@ export interface InvoiceSummary {
   readonly taxMinor: bigint;
 }
 
-/** The caller's own invoices; the owner's query returns everyone's. */
+/**
+ * The caller's OWN invoices — `/account`.
+ *
+ * Filtered by customer, not left to the row policy alone: `invoices_select`
+ * admits the owner to every invoice, so the unfiltered query listed the whole
+ * platform's invoices under the owner's "my invoices" (Stage 3, W12). The
+ * policy still decides what may be seen at all; the filter makes this list
+ * personal for every caller, the owner included.
+ */
 export async function myInvoices(actor: Actor): Promise<readonly InvoiceSummary[]> {
   if (actor.kind !== 'USER') return [];
+  const me = actor.userId;
 
   return withActor(actor, async (tx) => {
     const rows = await tx
@@ -81,6 +90,7 @@ export async function myInvoices(actor: Actor): Promise<readonly InvoiceSummary[
         taxMinor: invoices.taxMinor,
       })
       .from(invoices)
+      .where(eq(invoices.customerId, me))
       .orderBy(desc(invoices.issuedAt))
       .limit(200);
 

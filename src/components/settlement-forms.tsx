@@ -5,6 +5,7 @@ import {
   approveSettlementAction, cancelSettlementAction, generateSettlementsAction,
   markSettlementPaidAction, type ActionState,
 } from '@/settlements/actions';
+import { formKey } from './form-key';
 
 const INITIAL: ActionState = { error: null };
 
@@ -42,6 +43,7 @@ export function GenerateSettlementsForm({ defaultPeriod }: { defaultPeriod: stri
 
   return (
     <form
+      key={formKey(state)}
       action={formAction}
       className="flex flex-col gap-3 rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-surface)] p-5"
     >
@@ -51,7 +53,7 @@ export function GenerateSettlementsForm({ defaultPeriod }: { defaultPeriod: stri
           <input
             type="text"
             name="periodKey"
-            defaultValue={defaultPeriod}
+            defaultValue={state.values?.periodKey ?? defaultPeriod}
             pattern="\d{4}-(0[1-9]|1[0-2])"
             required
             className="technical-term w-36 rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-surface)] px-3 py-2 tabular-nums"
@@ -77,12 +79,13 @@ export function GenerateSettlementsForm({ defaultPeriod }: { defaultPeriod: stri
 export function ApproveSettlementForm({ settlementId }: { settlementId: string }) {
   const [state, formAction, pending] = useActionState(approveSettlementAction, INITIAL);
   return (
-    <form action={formAction} className="flex flex-wrap items-center gap-2">
+    <form key={formKey(state)} action={formAction} className="flex flex-wrap items-center gap-2">
       <input type="hidden" name="settlementId" value={settlementId} />
       <input
         type="text"
         name="note"
         maxLength={2000}
+        defaultValue={state.values?.note}
         placeholder="ملاحظة (اختيارية)"
         className="min-w-[10rem] flex-1 rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-surface)] px-3 py-2 text-sm"
       />
@@ -107,12 +110,13 @@ export function PaySettlementForm({
 }) {
   const [state, formAction, pending] = useActionState(markSettlementPaidAction, INITIAL);
   return (
-    <form action={formAction} className="flex flex-wrap items-center gap-2">
+    <form key={formKey(state)} action={formAction} className="flex flex-wrap items-center gap-2">
       <input type="hidden" name="settlementId" value={settlementId} />
       <input
         type="text"
         name="payoutMethod"
         maxLength={120}
+        defaultValue={state.values?.payoutMethod}
         placeholder="طريقة التحويل"
         className="min-w-[8rem] flex-1 rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-surface)] px-3 py-2 text-sm"
       />
@@ -120,6 +124,7 @@ export function PaySettlementForm({
         type="text"
         name="payoutReference"
         maxLength={200}
+        defaultValue={state.values?.payoutReference}
         placeholder="مرجع التحويل"
         className="min-w-[8rem] flex-1 rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-surface)] px-3 py-2 text-sm"
       />
@@ -138,11 +143,12 @@ export function PaySettlementForm({
 export function CancelSettlementForm({ settlementId }: { settlementId: string }) {
   const [state, formAction, pending] = useActionState(cancelSettlementAction, INITIAL);
   return (
-    <form action={formAction} className="flex flex-wrap items-center gap-2">
+    <form key={formKey(state)} action={formAction} className="flex flex-wrap items-center gap-2">
       <input type="hidden" name="settlementId" value={settlementId} />
       <input
         type="text"
         name="reason"
+        defaultValue={state.values?.reason}
         required
         minLength={3}
         maxLength={2000}

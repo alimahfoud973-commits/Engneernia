@@ -10,6 +10,7 @@ import {
 } from './products';
 import { ingestProductFile } from '@/media/ingest';
 import { parseMajorUnits } from '@/lib/money/money';
+import { submittedValues, type SubmittedValues } from '@/lib/form-values';
 import { toUserMessage } from '@/lib/action-errors';
 import type { ProductStatus } from './publication';
 
@@ -24,7 +25,7 @@ import type { ProductStatus } from './publication';
  * nothing else, so the initial action state lives with the components.
  */
 
-export type ProductActionState = { error: string | null; ok?: boolean };
+export type ProductActionState = { error: string | null; ok?: boolean; values?: SubmittedValues };
 
 const FILE_TYPES = ['PDF', 'EXCEL', 'CAD', 'REVIT_BIM', 'ARCHIVE', 'TEMPLATE', 'PROJECT', 'OTHER'] as const;
 const LEVELS = ['BEGINNER', 'INTERMEDIATE', 'ADVANCED'] as const;
@@ -60,7 +61,7 @@ export async function createProductAction(
     level: formData.get('level') ?? '',
     currency: formData.get('currency'),
   });
-  if (!parsed.success) return { error: 'بيانات المنتج غير صالحة' };
+  if (!parsed.success) return { error: 'بيانات المنتج غير صالحة', values: submittedValues(formData) };
 
   const actor = await requireOwner('/admin/products');
   let productId: string;
@@ -79,7 +80,7 @@ export async function createProductAction(
     });
     productId = created.productId;
   } catch (error) {
-    return { error: toMessage(error) };
+    return { error: toMessage(error), values: submittedValues(formData) };
   }
 
   // Straight to the product's own screen: a draft with nothing on it is not a
@@ -108,7 +109,7 @@ export async function updateProductAction(
     level: formData.get('level') ?? '',
     softwareTags: formData.get('softwareTags') ?? undefined,
   });
-  if (!parsed.success) return { error: 'بيانات غير صالحة' };
+  if (!parsed.success) return { error: 'بيانات غير صالحة', values: submittedValues(formData) };
 
   const actor = await requireOwner('/admin/products');
   try {
@@ -122,7 +123,7 @@ export async function updateProductAction(
         .split(',').map((t) => t.trim()).filter(Boolean),
     });
   } catch (error) {
-    return { error: toMessage(error) };
+    return { error: toMessage(error), values: submittedValues(formData) };
   }
 
   revalidatePath(`/admin/products/${parsed.data.productId}`);
@@ -251,7 +252,7 @@ export async function changePriceAction(
     currency: formData.get('currency'),
     reason: formData.get('reason') ?? undefined,
   });
-  if (!parsed.success) return { error: 'بيانات السعر غير صالحة' };
+  if (!parsed.success) return { error: 'بيانات السعر غير صالحة', values: submittedValues(formData) };
 
   const actor = await requireOwner('/admin/products');
   try {
@@ -262,7 +263,7 @@ export async function changePriceAction(
       ...(parsed.data.reason?.trim() ? { reason: parsed.data.reason.trim() } : {}),
     });
   } catch (error) {
-    return { error: toMessage(error) };
+    return { error: toMessage(error), values: submittedValues(formData) };
   }
 
   revalidatePath(`/admin/products/${parsed.data.productId}`);
@@ -287,7 +288,7 @@ export async function changeStatusAction(
     to: formData.get('to'),
     note: formData.get('note') ?? undefined,
   });
-  if (!parsed.success) return { error: 'حالة غير صالحة' };
+  if (!parsed.success) return { error: 'حالة غير صالحة', values: submittedValues(formData) };
 
   const actor = await requireOwner('/admin/products');
   try {
@@ -297,7 +298,7 @@ export async function changeStatusAction(
       ...(parsed.data.note?.trim() ? { note: parsed.data.note.trim() } : {}),
     });
   } catch (error) {
-    return { error: toMessage(error) };
+    return { error: toMessage(error), values: submittedValues(formData) };
   }
 
   revalidatePath(`/admin/products/${parsed.data.productId}`);

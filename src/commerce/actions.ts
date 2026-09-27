@@ -9,6 +9,7 @@ import {
 } from './orders';
 import { submitPaymentProof } from './proofs';
 import { toUserMessage } from '@/lib/action-errors';
+import { submittedValues, type SubmittedValues } from '@/lib/form-values';
 
 /**
  * Server actions for the purchase flow.
@@ -18,7 +19,7 @@ import { toUserMessage } from '@/lib/action-errors';
  * browser sent.
  */
 
-export type ActionState = { error: string | null; ok?: boolean };
+export type ActionState = { error: string | null; ok?: boolean; values?: SubmittedValues };
 
 function toMessage(error: unknown): string {
   return toUserMessage(error, 'Commerce action failed');
@@ -167,7 +168,7 @@ export async function approvePaymentAction(
     paymentId: formData.get('paymentId'),
     providerRef: formData.get('providerRef') ?? undefined,
   });
-  if (!parsed.success) return { error: 'بيانات غير صالحة' };
+  if (!parsed.success) return { error: 'بيانات غير صالحة', values: submittedValues(formData) };
 
   const actor = await requireOwner('/admin/payments');
 
@@ -177,7 +178,7 @@ export async function approvePaymentAction(
       providerRef: parsed.data.providerRef ?? null,
     });
   } catch (error) {
-    return { error: toMessage(error) };
+    return { error: toMessage(error), values: submittedValues(formData) };
   }
 
   revalidatePath('/admin/payments');
@@ -193,7 +194,7 @@ export async function rejectPaymentAction(
     reason: formData.get('reason') ?? undefined,
   });
   if (!parsed.success || !parsed.data.reason?.trim()) {
-    return { error: 'يرجى كتابة سبب الرفض' };
+    return { error: 'يرجى كتابة سبب الرفض', values: submittedValues(formData) };
   }
 
   const actor = await requireOwner('/admin/payments');
@@ -204,7 +205,7 @@ export async function rejectPaymentAction(
       reason: parsed.data.reason.trim(),
     });
   } catch (error) {
-    return { error: toMessage(error) };
+    return { error: toMessage(error), values: submittedValues(formData) };
   }
 
   revalidatePath('/admin/payments');

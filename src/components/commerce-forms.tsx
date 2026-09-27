@@ -5,6 +5,7 @@ import {
   approvePaymentAction, choosePaymentMethodAction, completeFreeOrderAction, rejectPaymentAction,
   startPurchaseAction, submitProofAction, type ActionState,
 } from '@/commerce/actions';
+import { formKey } from './form-key';
 
 const INITIAL: ActionState = { error: null };
 
@@ -182,7 +183,7 @@ export function PaymentDecisionForms({ paymentId }: { paymentId: string }) {
 
   return (
     <div className="flex flex-col gap-3 border-t border-[var(--color-line)] pt-3">
-      <form action={approveAction} className="flex flex-wrap items-end gap-2">
+      <form key={formKey(approveState)} action={approveAction} className="flex flex-wrap items-end gap-2">
         <input type="hidden" name="paymentId" value={paymentId} />
         <div className="flex min-w-[180px] flex-1 flex-col gap-1">
           <label htmlFor={`ref-${paymentId}`} className="text-xs text-[var(--color-ink-soft)]">
@@ -192,6 +193,7 @@ export function PaymentDecisionForms({ paymentId }: { paymentId: string }) {
             id={`ref-${paymentId}`}
             name="providerRef"
             type="text"
+            defaultValue={approveState.values?.providerRef}
             className="rounded-sm border border-[var(--color-line)] bg-[var(--color-ground)] px-2 py-1.5 text-sm outline-none focus:border-[var(--color-accent)]"
           />
         </div>
@@ -205,7 +207,7 @@ export function PaymentDecisionForms({ paymentId }: { paymentId: string }) {
       </form>
       <ErrorNote message={approveState.error} />
 
-      <form action={rejectAction} className="flex flex-wrap items-end gap-2">
+      <form key={formKey(rejectState)} action={rejectAction} className="flex flex-wrap items-end gap-2">
         <input type="hidden" name="paymentId" value={paymentId} />
         <div className="flex min-w-[180px] flex-1 flex-col gap-1">
           <label htmlFor={`reason-${paymentId}`} className="text-xs text-[var(--color-ink-soft)]">
@@ -215,6 +217,7 @@ export function PaymentDecisionForms({ paymentId }: { paymentId: string }) {
             id={`reason-${paymentId}`}
             name="reason"
             type="text"
+            defaultValue={rejectState.values?.reason}
             className="rounded-sm border border-[var(--color-line)] bg-[var(--color-ground)] px-2 py-1.5 text-sm outline-none focus:border-[var(--color-danger)]"
           />
         </div>

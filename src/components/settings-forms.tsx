@@ -2,6 +2,7 @@
 
 import { useActionState } from 'react';
 import { updateWhatsappAction, type SettingsState } from '@/platform/settings-actions';
+import { formKey } from './form-key';
 
 const INITIAL: SettingsState = { error: null };
 
@@ -16,7 +17,7 @@ export function WhatsappNumberForm({ defaultValue }: { defaultValue: string }) {
   const [state, formAction, pending] = useActionState(updateWhatsappAction, INITIAL);
 
   return (
-    <form action={formAction} className="flex flex-col gap-3">
+    <form key={formKey(state)} action={formAction} className="flex flex-col gap-3">
       <label className="flex flex-col gap-1.5">
         <span className="text-xs text-[var(--color-ink-faint)]">رقم واتساب</span>
         <input
@@ -25,7 +26,7 @@ export function WhatsappNumberForm({ defaultValue }: { defaultValue: string }) {
           inputMode="tel"
           dir="ltr"
           maxLength={40}
-          defaultValue={defaultValue}
+          defaultValue={state.values?.whatsapp ?? defaultValue}
           className={`${FIELD} technical-term max-w-xs`}
         />
         <span className="text-xs text-[var(--color-ink-faint)]">

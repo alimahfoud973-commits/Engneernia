@@ -6,6 +6,7 @@ import { requireOwner } from '@/auth/current';
 import { parsePercentToBp, saveCommissionAgreement } from './commissions';
 import { parseMajorUnits } from '@/lib/money/money';
 import { toUserMessage } from '@/lib/action-errors';
+import { submittedValues, type SubmittedValues } from '@/lib/form-values';
 import type { CommissionAgreement } from '@/lib/money/commission';
 
 /**
@@ -16,7 +17,7 @@ import type { CommissionAgreement } from '@/lib/money/commission';
  * what a person is paid for as long as the agreement stands.
  */
 
-export type CommissionState = { error: string | null; ok?: boolean };
+export type CommissionState = { error: string | null; ok?: boolean; values?: SubmittedValues };
 
 const schema = z.object({
   contributorId: z.string().uuid(),
@@ -43,7 +44,7 @@ export async function saveCommissionAction(
     note: formData.get('note') ?? undefined,
   });
 
-  if (!parsed.success) return { error: 'بيانات غير صالحة' };
+  if (!parsed.success) return { error: 'بيانات غير صالحة', values: submittedValues(formData) };
 
   const actor = await requireOwner('/admin/commissions');
   const { currency } = parsed.data;
@@ -87,7 +88,7 @@ export async function saveCommissionAction(
       note: parsed.data.note?.trim() || null,
     });
   } catch (error) {
-    return { error: toUserMessage(error, 'Commission action failed') };
+    return { error: toUserMessage(error, 'Commission action failed'), values: submittedValues(formData) };
   }
 
   revalidatePath('/admin/commissions');

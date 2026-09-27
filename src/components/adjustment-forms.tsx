@@ -5,6 +5,7 @@ import { useActionState } from 'react';
 import {
   confirmAdjustmentAction, previewAdjustmentAction, type AdjustmentState,
 } from '@/finance/adjustment-actions';
+import { formKey } from './form-key';
 import { formatMinor } from './money-display';
 import { minorDigitsOf, type CurrencyCode } from '@/lib/money/currency';
 import {
@@ -64,8 +65,11 @@ export function AdjustmentTool({
     );
   }
 
+  const typed = state.values;
+
   return (
     <form
+      key={formKey(state)}
       action={formAction}
       className="flex flex-col gap-4 rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-surface)] p-5"
     >
@@ -79,7 +83,7 @@ export function AdjustmentTool({
       <div className="grid gap-4 sm:grid-cols-2">
         <label className="flex flex-col gap-1.5 text-sm">
           <span className="font-semibold">الحساب المتأثر</span>
-          <select name="target" required defaultValue="ENGINEER" className={FIELD}>
+          <select name="target" required defaultValue={typed?.target ?? 'ENGINEER'} className={FIELD}>
             <option value="ENGINEER">رصيد مهندس</option>
             <option value="PLATFORM">حساب المنصة</option>
           </select>
@@ -87,7 +91,7 @@ export function AdjustmentTool({
 
         <label className="flex flex-col gap-1.5 text-sm">
           <span className="font-semibold">نوع التعديل</span>
-          <select name="direction" required defaultValue="INCREASE" className={FIELD}>
+          <select name="direction" required defaultValue={typed?.direction ?? 'INCREASE'} className={FIELD}>
             <option value="INCREASE">زيادة</option>
             <option value="DECREASE">خصم</option>
           </select>
@@ -95,7 +99,7 @@ export function AdjustmentTool({
 
         <label className="flex flex-col gap-1.5 text-sm">
           <span className="font-semibold">المهندس</span>
-          <select name="contributorId" defaultValue="" className={FIELD}>
+          <select name="contributorId" defaultValue={typed?.contributorId ?? ''} className={FIELD}>
             <option value="">— لا ينطبق (تعديل على حساب المنصة) —</option>
             {contributors.map((contributor) => (
               <option key={contributor.id} value={contributor.id}>
@@ -118,6 +122,7 @@ export function AdjustmentTool({
               required
               inputMode="decimal"
               placeholder="12.50"
+              defaultValue={typed?.amount}
               className={`technical-term tabular-nums ${FIELD}`}
             />
           </label>
@@ -127,7 +132,7 @@ export function AdjustmentTool({
               type="text"
               name="currency"
               required
-              defaultValue={currency}
+              defaultValue={typed?.currency ?? currency}
               pattern="[A-Z]{3}"
               className={`technical-term ${FIELD}`}
             />
@@ -137,7 +142,7 @@ export function AdjustmentTool({
 
       <label className="flex flex-col gap-1.5 text-sm">
         <span className="font-semibold">السبب</span>
-        <select name="reason" required defaultValue="DATA_ENTRY_ERROR" className={FIELD}>
+        <select name="reason" required defaultValue={typed?.reason ?? 'DATA_ENTRY_ERROR'} className={FIELD}>
           {Object.entries(ADJUSTMENT_REASON_LABELS).map(([value, label]) => (
             <option key={value} value={value}>
               {label}
@@ -155,6 +160,7 @@ export function AdjustmentTool({
           maxLength={2000}
           rows={3}
           placeholder="مثال: خصم رسوم تحويل بنكي تحمّلتها المنصة عن تسوية آب."
+          defaultValue={typed?.note}
           className={FIELD}
         />
         <span className="text-xs text-[var(--color-ink-faint)]">

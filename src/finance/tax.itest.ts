@@ -349,12 +349,13 @@ describe('the document the customer receives', () => {
   });
 
   /**
-   * `myInvoices` issues no WHERE clause at all — the scoping is entirely the
-   * row policy's. That is the architecture working as designed, and it is also
-   * the query where a policy mistake would be worst: it returns MANY rows, and
-   * every one carries a buyer's name and email address. `invoiceDocument`
-   * leaks one invoice to someone who guessed an id; this would hand over the
-   * customer list.
+   * `myInvoices` now names the customer (Stage 3, W12) — the row policy admits
+   * the owner to every invoice, so the owner's "my invoices" listed the whole
+   * platform's. The query's filter is therefore no longer evidence about the
+   * policy, and the policy is still where a mistake would be worst: it guards
+   * MANY rows, each carrying a buyer's name and email address. So the stranger
+   * case below asks the TABLE directly, with no filter at all, as that
+   * customer — the policy alone must return nothing.
    */
   it('lists the buyer their own invoices', async () => {
     const mine = await myInvoices(customer);
@@ -362,12 +363,31 @@ describe('the document the customer receives', () => {
     expect(mine.every((row) => row.invoiceNumber.length > 0)).toBe(true);
   });
 
-  it('lists a stranger nothing, with no filter in the query to help it', async () => {
+  it('lists a stranger nothing — and the row policy alone, unfiltered, agrees', async () => {
+    const strangerId = randomUUID();
     const stranger: Actor = {
-      ...base, userId: randomUUID(), role: 'CUSTOMER',
+      ...base, userId: strangerId, role: 'CUSTOMER',
       contributorId: null, contributorActive: false,
     };
     expect(await myInvoices(stranger)).toEqual([]);
+
+    const unfiltered = await withRawActorContext({ actorId: strangerId, actorRole: 'CUSTOMER' }, (tx) =>
+      tx.select({ id: invoices.id }).from(invoices),
+    );
+    expect(unfiltered).toEqual([]);
+  });
+
+  it("lists the owner only the owner's own invoices, though the policy admits them to all", async () => {
+    const all = await withRawActorContext(OWNER_RAW, (tx) =>
+      tx.select({ id: invoices.id, customerId: invoices.customerId }).from(invoices),
+    );
+    const customersInvoice = all.find((row) => row.customerId === ids.customer);
+    expect(customersInvoice, "the policy lets the owner see this suite's buyer's invoice").toBeDefined();
+
+    const listed = (await myInvoices(owner)).map((row) => row.id).sort();
+    const ownersOwn = all.filter((row) => row.customerId === ids.owner).map((row) => row.id).sort();
+    expect(listed).toEqual(ownersOwn);
+    expect(listed).not.toContain(customersInvoice!.id);
   });
 
   it('lists a contributor nothing — selling is not buying', async () => {
