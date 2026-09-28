@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import type { PublicProductCard } from '@/catalog/public-queries';
+import { isolateAmount } from './money-display';
 
 const FILE_TYPE_LABELS: Record<string, string> = {
   PDF: 'PDF',
@@ -28,11 +29,13 @@ function formatPrice(priceMinor: string | null, currency: string, isFree: boolea
   if (isFree || priceMinor === '0') return 'مجاني';
   if (priceMinor === null) return '—';
   const major = Number(priceMinor) / 100;
-  return new Intl.NumberFormat('ar', {
+  // Isolated like every amount on the site (S5-10), so a price inside an
+  // Arabic sentence reads the same as a price in a cell.
+  return isolateAmount(new Intl.NumberFormat('ar', {
     style: 'currency',
     currency,
     minimumFractionDigits: 2,
-  }).format(major);
+  }).format(major));
 }
 
 export function ProductCard({ product }: { product: PublicProductCard }) {

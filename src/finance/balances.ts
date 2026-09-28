@@ -1,11 +1,13 @@
 import 'server-only';
 import { sql } from 'drizzle-orm';
 import { withActor, type Transaction } from '@/db/actor-context';
-import { activeContributorId, isOwner, type Actor } from '@/authz/actor';
+import { financialContributorId, isOwner, type Actor } from '@/authz/actor';
 import { authorize } from '@/authz/policy';
 import { NotFoundError } from '@/lib/errors';
 import { LEDGER_ACCOUNTS } from '@/ledger/accounts';
 import { readFinancialPolicy } from './policy';
+import { requireDate } from '@/db';
+import { divRoundHalfAwayFromZero } from '@/lib/money/money';
 
 /**
  * ===========================================================================
@@ -20,10 +22,13 @@ import { readFinancialPolicy } from './policy';
  * Three layers keep one contributor out of another's figures:
  *   - the policy layer refuses the question;
  *   - the query scopes itself to one contributor;
- *   - row-level security filters ledger_lines regardless of the query.
+ *   - the database decides which rows resolve at all, regardless of the query.
  *
  * The third is the one that matters. Delete the first two and a contributor
- * still cannot read another's line.
+ * still cannot read another's line. Since migration 0062 (S5-11) the rows are
+ * read through `contributor_ledger_lines`: the seven columns a balance needs,
+ * the caller's own contributor only (or everyone, for the owner) — not the
+ * ledger itself, whose memo and sequence reveal the platform's order volume.
  * ===========================================================================
  */
 
@@ -76,7 +81,8 @@ export interface ContributorStatement {
  * another contributor exists is itself a disclosure (§49).
  */
 function resolveScope(actor: Actor, requested?: string | null): string {
-  const own = activeContributorId(actor);
+  // Active or deactivated: the engineer's own record stays theirs to read (D-05).
+  const own = financialContributorId(actor);
 
   if (isOwner(actor)) {
     if (!requested) throw new NotFoundError('لم يُحدَّد المساهم');
@@ -96,7 +102,7 @@ async function readBalances(
   minimumPayoutMinor: bigint,
 ): Promise<readonly ContributorBalance[]> {
   /*
-   * One scan of ledger_lines. Signed amounts make every figure a conditional
+   * One scan of the engineer's ledger lines. Signed amounts make every figure a conditional
    * SUM of the same column rather than a join between debit and credit sides.
    *
    * The negations turn the accounting sign into the human question: a credit
@@ -110,7 +116,7 @@ async function readBalances(
            COALESCE(SUM(amount_minor)  FILTER (WHERE kind = 'SETTLEMENT_PAYOUT'), 0)::text AS settled,
            COALESCE(SUM(-amount_minor) FILTER (WHERE kind = 'ADJUSTMENT'), 0)::text AS adjustments,
            COALESCE(SUM(-amount_minor), 0)::text                                    AS balance
-      FROM ledger_lines
+      FROM contributor_ledger_lines
      WHERE account_code = ${LEDGER_ACCOUNTS.ENGINEER_PAYABLE}
        AND contributor_id = ${contributorId}
      GROUP BY currency
@@ -141,7 +147,7 @@ async function readByPeriod(
     SELECT period_key, currency,
            COALESCE(SUM(-amount_minor) FILTER (WHERE kind = 'SALE'), 0)::text   AS earned,
            COALESCE(SUM(amount_minor)  FILTER (WHERE kind = 'REFUND'), 0)::text AS reversed
-      FROM ledger_lines
+      FROM contributor_ledger_lines
      WHERE account_code = ${LEDGER_ACCOUNTS.ENGINEER_PAYABLE}
        AND contributor_id = ${contributorId}
        AND kind IN ('SALE', 'REFUND')
@@ -259,5 +265,92 @@ export async function contributorSales(
       platformMinor: BigInt(row.platform as string),
       coAuthoredUnits: Number(row.co_authored_units),
     }));
+  });
+}
+
+export interface ContributorSaleLine {
+  readonly id: string;
+  readonly soldAt: Date;
+  readonly periodKey: string;
+  /** Null on sales made before migration 0062 copied the title here. */
+  readonly productTitle: string | null;
+  readonly currency: string;
+  /** Their credit on the product at the moment of sale. */
+  readonly shareBp: number;
+  /** What their terms applied to: their part of what was paid, less tax. */
+  readonly sliceMinor: bigint;
+  readonly engineerMinor: bigint;
+  readonly platformMinor: bigint;
+  readonly commissionModel: string | null;
+  /**
+   * Their rate and the platform's, in basis points of THEIR slice (D-01).
+   * A percentage agreement states it; a fixed one is what the fixed amount
+   * came to on this sale. Display figures derived from two frozen amounts.
+   */
+  readonly engineerRateBp: number | null;
+  readonly platformRateBp: number | null;
+  readonly clamped: boolean;
+}
+
+/**
+ * The engineer's own sales, one by one (owner decision D-01): their credit,
+ * their slice, their rate and the platform's, what each side received.
+ *
+ * Their OWN rows of `order_item_contributors` and nothing else — the same
+ * single table `contributorSales` reads, for the same reason. What another
+ * engineer on the same product earned is not on this engineer's row and so
+ * is not here. Read-only, and available after deactivation (D-05).
+ */
+export async function contributorSaleLines(
+  actor: Actor,
+  contributorId?: string | null,
+  options: { limit?: number } = {},
+): Promise<readonly ContributorSaleLine[]> {
+  const scope = resolveScope(actor, contributorId);
+  const limit = Math.min(Math.max(options.limit ?? 100, 1), 500);
+
+  return withActor(actor, async (tx) => {
+    const rows = (await tx.execute(sql`
+      SELECT oic.id, oic.occurred_at,
+             to_char(timezone(app_accounting_timezone(), oic.occurred_at), 'YYYY-MM') AS period_key,
+             oic.product_title, oic.currency, oic.share_bp,
+             oic.slice_minor, oic.amount_minor, oic.platform_amount_minor,
+             oic.commission_model::text AS commission_model,
+             oic.engineer_bp, oic.commission_clamped
+        FROM order_item_contributors oic
+       WHERE oic.contributor_id = ${scope}
+         AND oic.occurred_at IS NOT NULL
+         AND oic.slice_minor IS NOT NULL
+       ORDER BY oic.occurred_at DESC, oic.id DESC
+       LIMIT ${limit}
+    `)) as unknown as Array<Record<string, unknown>>;
+
+    return rows.map((row) => {
+      const slice = BigInt(row.slice_minor as string);
+      const engineer = BigInt(row.amount_minor as string);
+      const platform = BigInt(row.platform_amount_minor as string);
+      const model = (row.commission_model as string | null) ?? null;
+      let engineerRateBp: number | null = null;
+      if (model === 'PERCENTAGE' && row.engineer_bp != null) {
+        engineerRateBp = Number(row.engineer_bp);
+      } else if (slice > 0n) {
+        engineerRateBp = Number(divRoundHalfAwayFromZero(engineer * 10_000n, slice));
+      }
+      return {
+        id: row.id as string,
+        soldAt: requireDate(row.occurred_at as string, 'occurred_at'),
+        periodKey: row.period_key as string,
+        productTitle: (row.product_title as string | null) ?? null,
+        currency: row.currency as string,
+        shareBp: Number(row.share_bp),
+        sliceMinor: slice,
+        engineerMinor: engineer,
+        platformMinor: platform,
+        commissionModel: model,
+        engineerRateBp,
+        platformRateBp: engineerRateBp === null ? null : 10_000 - engineerRateBp,
+        clamped: row.commission_clamped === true,
+      };
+    });
   });
 }

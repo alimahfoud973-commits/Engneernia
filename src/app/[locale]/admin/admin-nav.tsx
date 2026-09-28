@@ -15,6 +15,7 @@ const LINKS = [
   { href: '/admin/settlements', label: 'التسوية الشهرية' },
   { href: '/admin/commissions', label: 'اتفاقات العمولة' },
   { href: '/admin/finance', label: 'التقرير المالي' },
+  { href: '/admin/sales', label: 'سجل المبيعات' },
   { href: '/admin/adjustments', label: 'قيود التصحيح' },
   { href: '/admin/settings', label: 'الإعدادات' },
 ] as const;

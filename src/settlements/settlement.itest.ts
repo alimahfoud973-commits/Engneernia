@@ -20,6 +20,7 @@ import { revenueByDiscipline, revenueByPeriod } from '@/finance/reports';
 import { RuleViolationError } from '@/lib/errors';
 import { GUEST, type Actor } from '@/authz/actor';
 import { insertProductsWithVersion } from '@/db/testing/product-versions';
+import { withFinancialPurge } from '@/db/testing/financial-purge';
 
 /**
  * ===========================================================================
@@ -235,7 +236,8 @@ beforeAll(async () => {
 afterAll(async () => {
   vi.useRealTimers();
 
-  await withRawActorContext(OWNER_RAW, async (tx) => {
+  // Superuser + explicit flag: these fixtures became financial history (S5-03).
+  await withFinancialPurge(async (tx) => {
     // Restore whatever the database had before this suite ran.
     if (seededMinimum !== null) {
       await tx.execute(sql`
@@ -648,7 +650,8 @@ describe('who may read a statement (§12, §49)', () => {
     }
 
     // Clean up the statements this unscoped run created for other contributors.
-    await withRawActorContext(OWNER_RAW, async (tx) => {
+    // Issued statements are permanent (S5-03), so as a fixture purge.
+    await withFinancialPurge(async (tx) => {
       await tx.execute(sql`DELETE FROM settlement_lines WHERE settlement_id IN
         (SELECT id FROM settlements WHERE period_key = '2026-11')`);
       await tx.execute(sql`DELETE FROM settlements WHERE period_key = '2026-11'`);

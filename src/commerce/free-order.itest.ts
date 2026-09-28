@@ -20,6 +20,7 @@ import { activateVersion } from '@/media/versions';
 import { NotFoundError, RuleViolationError, UnauthenticatedError } from '@/lib/errors';
 import { GUEST, type Actor } from '@/authz/actor';
 import { insertProductsWithVersion } from '@/db/testing/product-versions';
+import { withFinancialPurge } from '@/db/testing/financial-purge';
 
 /**
  * ===========================================================================
@@ -111,7 +112,8 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
-  await asOwner(async (tx) => {
+  // Superuser + explicit flag: these fixtures became financial history (S5-03).
+  await withFinancialPurge(async (tx) => {
     const people = sql`(${ids.customer}, ${ids.stranger}, ${ids.late}, ${ids.unpub})`;
     await tx.delete(orders).where(sql`customer_id IN ${people}`);
     await tx.delete(entitlements).where(sql`customer_id IN ${people}`);

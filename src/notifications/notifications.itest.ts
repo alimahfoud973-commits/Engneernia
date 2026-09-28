@@ -13,6 +13,7 @@ import { markNotificationsRead, myNotifications, unreadNotificationCount } from 
 import { renderNotification } from './render';
 import type { Actor } from '@/authz/actor';
 import { insertProductsWithVersion } from '@/db/testing/product-versions';
+import { withFinancialPurge } from '@/db/testing/financial-purge';
 
 /**
  * ===========================================================================
@@ -99,7 +100,8 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
-  await withRawActorContext(OWNER_RAW, async (tx) => {
+  // Superuser + explicit flag: these fixtures became financial history (S5-03).
+  await withFinancialPurge(async (tx) => {
     await tx.execute(sql`DELETE FROM notifications WHERE user_id IN
       (${ids.customer}, ${ids.userA}, ${ids.userB})`);
     await tx.delete(entitlements).where(eq(entitlements.customerId, ids.customer));

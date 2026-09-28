@@ -239,6 +239,36 @@ export async function saveCommissionAgreement(
       throw new RuleViolationError('لا يوجد مهندس بهذا المعرّف');
     }
 
+    /*
+     * S5-07: an override is terms for ONE product, and applies only if this
+     * engineer is credited on it. The screen offers only such products, but a
+     * form is a string a browser sent; terms that can never apply were saved
+     * here and looked like terms that were simply never used.
+     */
+    if (input.productId !== null) {
+      const [product] = await tx
+        .select({ id: products.id })
+        .from(products)
+        .where(eq(products.id, input.productId))
+        .limit(1);
+      if (!product) {
+        throw new ValidationError('المنتج المختار غير موجود');
+      }
+      const [credit] = await tx
+        .select({ productId: productContributors.productId })
+        .from(productContributors)
+        .where(and(
+          eq(productContributors.productId, input.productId),
+          eq(productContributors.contributorId, input.contributorId),
+        ))
+        .limit(1);
+      if (!credit) {
+        throw new ValidationError(
+          'لا يمكن تحديد نسبة خاصة لمنتج غير منسوب إلى هذا المهندس. انسب المنتج إليه أولاً من صفحة المنتج.',
+        );
+      }
+    }
+
     const previous = await tx
       .select({
         model: commissionAgreements.model,

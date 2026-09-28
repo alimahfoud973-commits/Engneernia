@@ -100,6 +100,7 @@ const FINANCIAL_MARKERS = [
 
 const GUARDED_PAGES = [
   '/admin/finance',
+  '/admin/sales',
   '/admin/settlements',
   '/admin/adjustments',
   '/admin/payments',

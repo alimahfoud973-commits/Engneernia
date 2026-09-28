@@ -15,6 +15,7 @@ import { statementDocument } from './queries';
 import { renderStatementPdf } from './statement-pdf';
 import type { Actor } from '@/authz/actor';
 import { insertProductsWithVersion } from '@/db/testing/product-versions';
+import { withFinancialPurge } from '@/db/testing/financial-purge';
 
 /**
  * ===========================================================================
@@ -159,7 +160,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   vi.useRealTimers();
-  await withRawActorContext(OWNER_RAW, async (tx) => {
+  // Superuser + explicit flag: these fixtures became financial history (S5-03).
+  await withFinancialPurge(async (tx) => {
     const contribIds = [ids.contribA, ids.contribB];
     await tx.delete(settlements).where(inArray(settlements.contributorId, contribIds));
     await tx.delete(entitlements).where(inArray(entitlements.customerId, buyers));

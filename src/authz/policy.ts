@@ -1,5 +1,5 @@
 import { NotFoundError, UnauthenticatedError } from '@/lib/errors';
-import { activeContributorId, isOwner, type Actor } from './actor';
+import { activeContributorId, financialContributorId, isOwner, type Actor } from './actor';
 import type { Action, ResourceRef } from './actions';
 
 /**
@@ -44,13 +44,16 @@ export function can(actor: Actor, action: Action, resource: ResourceRef = {}): b
   const contributorId = activeContributorId(actor);
 
   /**
-   * Financial scope: ACTIVE contributors only. A contributor the owner has
-   * deactivated keeps no claim on earnings data.
+   * Financial scope: the contributor's OWN record, active or not (owner
+   * decision D-05). Deactivation takes away the console and every working
+   * power; it does not take away the record of money earned and owed. This is
+   * a READ scope — no action below grants a contributor any financial write.
    */
+  const ownFinancialId = financialContributorId(actor);
   const isOwnContributorFinancials =
-    contributorId != null &&
+    ownFinancialId != null &&
     resource.contributorId != null &&
-    resource.contributorId === contributorId;
+    resource.contributorId === ownFinancialId;
 
   /**
    * Profile ownership: compares the contributor profile ids directly, active

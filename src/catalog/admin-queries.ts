@@ -13,7 +13,8 @@ import { productVersionsForOwner } from '@/media/versions';
 import type { ProductFileType } from '@/media/file-types';
 import { isServable } from '@/media/scanner';
 import { serverEnv } from '@/lib/config/env';
-import { productSaleBlockers } from '@/finance/commission-resolver';
+import { productCommissionCapWarnings, productSaleBlockers } from '@/finance/commission-resolver';
+import { readTaxPolicy } from '@/finance/tax-policy';
 
 /**
  * Read models for the owner's catalogue screens.
@@ -135,6 +136,8 @@ export interface AdminProductDetail {
   readonly versions: Awaited<ReturnType<typeof productVersionsForOwner>>;
   /** What still stands between this product and being publishable. */
   readonly blockers: readonly string[];
+  /** Fixed commission terms every sale of this product would cap (S5-02). */
+  readonly capWarnings: readonly string[];
   /** The moves the owner may make from here, with their Arabic labels. */
   readonly nextStates: ReadonlyArray<{ readonly to: ProductStatus; readonly label: string }>;
 }
@@ -210,8 +213,14 @@ export async function adminProductDetail(
       commissionBlockers: (await productSaleBlockers(tx, productId)).map((b) => b.message),
     });
 
+    // S5-02: fixed terms that every sale of this product would cap — told to
+    // the owner here, before a sale, with the base the sale itself uses.
+    const { tax } = await readTaxPolicy(tx);
+    const capWarnings = await productCommissionCapWarnings(tx, productId, tax.rateBp);
+
     return {
       ...product,
+      capWarnings,
       status: product.status as ProductStatus,
       level: product.level,
       softwareTags: product.softwareTags,

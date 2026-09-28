@@ -24,6 +24,7 @@ import { ingestProductFile } from './ingest';
 import { activateVersion, deleteVersion, purgeRetiredVersionFiles } from './versions';
 import { getStorage, type BucketName } from './storage';
 import { GUEST, type Actor } from '@/authz/actor';
+import { withFinancialPurge } from '@/db/testing/financial-purge';
 
 /**
  * ===========================================================================
@@ -193,7 +194,8 @@ afterAll(async () => {
   vi.restoreAllMocks();
   const buyers = [ids.buyerA, ids.buyerB, ids.buyerC, ids.buyerD];
   const productIds = [ids.product, ids.scratch, ids.doomed];
-  await asOwner(async (tx) => {
+  // Superuser + explicit flag: these fixtures became financial history (S5-03).
+  await withFinancialPurge(async (tx) => {
     await tx.update(settings).set({ value: 5000 }).where(eq(settings.key, 'catalog.upgradeDiscountBp'));
     await tx.delete(entitlements).where(inArray(entitlements.customerId, buyers));
     await tx.delete(orders).where(inArray(orders.customerId, buyers));

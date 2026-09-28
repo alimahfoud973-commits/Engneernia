@@ -204,6 +204,13 @@ export default async function AdminProductPage({
             nextStates={product.nextStates}
             blockers={product.blockers}
           />
+          {product.capWarnings.length > 0 ? (
+            <ul className="flex flex-col gap-1 rounded-[var(--radius-card)] border border-[var(--color-warn)] bg-[var(--color-warn-soft)] px-3 py-2 text-sm text-[var(--color-warn)]">
+              {product.capWarnings.map((warning) => (
+                <li key={warning}>تنبيه: {warning}.</li>
+              ))}
+            </ul>
+          ) : null}
         </section>
       </main>
       <SiteFooter />

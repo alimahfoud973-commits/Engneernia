@@ -55,6 +55,15 @@ export const ORDER_STATUS_LABELS: Readonly<Record<string, string>> = {
   REFUNDED: 'مُسترجع',
 };
 
+export const PAYMENT_STATUS_LABELS: Readonly<Record<string, string>> = {
+  INITIATED: 'بدأت',
+  AWAITING_PROOF: 'بانتظار الإيصال',
+  PROOF_SUBMITTED: 'أُرسل الإيصال',
+  APPROVED: 'معتمدة',
+  REJECTED: 'مرفوضة',
+  CANCELLED: 'ملغاة',
+};
+
 export const PRODUCT_STATUS_LABELS: Readonly<Record<string, string>> = {
   DRAFT: 'مسودّة',
   SUBMITTED: 'مُرسَل للمراجعة',

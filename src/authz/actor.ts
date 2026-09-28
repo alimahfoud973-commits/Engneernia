@@ -89,11 +89,26 @@ export function activeContributorId(actor: Actor): string | null {
   return actor.contributorId;
 }
 
+/**
+ * The contributor whose OWN financial record this actor may read — active or
+ * not (owner decision D-05).
+ *
+ * Deactivation takes away every working power (`activeContributorId` is null)
+ * but not the engineer's record of what they earned and are owed: sales,
+ * earnings, statements. This identity grants reading those, and nothing else;
+ * every financial write remains the owner's.
+ */
+export function financialContributorId(actor: Actor): string | null {
+  if (!isFullyAuthenticated(actor)) return null;
+  return actor.contributorId;
+}
+
 /** The values written into the PostgreSQL session for RLS to read. */
 export function actorDatabaseContext(actor: Actor): {
   actorId: string;
   actorRole: string;
   contributorId: string;
+  financialContributorId: string;
 } {
   /**
    * A pending session is announced to PostgreSQL as a guest.
@@ -106,11 +121,12 @@ export function actorDatabaseContext(actor: Actor): {
    * a caller having remembered.
    */
   if (!isFullyAuthenticated(actor)) {
-    return { actorId: '', actorRole: 'GUEST', contributorId: '' };
+    return { actorId: '', actorRole: 'GUEST', contributorId: '', financialContributorId: '' };
   }
   return {
     actorId: actor.userId,
     actorRole: actor.role,
     contributorId: activeContributorId(actor) ?? '',
+    financialContributorId: financialContributorId(actor) ?? '',
   };
 }

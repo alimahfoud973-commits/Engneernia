@@ -16,6 +16,7 @@ import { getStorage } from '@/media/storage';
 import { NotFoundError, RuleViolationError } from '@/lib/errors';
 import type { Actor } from '@/authz/actor';
 import { insertProductsWithVersion } from '@/db/testing/product-versions';
+import { withFinancialPurge } from '@/db/testing/financial-purge';
 
 /**
  * ===========================================================================
@@ -149,7 +150,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   put.mockRestore();
-  await asOwner(async (tx) => {
+  // Superuser + explicit flag: these fixtures became financial history (S5-03).
+  await withFinancialPurge(async (tx) => {
     const all = [ids.p1, ids.p2, ids.p3, ids.p4];
     // Invoices are append-only and stay, as in tax.itest.
     await tx.delete(entitlements).where(inArray(entitlements.productId, all));
@@ -231,7 +233,8 @@ describe('W14 — a payment starts only where the order still waits for one', ()
       const before = await footprint(orderId);
       await expect(placeOrder(buyerB, { orderId, paymentMethodId: ids.bank })).rejects.toBeInstanceOf(RuleViolationError);
       expect(await footprint(orderId)).toEqual(before);
-      await asOwner((tx) => tx.delete(orders).where(eq(orders.id, orderId)));
+      // A PAID fixture is financial history now (S5-03): removed as a fixture.
+      await withFinancialPurge((tx) => tx.delete(orders).where(eq(orders.id, orderId)));
     },
   );
 

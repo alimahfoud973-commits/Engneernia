@@ -1,7 +1,7 @@
 import 'server-only';
 import { sql } from 'drizzle-orm';
 import { withActor } from '@/db/actor-context';
-import { activeContributorId, isOwner, type Actor } from '@/authz/actor';
+import { financialContributorId, isOwner, type Actor } from '@/authz/actor';
 import { RuleViolationError } from '@/lib/errors';
 import { requireDate, toDate } from '@/db';
 import { periodKeyOf, previousPeriodKey, type PeriodKey } from '@/lib/time/period';
@@ -76,7 +76,8 @@ const SUMMARY_COLUMNS = sql`
 
 /** The engineer's own monthly statements (§18). */
 export async function myStatements(actor: Actor): Promise<readonly SettlementSummary[]> {
-  const contributorId = activeContributorId(actor);
+  // Read-only for a deactivated engineer too (D-05); RLS scopes it the same way.
+  const contributorId = financialContributorId(actor);
   if (contributorId === null) return [];
 
   return withActor(actor, async (tx) => {

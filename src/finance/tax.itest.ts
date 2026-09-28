@@ -14,6 +14,7 @@ import { invoiceDocument, myInvoices } from './invoice-queries';
 import { renderInvoicePdf } from './invoice-pdf';
 import { readTaxPolicy } from './tax-policy';
 import { insertProductsWithVersion } from '@/db/testing/product-versions';
+import { withFinancialPurge } from '@/db/testing/financial-purge';
 
 /**
  * ===========================================================================
@@ -138,7 +139,8 @@ afterAll(async () => {
   // The values 0042 ships, so no later file sees this one's identity.
   await setSetting('tax.registration', '""');
   await setSetting('invoice.prefix', '"INV"');
-  await withRawActorContext(OWNER_RAW, async (tx) => {
+  // Superuser + explicit flag: these fixtures became financial history (S5-03).
+  await withFinancialPurge(async (tx) => {
     // Invoices are append-only and are NOT deleted — the same treatment the
     // ledger gets, and the reason they carry no foreign key to the order.
     await tx.delete(entitlements).where(eq(entitlements.customerId, ids.customer));

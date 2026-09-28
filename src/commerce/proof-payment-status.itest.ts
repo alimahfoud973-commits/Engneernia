@@ -6,7 +6,7 @@ import { withActor, withRawActorContext } from '@/db/actor-context';
 import { ensureTestOwner } from '@/db/testing/single-owner';
 import { closeDb } from '@/db';
 import {
-  commissionAgreements, contributors, disciplines, entitlements, invoices,
+  commissionAgreements, contributors, disciplines, entitlements,
   orders, paymentMethods, paymentProofs, payments, productContributors,
   productPrices, products, users,
 } from '@/db/schema';
@@ -15,6 +15,7 @@ import { submitPaymentProof } from './proofs';
 import { NotFoundError, RuleViolationError } from '@/lib/errors';
 import type { Actor } from '@/authz/actor';
 import { insertProductsWithVersion } from '@/db/testing/product-versions';
+import { withFinancialPurge } from '@/db/testing/financial-purge';
 
 /**
  * ===========================================================================
@@ -149,9 +150,12 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
-  await withRawActorContext(OWNER_RAW, async (tx) => {
+  // Superuser + explicit flag: these fixtures became financial history (S5-03).
+  await withFinancialPurge(async (tx) => {
     const buyers = [ids.buyerA, ids.buyerB];
-    await tx.delete(invoices).where(inArray(invoices.customerId, buyers));
+    // Invoices stay: append-only even for a superuser (OPEN-9). Under the
+    // owner's context this line used to delete nothing, silently — no
+    // policy grants DELETE on invoices.
     await tx.delete(entitlements).where(inArray(entitlements.customerId, buyers));
     await tx.delete(orders).where(inArray(orders.customerId, buyers));
     await tx.delete(paymentMethods).where(eq(paymentMethods.id, ids.method));

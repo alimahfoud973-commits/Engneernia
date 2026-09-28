@@ -25,6 +25,7 @@ import { activateVersion } from '@/media/versions';
 import { NotFoundError, RuleViolationError } from '@/lib/errors';
 import type { Actor } from '@/authz/actor';
 import { insertProductsWithVersion } from '@/db/testing/product-versions';
+import { withFinancialPurge } from '@/db/testing/financial-purge';
 
 /**
  * ===========================================================================
@@ -144,7 +145,8 @@ afterAll(async () => {
   // Order matters: several references are ON DELETE RESTRICT on purpose —
   // a contributor with financial agreements, or a product with sales, must
   // not be removable by accident. The teardown unwinds them explicitly.
-  await withRawActorContext(OWNER_RAW, async (tx) => {
+  // Superuser + explicit flag: these fixtures became financial history (S5-03).
+  await withFinancialPurge(async (tx) => {
     await tx.delete(orders).where(sql`customer_id IN (${ids.customer}, ${ids.other})`);
     await tx.delete(entitlements).where(sql`customer_id IN (${ids.customer}, ${ids.other})`);
     await tx.delete(paymentMethods).where(sql`id IN (${ids.bankMethod}, ${ids.cardMethod})`);

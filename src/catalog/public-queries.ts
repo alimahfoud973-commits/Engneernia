@@ -3,7 +3,7 @@ import { cache } from 'react';
 import { and, asc, desc, eq, isNull, or, ilike, sql } from 'drizzle-orm';
 import { withActor } from '@/db/actor-context';
 import { GUEST } from '@/authz/actor';
-import { categories, contributors, disciplines, productFiles, productPrices, products } from '@/db/schema';
+import { categories, disciplines, productFiles, productPrices, products, publicContributors } from '@/db/schema';
 
 /**
  * ===========================================================================
@@ -469,13 +469,14 @@ export async function contributorBySlug(
   return withActor(GUEST, async (tx) => {
     const [profile] = await tx
       .select({
-        slug: contributors.publicSlug,
-        displayName: contributors.displayName,
-        specialization: contributors.specialization,
-        bio: contributors.bio,
+        slug: publicContributors.publicSlug,
+        displayName: publicContributors.displayName,
+        specialization: publicContributors.specialization,
+        bio: publicContributors.bio,
       })
-      .from(contributors)
-      .where(and(eq(contributors.publicSlug, slug), eq(contributors.isActive, true)))
+      // Active profiles only, by the view's own definition (S5-11).
+      .from(publicContributors)
+      .where(eq(publicContributors.publicSlug, slug))
       .limit(1);
 
     if (!profile) return null;
@@ -515,13 +516,12 @@ export async function featuredContributors(limit = 6) {
   return withActor(GUEST, async (tx) => {
     const rows = await tx
       .select({
-        slug: contributors.publicSlug,
-        displayName: contributors.displayName,
-        specialization: contributors.specialization,
-        productCount: sql<number>`app_public_contributor_product_count(${contributors.publicSlug})`,
+        slug: publicContributors.publicSlug,
+        displayName: publicContributors.displayName,
+        specialization: publicContributors.specialization,
+        productCount: sql<number>`app_public_contributor_product_count(${publicContributors.publicSlug})`,
       })
-      .from(contributors)
-      .where(eq(contributors.isActive, true))
+      .from(publicContributors)
       .limit(limit);
 
     return rows

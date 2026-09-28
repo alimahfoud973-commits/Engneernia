@@ -435,6 +435,13 @@
       "when": 1790100000000,
       "tag": "0061_download_counter_respects_window",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1790200000000,
+      "tag": "0062_stage5_financial_integrity",
+      "breakpoints": true
     }
   ]
 }

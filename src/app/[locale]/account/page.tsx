@@ -5,7 +5,7 @@ import { formatPrice } from '@/components/product-card';
 import { requireActor } from '@/auth/current';
 import { myPurchases } from '@/commerce/queries';
 import { myInvoices } from '@/finance/invoice-queries';
-import { activeContributorId } from '@/authz/actor';
+import { financialContributorId } from '@/authz/actor';
 import { ORDER_STATUS_LABELS } from '@/lib/labels';
 import { logoutAction } from '@/auth/actions';
 
@@ -19,7 +19,8 @@ export default async function AccountPage({ params }: { params: Promise<{ locale
   const actor = await requireActor('/account');
   const { owned, orders } = await myPurchases(actor);
   const invoices = await myInvoices(actor);
-  const isContributor = activeContributorId(actor) !== null;
+  // Active or deactivated: the earnings page stays readable (D-05).
+  const isContributor = financialContributorId(actor) !== null;
 
   return (
     <>

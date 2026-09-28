@@ -314,6 +314,20 @@ export const orderItemContributors = pgTable(
     /** True when this engineer's fixed agreement exceeded their slice. */
     commissionClamped: boolean('commission_clamped').notNull().default(false),
     /**
+     * What a FIXED agreement asked for on this slice before the cap (S5-02,
+     * migration 0062): the engineer's side for FIXED_ENGINEER, the platform's
+     * for FIXED_PLATFORM. Null on percentage terms and on rows written before
+     * 0062. With `commission_clamped` it tells the owner not only that a sale
+     * was capped but what the agreement had promised.
+     */
+    commissionRequestedMinor: bigint('commission_requested_minor', { mode: 'bigint' }),
+    /**
+     * The product's title as sold, copied from `order_items.title_snapshot`
+     * (migration 0062) so the engineer's own sale list can name it — they
+     * cannot read `order_items` (0043). Null on rows written before 0062.
+     */
+    productTitle: text('product_title'),
+    /**
      * The sale's own date and currency, denormalised (migration 0051).
      *
      * So the engineer can read their sales from THIS table alone. `orders` and

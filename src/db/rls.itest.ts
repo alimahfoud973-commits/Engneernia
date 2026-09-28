@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import postgres from 'postgres';
 import { withRawActorContext } from './actor-context';
 import { closeDb, getDb } from './index';
-import { auditLogs, contributors, sessions, users } from './schema';
+import { auditLogs, contributors, publicContributors, sessions, users } from './schema';
 
 /**
  * ===========================================================================
@@ -166,16 +166,36 @@ describe('sessions table', () => {
 });
 
 describe('contributors table — specification §31', () => {
-  it('a guest sees active public profiles', async () => {
-    const rows = await withRawActorContext(GUEST_CTX, (tx) => tx.select().from(contributors));
+  it('a guest sees active public profiles — through the public view (S5-11)', async () => {
+    const rows = await withRawActorContext(GUEST_CTX, (tx) => tx.select().from(publicContributors));
     const slugs = rows.map((r) => r.publicSlug);
     expect(slugs).toContain(`eng-a-${suffix}`);
     expect(slugs).toContain(`eng-b-${suffix}`);
   });
 
+  it('S5-11: a guest reads no row of the contributors table itself — no account id, no settlement code', async () => {
+    const rows = await withRawActorContext(GUEST_CTX, (tx) => tx.select().from(contributors));
+    expect(rows).toHaveLength(0);
+    // The public view carries public columns only.
+    const [row] = await withRawActorContext(GUEST_CTX, (tx) =>
+      tx.execute(sql`SELECT * FROM public_contributors LIMIT 1`),
+    ) as unknown as Array<Record<string, unknown>>;
+    expect(Object.keys(row!).sort()).toEqual([
+      'bio', 'discipline_id', 'display_name', 'id', 'public_slug', 'specialization', 'updated_at',
+    ]);
+  });
+
+  it('S5-11: an engineer reads their own full row and no other engineer\'s', async () => {
+    const rows = await withRawActorContext(
+      contributorCtx(ids.userInactive, ids.contribInactive),
+      (tx) => tx.select().from(contributors),
+    );
+    expect(rows.map((r) => r.id)).toEqual([ids.contribInactive]);
+  });
+
   it('a guest does NOT see an inactive profile', async () => {
     const rows = await withRawActorContext(GUEST_CTX, (tx) =>
-      tx.select().from(contributors).where(eq(contributors.id, ids.contribInactive)),
+      tx.select().from(publicContributors).where(eq(publicContributors.id, ids.contribInactive)),
     );
     expect(rows).toHaveLength(0);
   });

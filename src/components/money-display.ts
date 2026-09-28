@@ -38,5 +38,22 @@ export function formatMinor(amountMinor: bigint, currency: string): string {
     maximumFractionDigits: digits,
   }).format(decimal as unknown as number);
 
-  return negative ? `−${formatted}` : formatted;
+  return isolateAmount(negative ? `−${formatted}` : formatted);
+}
+
+/**
+ * An amount, sealed off from the Arabic text around it (S5-10).
+ *
+ * `Intl` formats a currency for Arabic as "25.59 US$" behind a right-to-left
+ * mark. Dropped into a right-to-left sentence, the bidirectional algorithm
+ * then pulled the symbol and the digits apart and the reader saw "$US 25.59".
+ * A left-to-right ISOLATE (U+2066 … U+2069) lays the amount out on its own,
+ * the same way everywhere — in a table cell, in a sentence, beside a label —
+ * while the surrounding sentence keeps its own direction. The marks are
+ * invisible, and the amount's text is exactly what `Intl` produced.
+ *
+ * Display only, like everything in this file: nothing parses the result.
+ */
+export function isolateAmount(formatted: string): string {
+  return `\u2066${formatted.replace(/[\u200e\u200f\u061c]/g, '')}\u2069`;
 }

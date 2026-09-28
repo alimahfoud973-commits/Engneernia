@@ -18,6 +18,7 @@ import { PLATFORM_TIMEZONE } from '@/lib/time/period';
 import { RuleViolationError } from '@/lib/errors';
 import type { Actor } from '@/authz/actor';
 import { insertProductsWithVersion } from '@/db/testing/product-versions';
+import { withFinancialPurge } from '@/db/testing/financial-purge';
 
 /**
  * The full text of a rejection, driver wrapper included.
@@ -181,7 +182,8 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
-  await withRawActorContext(OWNER_RAW, async (tx) => {
+  // Superuser + explicit flag: these fixtures became financial history (S5-03).
+  await withFinancialPurge(async (tx) => {
     /*
      * Ledger rows are NOT deleted, and cannot be: they are append-only, and
      * migration 0026 deliberately removed the foreign key that would have made
@@ -510,9 +512,12 @@ describe('6. what each party may read (§12, §49)', () => {
     // Sell the OTHER engineer's product so there are two parties in the books.
     await completeAPurchase(otherSlug);
 
+    const engineerCtx = {
+      actorId: ids.engineerUser, actorRole: 'CONTRIBUTOR', contributorId: ids.contributor,
+    };
     const mine = await withRawActorContext(
-      { actorId: ids.engineerUser, actorRole: 'CONTRIBUTOR', contributorId: ids.contributor },
-      (tx) => tx.execute(sql`SELECT contributor_id, account_code FROM ledger_lines`),
+      engineerCtx,
+      (tx) => tx.execute(sql`SELECT contributor_id, account_code FROM contributor_ledger_lines`),
     ) as unknown as Array<Record<string, string>>;
 
     // Raw SQL with NO WHERE CLAUSE, under the contributor's own context. The
@@ -520,6 +525,14 @@ describe('6. what each party may read (§12, §49)', () => {
     expect(mine.length).toBeGreaterThan(0);
     expect(mine.every((row) => row.contributor_id === ids.contributor)).toBe(true);
     expect(mine.every((row) => row.account_code === LEDGER_ACCOUNTS.ENGINEER_PAYABLE)).toBe(true);
+
+    // And the ledger table itself, with its memos and order numbers, is the
+    // owner's alone since S5-11.
+    const raw = await withRawActorContext(
+      engineerCtx,
+      (tx) => tx.execute(sql`SELECT * FROM ledger_lines`),
+    ) as unknown as unknown[];
+    expect(raw).toHaveLength(0);
   });
 
   it('a customer reads no ledger lines at all', async () => {

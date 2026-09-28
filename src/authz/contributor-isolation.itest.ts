@@ -17,6 +17,7 @@ import { outstandingPayables, revenueByPeriod } from '@/finance/reports';
 import { periodKeyOf, nextPeriodKey, periodBounds } from '@/lib/time/period';
 import type { Actor } from '@/authz/actor';
 import { insertProductsWithVersion } from '@/db/testing/product-versions';
+import { withFinancialPurge } from '@/db/testing/financial-purge';
 
 /**
  * ===========================================================================
@@ -179,7 +180,8 @@ beforeAll(async () => {
 }, 180_000);
 
 afterAll(async () => {
-  await withRawActorContext(OWNER_RAW, async (tx) => {
+  // Superuser + explicit flag: these fixtures became financial history (S5-03).
+  await withFinancialPurge(async (tx) => {
     const productIds = [ids.productA, ids.productB, ids.productShared];
     const contribIds = [ids.contribA, ids.contribB];
     await tx.delete(settlementLines).where(sql`settlement_id IN (
@@ -233,11 +235,29 @@ describe('1. the sale record — an engineer reads their own line and no other',
 // ===========================================================================
 describe('2. the books — only their own payable, never the platform’s', () => {
   it('reads only ledger lines carrying their own contributor id', async () => {
+    // Through the engineer's view of the ledger (S5-11, migration 0062).
     const rows = await asA<{ contributor_id: string | null; account_code: string }>(
-      'SELECT contributor_id, account_code, amount_minor FROM ledger_lines',
+      'SELECT contributor_id, account_code, amount_minor FROM contributor_ledger_lines',
     );
     expect(rows.length).toBeGreaterThan(0);
     expect(rows.every((r) => r.contributor_id === ids.contribA)).toBe(true);
+  });
+
+  it('S5-11: reads nothing from the ledger tables themselves — no memo, no sequence, no order numbers', async () => {
+    expect(await asA('SELECT * FROM ledger_lines')).toHaveLength(0);
+    expect(await asA('SELECT * FROM ledger_transactions')).toHaveLength(0);
+    // The view carries the columns a balance is made of, and nothing that
+    // numbers the platform's orders: no sequence, no transaction, and a memo
+    // only where it is an adjustment's explanation written for the engineer.
+    const [row] = await asA<Record<string, unknown>>('SELECT * FROM contributor_ledger_lines LIMIT 1');
+    expect(Object.keys(row!).sort()).toEqual([
+      'account_code', 'amount_minor', 'contributor_id', 'currency', 'kind', 'memo', 'occurred_at', 'period_key',
+    ]);
+    const memos = await asA<{ memo: string | null }>(
+      `SELECT memo FROM contributor_ledger_lines WHERE kind = 'SALE'`,
+    );
+    expect(memos.length).toBeGreaterThan(0);
+    expect(memos.every((m) => m.memo === null)).toBe(true);
   });
 
   it('reads NO platform revenue line — not even for their own product', async () => {
@@ -248,18 +268,14 @@ describe('2. the books — only their own payable, never the platform’s', () =
      * PRIMARY author's, not necessarily theirs.
      */
     const rows = await asA(
-      `SELECT * FROM ledger_lines WHERE account_code <> 'ENGINEER_PAYABLE'`,
+      `SELECT * FROM contributor_ledger_lines WHERE account_code <> 'ENGINEER_PAYABLE'`,
     );
     expect(rows).toHaveLength(0);
   });
 
-  it('reads no transaction that has no line of theirs in it', async () => {
+  it('reads no ledger transaction at all — not even one with a line of theirs in it (S5-11)', async () => {
     const rows = await asA<{ id: string }>('SELECT id FROM ledger_transactions');
-    const mine = await asA<{ transaction_id: string }>(
-      'SELECT DISTINCT transaction_id FROM ledger_lines',
-    );
-    const mineIds = new Set(mine.map((r) => r.transaction_id));
-    expect(rows.every((r) => mineIds.has(r.id))).toBe(true);
+    expect(rows).toHaveLength(0);
   });
 });
 
@@ -508,7 +524,7 @@ describe('5. the monthly statement', () => {
 
   it('is symmetric: engineer B sees B’s side and none of A’s', async () => {
     const rows = await withRawActorContext(RAW_B, (tx) =>
-      tx.execute(sql`SELECT contributor_id FROM ledger_lines`),
+      tx.execute(sql`SELECT contributor_id FROM contributor_ledger_lines`),
     ) as unknown as Array<{ contributor_id: string }>;
     expect(rows.length).toBeGreaterThan(0);
     expect(rows.every((r) => r.contributor_id === ids.contribB)).toBe(true);

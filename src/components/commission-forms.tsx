@@ -112,6 +112,11 @@ export function CommissionForm({
               المبلغ الثابت ({currency})
             </span>
             <input name="amount" inputMode="decimal" required className={FIELD} placeholder="11.00" defaultValue={typed?.amount} />
+            <span className="text-xs leading-relaxed text-[var(--color-ink-faint)]">
+              المبلغ للمنتج كاملاً بسعره الكامل قبل الضريبة: عند الخصم أو الترقية يُطبَّق بنسبته نفسها من
+              المدفوع، وعلى المنتج المشترك يُقسَم بين المهندسين بحسب نسب مساهمتهم. إن تجاوز السعر قُصَّ إلى
+              المبلغ المدفوع وظهر ذلك في سجل المبيعات.
+            </span>
           </label>
         )}
       </div>

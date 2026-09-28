@@ -150,6 +150,12 @@ export interface DisciplineRevenue {
   readonly disciplineNameAr: string;
   readonly currency: string;
   readonly unitsSold: number;
+  /**
+   * What customers actually PAID for this discipline's sales: list price less
+   * discount, tax included — the same figure the ledger books as cash and
+   * `revenueByPeriod` reports as gross sales (S5-01). Never the list price:
+   * an upgrade sold at half price is half the money.
+   */
   readonly grossMinor: bigint;
   readonly platformMinor: bigint;
   readonly engineerMinor: bigint;
@@ -175,10 +181,11 @@ export async function revenueByDiscipline(
   return withActor(actor, async (tx) => {
     const rows = (await tx.execute(sql`
       SELECT d.slug, d.name_ar, oi.currency,
-             COUNT(*)::int                                          AS units_sold,
-             COALESCE(SUM(oi.unit_price_minor), 0)::text       AS gross,
-             COALESCE(SUM(oi.platform_amount_minor), 0)::text       AS platform,
-             COALESCE(SUM(oi.engineer_amount_minor), 0)::text       AS engineer
+             COUNT(*)::int                                                 AS units_sold,
+             /* PAID, not listed (S5-01): the discount is money never received. */
+             SUM(oi.unit_price_minor - oi.discount_minor)                  AS gross_sum,
+             COALESCE(SUM(oi.platform_amount_minor), 0)                    AS platform_sum,
+             COALESCE(SUM(oi.engineer_amount_minor), 0)                    AS engineer_sum
         FROM order_items oi
         JOIN orders o      ON o.id = oi.order_id
         JOIN products p    ON p.id = oi.product_id
@@ -190,17 +197,22 @@ export async function revenueByDiscipline(
              : sql`true`
          }
        GROUP BY d.slug, d.name_ar, oi.currency
-       ORDER BY 6 DESC
-    `)) as unknown as Array<Record<string, string | number>>;
+       /*
+        * On the NUMBER, then a stable tie-break (S5-05). This ordered by the
+        * sixth column after it had been cast to text, which sorts "25.59"
+        * after "103.04" — alphabetically, not by size.
+        */
+       ORDER BY platform_sum DESC, d.slug, oi.currency
+    `)) as unknown as Array<Record<string, string | number | bigint>>;
 
     return rows.map((row) => ({
       disciplineSlug: row.slug as string,
       disciplineNameAr: row.name_ar as string,
       currency: row.currency as string,
       unitsSold: Number(row.units_sold),
-      grossMinor: BigInt(row.gross as string),
-      platformMinor: BigInt(row.platform as string),
-      engineerMinor: BigInt(row.engineer as string),
+      grossMinor: BigInt(row.gross_sum as string),
+      platformMinor: BigInt(row.platform_sum as string),
+      engineerMinor: BigInt(row.engineer_sum as string),
     }));
   });
 }
@@ -232,13 +244,14 @@ export async function outstandingPayables(
       SELECT l.contributor_id,
              MAX(c.display_name)               AS display_name,
              l.currency,
-             SUM(-l.amount_minor)::text        AS balance
+             SUM(-l.amount_minor)              AS balance
         FROM ledger_lines l
         LEFT JOIN contributors c ON c.id = l.contributor_id
        WHERE l.account_code = ${LEDGER_ACCOUNTS.ENGINEER_PAYABLE}
        GROUP BY l.contributor_id, l.currency
       HAVING SUM(-l.amount_minor) <> 0
-       ORDER BY 4 DESC
+       -- By amount, numerically, then a stable tie-break (S5-05).
+       ORDER BY SUM(-l.amount_minor) DESC, l.contributor_id, l.currency
     `)) as unknown as Array<Record<string, string | null>>;
 
     const minimum = options.minimumPayoutMinor ?? 0n;
@@ -264,6 +277,15 @@ export interface ContributorRevenue {
   readonly contributorName: string | null;
   readonly currency: string;
   readonly unitsSold: number;
+  /**
+   * The sales ATTRIBUTED to this engineer (S5-01): their slice of each paid
+   * sale — what was paid, less tax, times their contribution — which is what
+   * their terms were applied to. On a product shared 60/40 each engineer is
+   * credited with their part of the sale, not the whole of it, so the figures
+   * across engineers add up to the sales once, not once per author.
+   *
+   * `engineerMinor + platformMinor === grossMinor` for every engineer.
+   */
   readonly grossMinor: bigint;
   readonly engineerMinor: bigint;
   readonly platformMinor: bigint;
@@ -293,8 +315,25 @@ export async function revenueByContributor(
              MAX(c.display_name)                                      AS display_name,
              oi.currency,
              COUNT(*)::int                                            AS units_sold,
-             COALESCE(SUM(oi.unit_price_minor), 0)::text              AS gross,
-             COALESCE(SUM(oic.amount_minor), 0)::text                 AS engineer,
+             /*
+              * THE ENGINEER'S SLICE, NOT THE LINE'S PRICE (S5-01).
+              *
+              * oi.unit_price_minor is the list price of the WHOLE product.
+              * Summed per engineer it counted a co-authored sale once per
+              * author and ignored every discount: the audit measured +26%
+              * across engineers. The slice is what was paid, less tax, times
+              * this engineer's contribution — frozen on their own row at
+              * approval, and summing across engineers to the line's net.
+              *
+              * Rows from before migration 0050 carry no slice; for them the
+              * line's net is apportioned by the credit frozen on the row, the
+              * only record of their share there is.
+              */
+             COALESCE(SUM(COALESCE(
+               oic.slice_minor,
+               COALESCE(oi.net_minor, oi.unit_price_minor - oi.discount_minor) * oic.share_bp / 10000
+             )), 0)                                                   AS gross_sum,
+             COALESCE(SUM(oic.amount_minor), 0)                       AS engineer_sum,
              /*
               * THE ENGINEER'S OWN ROW, NOT THE LINE'S (migration 0050).
               *
@@ -310,8 +349,11 @@ export async function revenueByContributor(
               * number; there is nothing better for them, and dropping them
               * would understate a real historical total.
               */
-             COALESCE(SUM(COALESCE(oic.platform_amount_minor,
-                                   oi.platform_amount_minor)), 0)::text AS platform
+             COALESCE(SUM(COALESCE(
+               oic.platform_amount_minor,
+               COALESCE(oi.net_minor, oi.unit_price_minor - oi.discount_minor) * oic.share_bp / 10000
+                 - oic.amount_minor
+             )), 0)                                                   AS platform_sum
         FROM order_item_contributors oic
         JOIN order_items oi ON oi.id = oic.order_item_id
         JOIN orders o       ON o.id = oi.order_id
@@ -324,18 +366,20 @@ export async function revenueByContributor(
              : sql`true`
          }
        GROUP BY oic.contributor_id, oi.currency
-       ORDER BY 6 DESC
+       -- By the engineer's earnings, numerically, then a stable tie-break
+       -- (S5-05): with LIMIT 200 a text sort could drop the largest earner.
+       ORDER BY engineer_sum DESC, oic.contributor_id, oi.currency
        LIMIT 200
-    `)) as unknown as Array<Record<string, string | number | null>>;
+    `)) as unknown as Array<Record<string, string | number | bigint | null>>;
 
     return rows.map((row) => ({
       contributorId: row.contributor_id as string,
       contributorName: (row.display_name as string | null) ?? null,
       currency: row.currency as string,
       unitsSold: Number(row.units_sold),
-      grossMinor: BigInt(row.gross as string),
-      engineerMinor: BigInt(row.engineer as string),
-      platformMinor: BigInt(row.platform as string),
+      grossMinor: BigInt(row.gross_sum as string),
+      engineerMinor: BigInt(row.engineer_sum as string),
+      platformMinor: BigInt(row.platform_sum as string),
     }));
   });
 }

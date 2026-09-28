@@ -4,6 +4,7 @@ import {
   index,
   integer,
   pgTable,
+  pgView,
   text,
   uniqueIndex,
   uuid,
@@ -173,6 +174,24 @@ export const contributors = pgTable(
     index('contributors_active_idx').on(table.isActive),
   ],
 );
+
+/**
+ * THE PUBLIC FACE OF AN ENGINEER (S5-11, migration 0062).
+ *
+ * The public columns of ACTIVE profiles and nothing else. Guests, customers
+ * and other engineers read this; the full `contributors` row — account id,
+ * settlement code, approval, draft rights — is the owner's and the engineer's
+ * own. Row policies cannot hide columns, which is why this is a view.
+ */
+export const publicContributors = pgView('public_contributors', {
+  id: uuid('id').notNull(),
+  publicSlug: text('public_slug').notNull(),
+  displayName: text('display_name').notNull(),
+  disciplineId: uuid('discipline_id'),
+  specialization: text('specialization'),
+  bio: text('bio'),
+  updatedAt: utcTimestamp('updated_at').notNull(),
+}).existing();
 
 /**
  * Granular permissions for a future delegated staff role.

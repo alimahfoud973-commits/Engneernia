@@ -70,4 +70,7 @@ export const auditActionEnum = pgEnum('audit_action', [
   'INVOICE_ISSUED',
   // a free product taken without any payment — added by migration 0054
   'FREE_ORDER_COMPLETED',
+  // a statement withdrawn by the owner — added by migration 0062 (S5-08);
+  // until then a cancellation was recorded as SETTLEMENT_GENERATED
+  'SETTLEMENT_CANCELLED',
 ]);

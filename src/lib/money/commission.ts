@@ -2,6 +2,7 @@ import { MoneyInvariantError, RuleViolationError, ValidationError } from '@/lib/
 import type { CurrencyCode } from './currency';
 import {
   assertBasisPoints,
+  divRoundHalfAwayFromZero,
   money,
   percentOf,
   subtract,
@@ -54,6 +55,15 @@ export interface CommissionSnapshot {
    * share larger than the price means the agreement needs revisiting.
    */
   readonly clamped: boolean;
+  /**
+   * What a FIXED agreement asked for on this pot before any cap (S5-02): the
+   * engineer's side for FIXED_ENGINEER, the platform's for FIXED_PLATFORM.
+   * Null on a percentage agreement, which cannot ask for more than the pot.
+   *
+   * Recorded so a capped sale can say by how much: `clamped` alone told the
+   * owner that something was cut, not what the agreement had promised.
+   */
+  readonly requestedMinor: bigint | null;
 }
 
 export interface SplitInput {
@@ -85,6 +95,29 @@ export interface SplitInput {
    */
   readonly discount?: Money | undefined;
   readonly agreement: CommissionAgreement;
+  /**
+   * THE PRICE A FIXED AMOUNT IS QUOTED AGAINST (owner decisions D-02, D-03).
+   *
+   * A fixed agreement names an amount for the WHOLE product at its full price.
+   * It is therefore a proportion of that price, and the proportion is what
+   * survives a discount or a co-author:
+   *
+   *     share = fixed × pot ÷ base
+   *
+   *   D-02 — a discount is borne by both sides in their original proportion.
+   *          $30 fixed on a $100 product sold at $50 pays $15, not $30.
+   *   D-03 — on a co-authored product the fixed engineer amount is the total
+   *          for all engineers, divided by contribution. $20 fixed at 60/40
+   *          pays $12 and $8, not $20 each.
+   *
+   * Defaults to `listPrice`, so a single engine call on a whole sale applies
+   * D-02 by itself. The sale path, which calls once per engineer's slice,
+   * passes the product's whole tax-free list price, which applies D-03 too.
+   *
+   * At no discount and one author `pot === base`, and the result is exactly
+   * the fixed amount — every sale made before these decisions reads the same.
+   */
+  readonly fixedBaseMinor?: bigint | undefined;
 }
 
 export function computeCommissionSnapshot(input: SplitInput): CommissionSnapshot {
@@ -124,10 +157,17 @@ export function computeCommissionSnapshot(input: SplitInput): CommissionSnapshot
   }
 
   const netPrice = subtract(listPrice, discount);
+  const base = input.fixedBaseMinor ?? listPrice.amountMinor;
+  if (base < 0n) {
+    throw new ValidationError('أساس المبلغ الثابت لا يكون سالباً', {
+      fixedBaseMinor: base.toString(),
+    });
+  }
 
   let engineer: Money;
   let platform: Money;
   let clamped = false;
+  let requestedMinor: bigint | null = null;
 
   switch (agreement.model) {
     case 'PERCENTAGE': {
@@ -145,8 +185,11 @@ export function computeCommissionSnapshot(input: SplitInput): CommissionSnapshot
           engineerFixedMinor: fixed.amountMinor.toString(),
         });
       }
-      clamped = fixed.amountMinor > netPrice.amountMinor;
-      engineer = clamped ? netPrice : fixed;
+      requestedMinor = scaleFixed(fixed.amountMinor, netPrice.amountMinor, base);
+      // Capped when the agreement asks for more than the price it is quoted
+      // against: then no pot, at any discount, can pay it (S5-02).
+      clamped = fixed.amountMinor > base;
+      engineer = money(minBig(requestedMinor, netPrice.amountMinor), currency);
       platform = subtract(netPrice, engineer);
       break;
     }
@@ -157,8 +200,9 @@ export function computeCommissionSnapshot(input: SplitInput): CommissionSnapshot
           platformFixedMinor: fixed.amountMinor.toString(),
         });
       }
-      clamped = fixed.amountMinor > netPrice.amountMinor;
-      platform = clamped ? netPrice : fixed;
+      requestedMinor = scaleFixed(fixed.amountMinor, netPrice.amountMinor, base);
+      clamped = fixed.amountMinor > base;
+      platform = money(minBig(requestedMinor, netPrice.amountMinor), currency);
       engineer = subtract(netPrice, platform);
       break;
     }
@@ -178,7 +222,25 @@ export function computeCommissionSnapshot(input: SplitInput): CommissionSnapshot
     engineerAmountMinor: engineer.amountMinor,
     platformAmountMinor: platform.amountMinor,
     clamped,
+    requestedMinor,
   });
+}
+
+/**
+ * `fixed × pot ÷ base`, rounded half away from zero — the fixed side is the
+ * rounded one and the other is the remainder (CLAUDE.md rule 3).
+ *
+ * A base of zero is a free product: there is no price for the amount to be a
+ * proportion of, and nothing in the pot to pay it from.
+ */
+function scaleFixed(fixedMinor: bigint, potMinor: bigint, baseMinor: bigint): bigint {
+  if (baseMinor === 0n || potMinor === 0n) return 0n;
+  if (potMinor === baseMinor) return fixedMinor;
+  return divRoundHalfAwayFromZero(fixedMinor * potMinor, baseMinor);
+}
+
+function minBig(a: bigint, b: bigint): bigint {
+  return a < b ? a : b;
 }
 
 /**

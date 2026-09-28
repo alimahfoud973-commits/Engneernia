@@ -20,14 +20,20 @@ export type Transaction = Parameters<Parameters<ReturnType<typeof getDb>['transa
 
 async function declareActor(
   tx: Transaction,
-  context: { actorId: string; actorRole: string; contributorId: string },
+  context: {
+    actorId: string;
+    actorRole: string;
+    contributorId: string;
+    financialContributorId: string;
+  },
 ): Promise<void> {
   // Parameterised, never interpolated: `SET LOCAL` cannot take parameters,
   // which is exactly why set_config() is used instead.
   await tx.execute(sql`
     SELECT set_config('app.actor_id', ${context.actorId}, true),
            set_config('app.actor_role', ${context.actorRole}, true),
-           set_config('app.contributor_id', ${context.contributorId}, true)
+           set_config('app.contributor_id', ${context.contributorId}, true),
+           set_config('app.financial_contributor_id', ${context.financialContributorId}, true)
   `);
 }
 
@@ -57,11 +63,28 @@ export async function withActor<T>(
  * bypassed entirely and an arbitrary context is asserted.
  */
 export async function withRawActorContext<T>(
-  context: { actorId: string; actorRole: string; contributorId?: string },
+  context: {
+    actorId: string;
+    actorRole: string;
+    contributorId?: string;
+    /**
+     * The read-only financial identity (D-05, migration 0062). Defaults to
+     * `contributorId`, which is what an ACTIVE engineer's session declares;
+     * a test modelling a deactivated one passes an empty `contributorId` and
+     * their id here.
+     */
+    financialContributorId?: string;
+  },
   work: (tx: Transaction) => Promise<T>,
 ): Promise<T> {
   return getDb().transaction(async (tx) => {
-    await declareActor(tx, { contributorId: '', ...context });
+    const contributorId = context.contributorId ?? '';
+    await declareActor(tx, {
+      actorId: context.actorId,
+      actorRole: context.actorRole,
+      contributorId,
+      financialContributorId: context.financialContributorId ?? contributorId,
+    });
     return work(tx);
   });
 }

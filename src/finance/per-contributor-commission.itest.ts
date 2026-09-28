@@ -16,6 +16,7 @@ import { contributorSales } from '@/finance/balances';
 import { RuleViolationError } from '@/lib/errors';
 import type { Actor } from '@/authz/actor';
 import { insertProductsWithVersion } from '@/db/testing/product-versions';
+import { withFinancialPurge } from '@/db/testing/financial-purge';
 
 /**
  * ===========================================================================
@@ -160,7 +161,8 @@ beforeAll(async () => {
 }, 180_000);
 
 afterAll(async () => {
-  await withRawActorContext(OWNER_RAW, async (tx) => {
+  // Superuser + explicit flag: these fixtures became financial history (S5-03).
+  await withFinancialPurge(async (tx) => {
     const productIds = [ids.shared, ids.solo, ids.trio, ids.later];
     const contribIds = [ids.contribA, ids.contribB, ids.contribC];
     await tx.delete(entitlements).where(inArray(entitlements.customerId, buyers));
@@ -262,18 +264,25 @@ describe('2. the awkward arithmetic', () => {
     expect(line.engineerAmountMinor! + line.platformAmountMinor! + line.taxMinor!).toBe(PRICE);
   });
 
-  it('caps a fixed agreement against THAT engineer’s slice, not the price', async () => {
+  it('a fixed agreement on a co-authored product pays its contribution’s share of the fixed amount (D-03)', async () => {
     const [item] = await withRawActorContext(OWNER_RAW, (tx) =>
-      tx.select({ id: orderItems.id }).from(orderItems).where(eq(orderItems.productId, ids.trio)),
+      tx.select({ id: orderItems.id, netMinor: orderItems.netMinor })
+        .from(orderItems).where(eq(orderItems.productId, ids.trio)),
     );
     const c = (await splitOf(item!.id)).get(ids.contribC)!;
 
-    // C's slice is 3334 and their flat fee is 500, so no cap is needed here —
-    // but the fee is taken from their slice and nobody else's.
+    // C's slice is 3334 — a third of the sale. Owner decision D-03: the $5.00
+    // fixed amount is for the PRODUCT, so C, credited with a third, is paid a
+    // third of it — not the whole $5.00 out of their own slice, as before.
+    // Sold at full price, the base is the line's own net.
+    const net = item!.netMinor!;
+    const expected = (C_FIXED * 3_334n * 2n + net) / (2n * net); // half away from zero
     expect(c.sliceMinor).toBe(3_334n);
-    expect(c.amountMinor).toBe(C_FIXED);
-    expect(c.platformAmountMinor).toBe(3_334n - C_FIXED);
+    expect(c.amountMinor).toBe(expected);
+    expect(c.amountMinor).toBeLessThan(C_FIXED);
+    expect(c.platformAmountMinor).toBe(3_334n - expected);
     expect(c.commissionClamped).toBe(false);
+    expect(c.commissionRequestedMinor).toBe(expected);
     expect(c.commissionModel).toBe('FIXED_ENGINEER');
   });
 
@@ -579,18 +588,19 @@ describe('7. the database refuses a split it cannot explain', () => {
     expect(message).toMatch(/order_item_contributors_currency_format/);
   });
 
-  it('accepts the same row once its arithmetic is right', async () => {
+  it('passes every row CHECK once its arithmetic is right — and is still refused if its line does not account for it (S5-06)', async () => {
     // The control. Without it the four refusals above would also pass on a
-    // table that rejects every insert for some unrelated reason.
+    // table that rejects every insert for some unrelated reason. Since
+    // migration 0062 a row that is sound on its own is also checked, at
+    // commit, against the sale line it belongs to: a split added to a line
+    // that already adds up makes it stop adding up, and is refused by that
+    // rule — which is only reached after every row CHECK has passed.
     const message = await refusalFor({
       slice: 1000n, amount: 800n, platform: 200n, model: 'PERCENTAGE', bp: 8000,
     });
-    expect(message).toBe('');
-
-    await withRawActorContext(OWNER_RAW, (tx) =>
-      tx.delete(orderItemContributors)
-        .where(sql`${orderItemContributors.contributorId} = ${ids.contribC}
-                   AND ${orderItemContributors.sliceMinor} = 1000`),
+    expect(message).toMatch(/order_item_contributors_add_up|splits do not add up/);
+    expect(message).not.toMatch(
+      /order_item_contributors_(split_balances|model_shape|currency_format)/,
     );
   });
 });

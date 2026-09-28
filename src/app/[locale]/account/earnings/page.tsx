@@ -3,10 +3,13 @@ import { redirect } from 'next/navigation';
 import { SiteHeader, SiteFooter } from '@/components/site-chrome';
 import { formatMinor } from '@/components/money-display';
 import { requireActor } from '@/auth/current';
-import { activeContributorId } from '@/authz/actor';
-import { contributorSales, contributorStatement } from '@/finance/balances';
+import { activeContributorId, financialContributorId } from '@/authz/actor';
+import { contributorSaleLines, contributorSales, contributorStatement } from '@/finance/balances';
 import { myStatements } from '@/settlements/queries';
-import { SETTLEMENT_STATUS_LABELS } from '@/lib/labels';
+import { SETTLEMENT_STATUS_LABELS, formatPercent } from '@/lib/labels';
+
+/** Basis points as the percentage an engineer reads: 3000 → «30٪». */
+const percentOf = (bp: number) => `${formatPercent(bp)}٪`;
 
 export const dynamic = 'force-dynamic';
 
@@ -41,12 +44,16 @@ export default async function EarningsPage({
 
   // A customer has no earnings page to be told about. Not a 403: confirming
   // that a contributor console exists is itself a hint (CLAUDE.md rule 5).
-  if (activeContributorId(actor) === null) redirect('/account');
+  // A DEACTIVATED engineer keeps it, read-only (owner decision D-05): what
+  // they earned and are owed does not stop being theirs to see.
+  if (financialContributorId(actor) === null) redirect('/account');
+  const readOnly = activeContributorId(actor) === null;
 
-  const [statement, sales, statements] = await Promise.all([
+  const [statement, sales, statements, saleLines] = await Promise.all([
     contributorStatement(actor),
     contributorSales(actor),
     myStatements(actor),
+    contributorSaleLines(actor),
   ]);
 
   return (
@@ -61,6 +68,12 @@ export default async function EarningsPage({
           <p className="text-sm text-[var(--color-ink-soft)]">
             التسوية شهرية: تتراكم المبيعات خلال الشهر ويُصرف الرصيد في بداية الشهر التالي.
           </p>
+          {readOnly ? (
+            <p className="rounded-[var(--radius-card)] border border-[var(--color-warn)] bg-[var(--color-warn-soft)] px-3 py-2 text-sm text-[var(--color-warn)]">
+              ملفك كمهندس موقوف حالياً. هذه الصفحة للاطلاع على سجلك المالي فقط، وما استحققته
+              قبل الإيقاف يبقى لك ويُسوّى كالمعتاد.
+            </p>
+          ) : null}
         </header>
 
         <section className="flex flex-col gap-3">
@@ -138,8 +151,13 @@ export default async function EarningsPage({
         {statement.byPeriod.length > 0 ? (
           <section className="flex flex-col gap-3">
             <h2 className="text-sm font-semibold text-[var(--color-ink-soft)]">حسب الشهر</h2>
+            {/*
+              Three columns fit a phone (S5-10): the minimum width that forced
+              this table past a 390-pixel screen, cutting off the net column
+              with no sign that it was there, is gone.
+            */}
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[30rem] border-collapse text-sm">
+              <table className="w-full border-collapse text-sm">
                 <thead>
                   <tr className="border-b border-[var(--color-line-strong)] text-right text-xs text-[var(--color-ink-soft)]">
                     <th className="py-2 font-semibold">الشهر</th>
@@ -262,6 +280,66 @@ export default async function EarningsPage({
                       تنزيل الكشف PDF
                     </a>
                   </div>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+
+        {/*
+          EVERY SALE, ONE BY ONE (owner decision D-01): the engineer's own
+          rate and the platform's, and what each side received — of THIS
+          engineer's slice, from THIS engineer's frozen row. Nothing about a
+          co-author is on that row, so nothing about one is here.
+        */}
+        {saleLines.length > 0 ? (
+          <section className="flex flex-col gap-3">
+            <h2 className="text-sm font-semibold text-[var(--color-ink-soft)]">
+              تفاصيل مبيعاتي
+            </h2>
+            <ul className="flex flex-col gap-2">
+              {saleLines.map((line) => (
+                <li
+                  key={line.id}
+                  className="flex flex-col gap-2 rounded-[var(--radius-card)] border border-[var(--color-line)] px-4 py-3 text-sm"
+                >
+                  <div className="flex flex-wrap items-baseline justify-between gap-2">
+                    <span className="font-semibold">{line.productTitle ?? 'منتج'}</span>
+                    <span className="technical-term text-xs tabular-nums text-[var(--color-ink-faint)]">
+                      {line.soldAt.toISOString().slice(0, 10)}
+                    </span>
+                  </div>
+                  <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-4">
+                    <div className="flex flex-col">
+                      <dt className="text-[var(--color-ink-faint)]">أساس العمولة</dt>
+                      <dd className="tabular-nums">{formatMinor(line.sliceMinor, line.currency)}</dd>
+                    </div>
+                    <div className="flex flex-col">
+                      <dt className="text-[var(--color-ink-faint)]">نسبتي · حصتي</dt>
+                      <dd className="tabular-nums">
+                        {line.engineerRateBp === null ? '—' : percentOf(line.engineerRateBp)} ·{' '}
+                        {formatMinor(line.engineerMinor, line.currency)}
+                      </dd>
+                    </div>
+                    <div className="flex flex-col">
+                      <dt className="text-[var(--color-ink-faint)]">نسبة المنصة · حصتها</dt>
+                      <dd className="tabular-nums">
+                        {line.platformRateBp === null ? '—' : percentOf(line.platformRateBp)} ·{' '}
+                        {formatMinor(line.platformMinor, line.currency)}
+                      </dd>
+                    </div>
+                    <div className="flex flex-col">
+                      <dt className="text-[var(--color-ink-faint)]">مساهمتي في المنتج</dt>
+                      <dd className="tabular-nums">{percentOf(line.shareBp)}</dd>
+                    </div>
+                  </dl>
+                  {line.commissionModel && line.commissionModel !== 'PERCENTAGE' ? (
+                    <p className="text-xs text-[var(--color-ink-soft)]">
+                      {line.commissionModel === 'FIXED_ENGINEER' ? 'مبلغ ثابت للمهندس' : 'مبلغ ثابت للمنصة'}
+                      ، والنسبتان أعلاه ما بلغه في هذا البيع.
+                      {line.clamped ? ' المبلغ الثابت تجاوز المدفوع فقُصّ إليه.' : ''}
+                    </p>
+                  ) : null}
                 </li>
               ))}
             </ul>

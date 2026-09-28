@@ -85,6 +85,8 @@ export interface ResolvedTerms {
     readonly engineerFixedMinor: bigint | null;
     readonly platformFixedMinor: bigint | null;
     readonly clamped: boolean;
+    /** What a fixed agreement asked for on this slice before the cap (S5-02). */
+    readonly requestedMinor: bigint | null;
   }>;
 }
 
@@ -195,7 +197,8 @@ async function findAgreement(
  * on — one query per product made that seconds for a large catalogue.
  * ===========================================================================
  */
-export type SaleBlockerReason = 'NO_AGREEMENT' | 'CURRENCY_MISMATCH' | 'INVALID_AGREEMENT';
+export type SaleBlockerReason =
+  | 'NO_AGREEMENT' | 'CURRENCY_MISMATCH' | 'INVALID_AGREEMENT' | 'INACTIVE_ENGINEER';
 
 export interface SaleBlocker {
   readonly contributorId: string;
@@ -217,6 +220,44 @@ async function saleBlockersByProduct(
   const result = new Map<string, SaleBlocker[]>();
   if (productIds.length === 0) return result;
 
+  const add = (productId: string, blocker: SaleBlocker) => {
+    const list = result.get(productId) ?? [];
+    list.push(blocker);
+    result.set(productId, list);
+  };
+
+  // LEFT join: a name the reader may not see must not hide a missing agreement.
+  const allCredits = await tx
+    .select({
+      productId: productContributors.productId,
+      contributorId: productContributors.contributorId,
+      displayName: contributors.displayName,
+      isActive: contributors.isActive,
+    })
+    .from(productContributors)
+    .leftJoin(contributors, eq(contributors.id, productContributors.contributorId))
+    .where(inArray(productContributors.productId, [...productIds]))
+    .orderBy(productContributors.productId, productContributors.contributorId);
+
+  /*
+   * A DEACTIVATED ENGINEER TAKES NO NEW SALE (owner decision D-05).
+   *
+   * Their credit stays on the product — deactivation must not strip anyone's
+   * attribution — but no new order can be built on it, free or paid, until
+   * the owner reactivates them or changes the credits. Reported here so the
+   * publication checklist and the owner's product page say why; refused at
+   * order creation by `order_items_credits_active` in the database.
+   */
+  for (const credit of allCredits) {
+    if (credit.isActive === false) {
+      add(credit.productId, {
+        contributorId: credit.contributorId,
+        reason: 'INACTIVE_ENGINEER',
+        message: `المهندس ${credit.displayName ?? credit.contributorId} موقوف، ولا يُباع منتج منسوب إليه حتى يُعاد تفعيله أو تُعدَّل نسبة المنتج`,
+      });
+    }
+  }
+
   const prices = await tx
     .select({
       productId: productPrices.productId,
@@ -230,17 +271,7 @@ async function saleBlockersByProduct(
   if (paid.size === 0) return result;
   const paidIds = [...paid.keys()];
 
-  // LEFT join: a name the reader may not see must not hide a missing agreement.
-  const credits = await tx
-    .select({
-      productId: productContributors.productId,
-      contributorId: productContributors.contributorId,
-      displayName: contributors.displayName,
-    })
-    .from(productContributors)
-    .leftJoin(contributors, eq(contributors.id, productContributors.contributorId))
-    .where(inArray(productContributors.productId, paidIds))
-    .orderBy(productContributors.productId, productContributors.contributorId);
+  const credits = allCredits.filter((c) => paid.has(c.productId));
   if (credits.length === 0) return result;
 
   const agreements = await tx
@@ -259,13 +290,76 @@ async function saleBlockersByProduct(
     const name = credit.displayName ?? credit.contributorId;
     const row = pickAgreement(agreements, credit.contributorId, credit.productId);
     const blocker = agreementBlocker(row, price, name);
-    if (blocker) {
-      const list = result.get(credit.productId) ?? [];
-      list.push({ contributorId: credit.contributorId, ...blocker });
-      result.set(credit.productId, list);
-    }
+    if (blocker) add(credit.productId, { contributorId: credit.contributorId, ...blocker });
   }
   return result;
+}
+
+/**
+ * ===========================================================================
+ * FIXED TERMS THAT WILL BE CAPPED (S5-02)
+ * ===========================================================================
+ * A fixed amount larger than the price it is quoted against cannot be paid by
+ * any sale of the product: the split caps it at the pot and records that it
+ * did. That is allowed — the sale must not fail — but it must not be a
+ * surprise. This names every such engineer on the owner's product page,
+ * BEFORE a sale, with the same base the sale uses: the tax-free list price.
+ *
+ * A warning, not a blocker: the owner may mean it (a fixed platform fee on a
+ * cheap product), and refusing to publish would only move the question.
+ * ===========================================================================
+ */
+export async function productCommissionCapWarnings(
+  tx: Transaction,
+  productId: string,
+  taxRateBp: number,
+): Promise<readonly string[]> {
+  const [price] = await tx
+    .select({ amountMinor: productPrices.amountMinor, currency: productPrices.currency })
+    .from(productPrices)
+    .where(and(eq(productPrices.productId, productId), isNull(productPrices.effectiveTo)))
+    .limit(1);
+  if (!price || price.amountMinor === 0n) return [];
+
+  const netList = extractTax(money(price.amountMinor, price.currency), taxRateBp).netMinor;
+
+  const credits = await tx
+    .select({
+      contributorId: productContributors.contributorId,
+      displayName: contributors.displayName,
+    })
+    .from(productContributors)
+    .leftJoin(contributors, eq(contributors.id, productContributors.contributorId))
+    .where(eq(productContributors.productId, productId))
+    .orderBy(productContributors.contributorId);
+  if (credits.length === 0) return [];
+
+  const agreements = await tx
+    .select()
+    .from(commissionAgreements)
+    .where(
+      and(
+        inArray(commissionAgreements.contributorId, credits.map((c) => c.contributorId)),
+        isNull(commissionAgreements.effectiveTo),
+        or(isNull(commissionAgreements.productId), eq(commissionAgreements.productId, productId)),
+      ),
+    );
+
+  const warnings: string[] = [];
+  for (const credit of credits) {
+    const row = pickAgreement(agreements, credit.contributorId, productId);
+    if (!row || row.currency !== price.currency) continue;
+    const fixed = row.model === 'FIXED_ENGINEER'
+      ? row.engineerFixedMinor
+      : row.model === 'FIXED_PLATFORM' ? row.platformFixedMinor : null;
+    if (fixed !== null && fixed > netList) {
+      const side = row.model === 'FIXED_ENGINEER' ? 'حصة المهندس الثابتة' : 'حصة المنصة الثابتة';
+      warnings.push(
+        `${side} في اتفاق ${credit.displayName ?? credit.contributorId} أكبر من سعر المنتج قبل الضريبة، وستُقصّ عند كل بيع إلى المبلغ المدفوع`,
+      );
+    }
+  }
+  return warnings;
 }
 
 /** Why the sale would refuse this engineer's slice, or null if it would not. */
@@ -540,10 +634,18 @@ export async function resolveTermsForSale(
      * tax, so the pot being sliced is already net of it and each slice carries
      * its proportional part. Handing the engine the discount a second time
      * would subtract it once per engineer.
+     *
+     * A FIXED amount is quoted against the product's whole tax-free list price
+     * (owner decisions D-02 and D-03), so that is the base it is scaled from:
+     * this engineer receives `fixed × slice ÷ netList` — their contribution's
+     * part of the fixed total, reduced in proportion by any discount. At full
+     * price with one author the slice IS netList and the amount is the fixed
+     * figure itself, as it always was.
      */
     const snapshot = computeCommissionSnapshot({
       listPrice: money(slice.amountMinor, currency),
       agreement: toAgreement(agreementRow),
+      fixedBaseMinor: netList,
     });
 
     distribution.push({
@@ -558,6 +660,7 @@ export async function resolveTermsForSale(
       engineerFixedMinor: snapshot.engineerFixedMinor,
       platformFixedMinor: snapshot.platformFixedMinor,
       clamped: snapshot.clamped,
+      requestedMinor: snapshot.requestedMinor,
     });
 
     engineerTotal += snapshot.engineerAmountMinor;

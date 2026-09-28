@@ -295,8 +295,7 @@ export async function createOrder(
 
     if (!order) throw new RuleViolationError('تعذّر إنشاء الطلب');
 
-    await tx.insert(orderItems).values(
-      lines.map(({ row, isUpgrade, lineDiscount }) => ({
+    await insertOrderLines(tx, lines.map(({ row, isUpgrade, lineDiscount }) => ({
         orderId: order.id,
         productId: row.id,
         // Copied now: renaming a product later must not rewrite an old order.
@@ -308,8 +307,7 @@ export async function createOrder(
         // THIS file even if another is released before the payment clears.
         versionId: row.currentVersionId,
         isUpgrade,
-      })),
-    );
+      })));
 
     await tx.insert(orderEvents).values({
       orderId: order.id,
@@ -326,6 +324,37 @@ export async function createOrder(
       currency,
     };
   });
+}
+
+/**
+ * Write the order's lines, translating the one refusal a buyer can meet here.
+ *
+ * `order_items_credits_active` (migration 0062, owner decision D-05) refuses
+ * a line for a product credited to a deactivated engineer. The buyer cannot
+ * see who is credited — nor should they — so they are told only that the
+ * product cannot be bought right now, and the whole order rolls back.
+ */
+async function insertOrderLines(
+  tx: Transaction,
+  values: Array<typeof orderItems.$inferInsert>,
+): Promise<void> {
+  try {
+    await tx.insert(orderItems).values(values);
+  } catch (error) {
+    if (isInactiveCreditRefusal(error)) {
+      throw new RuleViolationError('أحد المنتجات غير متاح للشراء حالياً');
+    }
+    throw error;
+  }
+}
+
+/** The write hit `order_items_credits_active` — and only that rule. */
+export function isInactiveCreditRefusal(error: unknown): boolean {
+  const cause = (error as { cause?: { code?: string; constraint_name?: string } })?.cause;
+  const direct = error as { code?: string; constraint_name?: string };
+  const code = cause?.code ?? direct?.code;
+  const constraint = cause?.constraint_name ?? direct?.constraint_name;
+  return code === '23514' && constraint === 'order_items_credits_active';
 }
 
 /** The order states from which the customer may choose how to pay (W14). */
@@ -644,10 +673,12 @@ export async function approvePayment(
           engineerFixedMinor: d.engineerFixedMinor,
           platformFixedMinor: d.platformFixedMinor,
           commissionClamped: d.clamped,
+          commissionRequestedMinor: d.requestedMinor,
           // The sale's own context, so the engineer can read their sales from
-          // this table alone (migration 0051).
+          // this table alone (migrations 0051, 0062).
           occurredAt: new Date(),
           currency: item.currency,
+          productTitle: item.titleSnapshot,
         })),
       );
 

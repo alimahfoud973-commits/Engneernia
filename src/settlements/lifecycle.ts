@@ -286,7 +286,10 @@ export async function cancelSettlement(
     }
 
     await recordAudit(tx, actor, {
-      action: 'SETTLEMENT_GENERATED',
+      // Its own action (S5-08). Recorded as SETTLEMENT_GENERATED before
+      // migration 0062, for want of the word; those rows still say
+      // `after.status = 'CANCELLED'`.
+      action: 'SETTLEMENT_CANCELLED',
       entityType: 'settlement',
       entityId: settlement.id,
       before: { status: settlement.status },

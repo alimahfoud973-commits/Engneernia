@@ -152,7 +152,7 @@ const EXPECTATIONS: Record<Action, Expectation> = {
     customerOther: false,
     contributorOwn: true,
     contributorOther: false, // THE rule: engineers never see each other
-    inactiveOwn: false,
+    inactiveOwn: true, // D-05: a deactivated engineer still reads their own record
     guest: false,
   },
   'contributor.readAnyFinancials': { ...DENY_ALL_BUT_OWNER },
@@ -249,6 +249,15 @@ describe('§12 contributor financial privacy', () => {
 
   it('a contributor CAN read their own figures', () => {
     expect(can(contributorA, 'contributor.readOwnFinancials', { contributorId: CONTRIB_A })).toBe(true);
+  });
+
+  it('D-05: a deactivated contributor reads their own figures, and nobody else\'s', () => {
+    expect(can(inactiveContributor, 'contributor.readOwnFinancials', { contributorId: CONTRIB_INACTIVE })).toBe(true);
+    expect(can(inactiveContributor, 'contributor.readOwnFinancials', { contributorId: CONTRIB_A })).toBe(false);
+    expect(can(inactiveContributor, 'contributor.readAnyFinancials', { contributorId: CONTRIB_A })).toBe(false);
+    // Reading is all it keeps: the console and every contributor scope are gone.
+    expect(can(inactiveContributor, 'console.contributor.access')).toBe(false);
+    expect(contributorScopeFor(inactiveContributor)).toEqual({ kind: 'NONE' });
   });
 
   it('the owner can read everything', () => {

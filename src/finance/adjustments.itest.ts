@@ -20,6 +20,7 @@ import { periodKeyOf, previousPeriodKey } from '@/lib/time/period';
 import { RuleViolationError, ValidationError } from '@/lib/errors';
 import type { Actor } from '@/authz/actor';
 import { insertProductsWithVersion } from '@/db/testing/product-versions';
+import { withFinancialPurge } from '@/db/testing/financial-purge';
 
 /**
  * ===========================================================================
@@ -134,7 +135,8 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
-  await withRawActorContext(OWNER_RAW, async (tx) => {
+  // Superuser + explicit flag: these fixtures became financial history (S5-03).
+  await withFinancialPurge(async (tx) => {
     // financial_adjustments is append-only and cannot be deleted by app_user —
     // which is itself part of what is under test. The rows stay.
     await tx.delete(entitlements).where(eq(entitlements.customerId, ids.customer));
@@ -308,11 +310,15 @@ describe('4 & 5 — it reaches the balances', () => {
     expect(after.balances.find((b) => b.currency === 'USD')!.balanceMinor)
       .toBe(beforeBalance - 300n);
 
-    // And they can read the line explaining it — under their OWN actor.
+    // And they can read the line explaining it — under their OWN actor,
+    // through their view of the ledger (S5-11), which keeps an adjustment's
+    // memo because it is written for them.
     const mine = await withRawActorContext(
       { actorId: ids.engineerUser, actorRole: 'CONTRIBUTOR', contributorId: ids.contributor },
       (tx) => tx.execute(sql`
-        SELECT memo FROM ledger_lines WHERE kind = 'ADJUSTMENT' ORDER BY seq DESC LIMIT 1
+        SELECT memo FROM contributor_ledger_lines
+         WHERE kind = 'ADJUSTMENT' AND amount_minor = 300
+         ORDER BY occurred_at DESC LIMIT 1
       `),
     ) as unknown as Array<{ memo: string }>;
     expect(mine[0]!.memo).toContain('ADJ-');

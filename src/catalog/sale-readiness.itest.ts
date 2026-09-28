@@ -21,6 +21,7 @@ import { ingestProductFile } from '@/media/ingest';
 import { NotFoundError, RuleViolationError } from '@/lib/errors';
 import type { Actor } from '@/authz/actor';
 import { insertProductsWithVersion } from '@/db/testing/product-versions';
+import { withFinancialPurge } from '@/db/testing/financial-purge';
 
 /**
  * ===========================================================================
@@ -169,7 +170,8 @@ beforeAll(async () => {
 }, 180_000);
 
 afterAll(async () => {
-  await asOwner(async (tx) => {
+  // Superuser + explicit flag: these fixtures became financial history (S5-03).
+  await withFinancialPurge(async (tx) => {
     const all = [...created, ids.legacy];
     const engineers = [ids.eOk, ids.eNone, ids.eEur, ids.eLegA, ids.eLegB, ids.eRace, ids.eRace2];
     await tx.delete(orders).where(eq(orders.customerId, ids.customer));

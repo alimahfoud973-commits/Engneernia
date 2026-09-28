@@ -18,6 +18,7 @@ import { changeProductStatus, createProduct, setProductContributors } from '@/ca
 import { RuleViolationError, ValidationError } from '@/lib/errors';
 import { GUEST, type Actor } from '@/authz/actor';
 import { insertProductsWithVersion } from '@/db/testing/product-versions';
+import { withFinancialPurge } from '@/db/testing/financial-purge';
 
 /**
  * ===========================================================================
@@ -147,7 +148,8 @@ beforeAll(async () => {
 }, 180_000);
 
 afterAll(async () => {
-  await withRawActorContext(OWNER_RAW, async (tx) => {
+  // Superuser + explicit flag: these fixtures became financial history (S5-03).
+  await withFinancialPurge(async (tx) => {
     const contribIds = [ids.contribA, ids.contribB];
     const productIds = [ids.productA, ids.productB, ...createdProducts];
     await tx.delete(entitlements).where(inArray(entitlements.customerId, buyers));

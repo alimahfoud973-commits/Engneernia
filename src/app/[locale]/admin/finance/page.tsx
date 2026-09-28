@@ -9,6 +9,9 @@ import {
 import { checkLedgerHealth } from '@/ledger/verify';
 import { readFinancialPolicy } from '@/finance/policy';
 import { withActor } from '@/db/actor-context';
+import { salesHistory } from '@/finance/sales-history';
+import { ScrollTable } from '@/components/scroll-table';
+import Link from 'next/link';
 
 export const dynamic = 'force-dynamic';
 
@@ -36,13 +39,16 @@ export default async function AdminFinancePage({
   const actor = await requireOwner('/admin/finance');
 
   const policy = await withActor(actor, readFinancialPolicy);
-  const [health, periods, disciplines, contributors, payables] = await Promise.all([
+  const [health, periods, disciplines, contributors, payables, capped] = await Promise.all([
     checkLedgerHealth(actor),
     revenueByPeriod(actor, { periods: 12 }),
     revenueByDiscipline(actor),
     revenueByContributor(actor),
     outstandingPayables(actor, { minimumPayoutMinor: policy.settlement.minimumPayoutMinor }),
+    salesHistory(actor, { cappedOnly: true }),
   ]);
+  // S5-02: a capped fixed commission is never silent.
+  const cappedRows = capped.totals.reduce((n, t) => n + t.clampedRows, 0);
 
   return (
     <>
@@ -96,6 +102,15 @@ export default async function AdminFinancePage({
           ) : null}
         </section>
 
+        {cappedRows > 0 ? (
+          <p className="rounded-[var(--radius-card)] border border-[var(--color-warn)] bg-[var(--color-warn-soft)] px-4 py-3 text-sm text-[var(--color-warn)]">
+            {cappedRows} حصة بيع قُصّت عمولتها الثابتة لأنها تجاوزت المبلغ المدفوع.{' '}
+            <Link href="/admin/sales?capped=1" className="font-semibold underline underline-offset-4">
+              راجعها في سجل المبيعات
+            </Link>
+          </p>
+        ) : null}
+
         {/* --- by period ---------------------------------------------------- */}
         <section className="flex flex-col gap-3">
           <h2 className="text-sm font-semibold text-[var(--color-ink-soft)]">
@@ -106,7 +121,7 @@ export default async function AdminFinancePage({
               لا توجد مبيعات مسجَّلة بعد.
             </p>
           ) : (
-            <div className="overflow-x-auto">
+            <ScrollTable label="الإيراد حسب الشهر">
               <table className="w-full min-w-[46rem] border-collapse text-sm">
                 <thead>
                   <tr className="border-b border-[var(--color-line-strong)] text-right text-xs text-[var(--color-ink-soft)]">
@@ -148,13 +163,16 @@ export default async function AdminFinancePage({
                   ))}
                 </tbody>
               </table>
-            </div>
+            </ScrollTable>
           )}
         </section>
 
         {/* --- by discipline ------------------------------------------------ */}
         <section className="flex flex-col gap-3">
           <h2 className="text-sm font-semibold text-[var(--color-ink-soft)]">حسب التخصص</h2>
+          <p className="text-xs text-[var(--color-ink-faint)]">
+            المبالغ المدفوعة فعلاً بعد الخصم، شاملة الضريبة.
+          </p>
           {disciplines.length === 0 ? (
             <p className="rounded-[var(--radius-card)] border border-dashed border-[var(--color-line-strong)] px-4 py-6 text-center text-sm text-[var(--color-ink-faint)]">
               لا توجد بيانات بعد.
@@ -185,17 +203,21 @@ export default async function AdminFinancePage({
           <h2 className="text-sm font-semibold text-[var(--color-ink-soft)]">
             حسب المهندس
           </h2>
+          <p className="text-xs text-[var(--color-ink-faint)]">
+            «المبيعات المنسوبة» حصة كل مهندس من المدفوع بعد الخصم والضريبة بحسب مساهمته، فالمنتج
+            المشترك لا يُعدّ مرتين، وحصته مع عمولة المنصة تساويها.
+          </p>
           {contributors.length === 0 ? (
             <p className="rounded-[var(--radius-card)] border border-dashed border-[var(--color-line-strong)] px-4 py-6 text-center text-sm text-[var(--color-ink-faint)]">
               لا توجد بيانات بعد.
             </p>
           ) : (
-            <div className="overflow-x-auto">
+            <ScrollTable label="المبيعات حسب المهندس">
               <table className="w-full min-w-[40rem] border-collapse text-sm">
                 <thead>
                   <tr className="border-b border-[var(--color-line-strong)] text-right text-xs text-[var(--color-ink-soft)]">
                     <th className="py-2 font-semibold">المهندس</th>
-                    <th className="py-2 font-semibold">المبيعات</th>
+                    <th className="py-2 font-semibold">المبيعات المنسوبة</th>
                     <th className="py-2 font-semibold">حصته</th>
                     <th className="py-2 font-semibold">عمولة المنصة</th>
                     <th className="py-2 font-semibold">العدد</th>
@@ -224,7 +246,7 @@ export default async function AdminFinancePage({
                   ))}
                 </tbody>
               </table>
-            </div>
+            </ScrollTable>
           )}
         </section>
 

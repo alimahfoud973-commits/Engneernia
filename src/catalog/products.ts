@@ -443,21 +443,50 @@ export async function setProductContributors(
   assertSharesValid(shares);
 
   await withActor(actor, async (tx) => {
+    const [product] = await tx
+      .select({ id: products.id })
+      .from(products)
+      .where(eq(products.id, productId))
+      .limit(1);
+    if (!product) throw new NotFoundError('المنتج غير موجود');
+
     // Share-lock every engineer being credited, pairing with the lock an
     // agreement change takes on its engineer (`setCommissionAgreement`): that
     // change either committed first — and the check below reads its terms —
     // or waits for this credit and then sees this product (F2).
-    await tx
-      .select({ id: contributors.id })
+    const engineers = await tx
+      .select({ id: contributors.id, name: contributors.displayName, isActive: contributors.isActive })
       .from(contributors)
       .where(inArray(contributors.id, shares.map((s) => s.contributorId)))
       .orderBy(contributors.id)
       .for('share');
 
+    /*
+     * S5-07: an id that names no engineer is the owner's mistake to correct,
+     * not a foreign-key violation to report as a server error.
+     */
+    if (engineers.length !== shares.length) {
+      throw new ValidationError('أحد المهندسين المختارين غير موجود. حدّث الصفحة واختر من القائمة.');
+    }
+
     const before = await tx
       .select()
       .from(productContributors)
       .where(eq(productContributors.productId, productId));
+
+    /*
+     * D-05 / S5-07: a deactivated engineer is not credited on anything NEW.
+     * One already credited here keeps the credit — deactivation must not
+     * strip attribution — so re-saving the product's shares with them still
+     * on it is allowed; adding them is not.
+     */
+    const alreadyCredited = new Set(before.map((r) => r.contributorId));
+    const newlyInactive = engineers.filter((e) => !e.isActive && !alreadyCredited.has(e.id));
+    if (newlyInactive.length > 0) {
+      throw new RuleViolationError(
+        `لا يُنسب منتج إلى مهندس موقوف: ${newlyInactive.map((e) => e.name).join('، ')}`,
+      );
+    }
 
     // On a published product, refused if a newly credited engineer has no
     // agreement matching the price (F2).

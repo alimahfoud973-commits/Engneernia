@@ -40,6 +40,15 @@ function walk(dir: string, out: string[] = []): string[] {
  */
 const BOOTSTRAP_READS = new Set(['NODE_ENV', 'NEXT_RUNTIME']);
 
+/**
+ * Fixtures for the integration suite, not application code: nothing the
+ * application runs imports them (asserted below), so a variable they read is
+ * no knob an operator sets. `financial-purge.ts` reads DATABASE_SUPERUSER_URL
+ * — the test-only superuser the suite already uses — to clean up fixtures
+ * that migration 0062 made permanent for every other role.
+ */
+const TEST_FIXTURE_DIR = 'src/db/testing/';
+
 /** The names `env.ts` declares — the single list an operator has to fill in. */
 function declaredInSchema(): Set<string> {
   const source = read('src/lib/config/env.ts');
@@ -57,6 +66,7 @@ describe('configuration is declared in one place', () => {
 
     for (const path of walk('src')) {
       if (path === 'src/lib/config/env.ts') continue;
+      if (path.startsWith(TEST_FIXTURE_DIR)) continue;
       for (const match of read(path).matchAll(/process\.env\.([A-Z][A-Z0-9_]*)/g)) {
         const name = match[1];
         if (!name || declared.has(name) || BOOTSTRAP_READS.has(name)) continue;
@@ -69,6 +79,14 @@ describe('configuration is declared in one place', () => {
       'undeclared environment reads — declare them in src/lib/config/env.ts and the '
       + `env templates, or the service behind them cannot be connected without editing code:\n  ${offenders.join('\n  ')}`,
     ).toEqual([]);
+  });
+
+  it('keeps the test fixtures out of the application — nothing but a test imports them', () => {
+    const importers = walk('src')
+      .filter((path) => !path.startsWith(TEST_FIXTURE_DIR))
+      .filter((path) => /from ['"]@\/db\/testing\//.test(read(path)));
+    expect(importers, `application code imports a test fixture:\n  ${importers.join('\n  ')}`)
+      .toEqual([]);
   });
 
   it('declares every schema variable in the environment templates too', () => {

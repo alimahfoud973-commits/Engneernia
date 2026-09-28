@@ -307,17 +307,33 @@ describe('OPEN-1 — commission is computed after the discount', () => {
     expect(snapshot.listPriceMinor - snapshot.discountMinor).toBe(snapshot.netPriceMinor);
   });
 
-  it('a fixed engineer share is capped by the DISCOUNTED price, not the list price', () => {
-    // The agreement promises the engineer 90; the sale only fetched 80. The
-    // platform cannot pay out more than came in, so the share is clamped and
-    // the owner is told the agreement needs revisiting.
+  it('a fixed engineer share shrinks with the discount in its original proportion (D-02)', () => {
+    // 90 fixed on a price of 100 is 90% of the price. The sale fetched 80, so
+    // the engineer takes 90% of 80 and the platform 10% of it — the discount
+    // is borne by both sides, not by the platform alone (the pre-D-02 answer
+    // was 80 / 0, which this replaces).
     const snapshot = computeCommissionSnapshot({
       listPrice: usd(10_000n),
       discount: usd(2_000n),
       agreement: { model: 'FIXED_ENGINEER', engineerFixedMinor: 9_000n, currency: 'USD' },
     });
 
+    expect(snapshot.clamped).toBe(false);
+    expect(snapshot.requestedMinor).toBe(7_200n);
+    expect(snapshot.engineerAmountMinor).toBe(7_200n);
+    expect(snapshot.platformAmountMinor).toBe(800n);
+  });
+
+  it('a fixed share larger than the price it is quoted against is capped, and says by how much (S5-02)', () => {
+    const snapshot = computeCommissionSnapshot({
+      listPrice: usd(10_000n),
+      discount: usd(2_000n),
+      agreement: { model: 'FIXED_ENGINEER', engineerFixedMinor: 12_000n, currency: 'USD' },
+    });
+
     expect(snapshot.clamped).toBe(true);
+    // 120% of what was paid was asked for; all of it is what could be given.
+    expect(snapshot.requestedMinor).toBe(9_600n);
     expect(snapshot.engineerAmountMinor).toBe(8_000n);
     expect(snapshot.platformAmountMinor).toBe(0n);
   });
@@ -371,6 +387,141 @@ describe('OPEN-1 — commission is computed after the discount', () => {
         },
       ),
       { numRuns: 500 },
+    );
+  });
+});
+
+/**
+ * ===========================================================================
+ * STAGE 5 — OWNER DECISIONS D-02 AND D-03, AND THE CAP (S5-02)
+ * ===========================================================================
+ * The owner's own examples, as written, then the properties that make them
+ * hold for every price rather than only for these.
+ * ===========================================================================
+ */
+describe('Stage 5 — discounts and fixed amounts keep their original proportion', () => {
+  const pct30: CommissionAgreement = { model: 'PERCENTAGE', engineerBp: 3_000, currency: 'USD' };
+
+  it('Scenario A — $100 paid at 30% engineer: engineer $30, platform $70', () => {
+    const s = computeCommissionSnapshot({ listPrice: usd(10_000n), agreement: pct30 });
+    expect(s.engineerAmountMinor).toBe(3_000n);
+    expect(s.platformAmountMinor).toBe(7_000n);
+  });
+
+  it('Scenario B — $100 list, $50 paid, 70/30: platform $35, engineer $15', () => {
+    const s = computeCommissionSnapshot({
+      listPrice: usd(10_000n), discount: usd(5_000n), agreement: pct30,
+    });
+    expect(s.netPriceMinor).toBe(5_000n);
+    expect(s.engineerAmountMinor).toBe(1_500n);
+    expect(s.platformAmountMinor).toBe(3_500n);
+  });
+
+  it('Scenario B, fixed — $30 fixed on $100 is 30%, so a $50 sale pays $15 / $35', () => {
+    const s = computeCommissionSnapshot({
+      listPrice: usd(10_000n),
+      discount: usd(5_000n),
+      agreement: { model: 'FIXED_ENGINEER', engineerFixedMinor: 3_000n, currency: 'USD' },
+    });
+    expect(s.engineerAmountMinor).toBe(1_500n);
+    expect(s.platformAmountMinor).toBe(3_500n);
+    expect(s.clamped).toBe(false);
+  });
+
+  it('Scenario B, fixed platform — $70 fixed for the platform on $100 pays it $35 of $50', () => {
+    const s = computeCommissionSnapshot({
+      listPrice: usd(10_000n),
+      discount: usd(5_000n),
+      agreement: { model: 'FIXED_PLATFORM', platformFixedMinor: 7_000n, currency: 'USD' },
+    });
+    expect(s.platformAmountMinor).toBe(3_500n);
+    expect(s.engineerAmountMinor).toBe(1_500n);
+  });
+
+  it('Scenario C — $20 fixed on a co-authored product is shared 60/40: $12 and $8', () => {
+    // The sale path slices the pot by contribution first, then applies each
+    // engineer's terms to THEIR slice against the product's whole price.
+    const agreement: CommissionAgreement = {
+      model: 'FIXED_ENGINEER', engineerFixedMinor: 2_000n, currency: 'USD',
+    };
+    const a = computeCommissionSnapshot({
+      listPrice: usd(6_000n), agreement, fixedBaseMinor: 10_000n,
+    });
+    const b = computeCommissionSnapshot({
+      listPrice: usd(4_000n), agreement, fixedBaseMinor: 10_000n,
+    });
+    expect(a.engineerAmountMinor).toBe(1_200n);
+    expect(b.engineerAmountMinor).toBe(800n);
+    expect(a.engineerAmountMinor + b.engineerAmountMinor).toBe(2_000n);
+    expect(a.platformAmountMinor + b.platformAmountMinor).toBe(8_000n);
+  });
+
+  it('Scenario D — a fixed amount above the price is capped: nothing negative, nothing above what was paid', () => {
+    const s = computeCommissionSnapshot({
+      listPrice: usd(1_000n),
+      agreement: { model: 'FIXED_ENGINEER', engineerFixedMinor: 3_000n, currency: 'USD' },
+    });
+    expect(s.clamped).toBe(true);
+    expect(s.requestedMinor).toBe(3_000n);
+    expect(s.engineerAmountMinor).toBe(1_000n);
+    expect(s.platformAmountMinor).toBe(0n);
+  });
+
+  it('a fixed amount equal to the price is not a cap', () => {
+    const s = computeCommissionSnapshot({
+      listPrice: usd(1_000n),
+      agreement: { model: 'FIXED_ENGINEER', engineerFixedMinor: 1_000n, currency: 'USD' },
+    });
+    expect(s.clamped).toBe(false);
+    expect(s.engineerAmountMinor).toBe(1_000n);
+  });
+
+  it('a free product pays nothing and cannot divide by its zero price', () => {
+    const s = computeCommissionSnapshot({
+      listPrice: usd(0n),
+      agreement: { model: 'FIXED_ENGINEER', engineerFixedMinor: 500n, currency: 'USD' },
+    });
+    expect(s.engineerAmountMinor).toBe(0n);
+    expect(s.platformAmountMinor).toBe(0n);
+    expect(s.clamped).toBe(true);
+  });
+
+  it('a percentage agreement records no requested amount', () => {
+    const s = computeCommissionSnapshot({ listPrice: usd(10_000n), agreement: pct30 });
+    expect(s.requestedMinor).toBeNull();
+  });
+
+  it('property — every fixed split re-adds to the pot, is never negative, and keeps its proportion within one unit', () => {
+    fc.assert(
+      fc.property(
+        fc.bigInt({ min: 1n, max: 10_000_000n }),
+        fc.bigInt({ min: 0n, max: 20_000_000n }),
+        fc.integer({ min: 0, max: 10_000 }),
+        fc.constantFrom('FIXED_ENGINEER' as const, 'FIXED_PLATFORM' as const),
+        (list, fixed, discountBp, model) => {
+          const discount = (list * BigInt(discountBp)) / 10_000n;
+          const agreement: CommissionAgreement = model === 'FIXED_ENGINEER'
+            ? { model, engineerFixedMinor: fixed, currency: 'USD' }
+            : { model, platformFixedMinor: fixed, currency: 'USD' };
+          const s = computeCommissionSnapshot({
+            listPrice: usd(list), discount: usd(discount), agreement,
+          });
+          const net = list - discount;
+          expect(s.engineerAmountMinor + s.platformAmountMinor).toBe(net);
+          expect(s.engineerAmountMinor >= 0n && s.platformAmountMinor >= 0n).toBe(true);
+          expect(s.clamped).toBe(fixed > list);
+          const fixedSide = model === 'FIXED_ENGINEER' ? s.engineerAmountMinor : s.platformAmountMinor;
+          if (fixed <= list) {
+            // fixedSide ≈ fixed × net ÷ list, rounded once.
+            const exact2 = 2n * fixed * net;
+            const got2 = 2n * fixedSide * list;
+            expect(got2 - exact2 <= list && exact2 - got2 <= list).toBe(true);
+          } else {
+            expect(fixedSide).toBe(net);
+          }
+        },
+      ),
+      { numRuns: 1_000 },
     );
   });
 });

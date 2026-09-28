@@ -1,6 +1,6 @@
 import 'server-only';
 import { desc, eq } from 'drizzle-orm';
-import { contributors, disciplines, products } from '@/db/schema';
+import { disciplines, products, publicContributors } from '@/db/schema';
 import { withActor } from '@/db/actor-context';
 import { GUEST } from '@/authz/actor';
 
@@ -40,9 +40,9 @@ export async function sitemapEntries(): Promise<readonly SitemapEntry[]> {
       .limit(SITEMAP_PRODUCT_LIMIT);
 
     const contributorRows = await tx
-      .select({ slug: contributors.publicSlug, updatedAt: contributors.updatedAt })
-      .from(contributors)
-      .where(eq(contributors.isActive, true));
+      .select({ slug: publicContributors.publicSlug, updatedAt: publicContributors.updatedAt })
+      // Active profiles only, by the view's own definition (S5-11).
+      .from(publicContributors);
 
     return [
       ...disciplineRows.map((row) => ({ path: `/${row.slug}`, lastModified: null })),
