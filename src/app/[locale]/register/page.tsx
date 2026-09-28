@@ -5,6 +5,7 @@ import type { Metadata } from 'next';
 import { SiteHeader, SiteFooter } from '@/components/site-chrome';
 import { RegisterForm } from '@/components/register-form';
 import { currentActor } from '@/auth/current';
+import { safeReturnPath } from '@/auth/return-path';
 import { PRIVATE_ROBOTS } from '@/seo/config';
 
 /**
@@ -18,14 +19,17 @@ export const dynamic = 'force-dynamic';
 
 export default async function RegisterPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ locale: string }>;
+  searchParams: Promise<{ next?: string }>;
 }) {
   const { locale } = await params;
   setRequestLocale(locale);
+  const { next } = await searchParams;
 
   const actor = await currentActor();
-  if (actor.kind === 'USER') redirect('/');
+  if (actor.kind === 'USER') redirect(safeReturnPath(next));
 
   return (
     <>
@@ -34,15 +38,15 @@ export default async function RegisterPage({
         <header className="flex flex-col gap-2">
           <h1 className="text-2xl font-bold">إنشاء حساب</h1>
           <p className="text-sm text-[var(--color-ink-soft)]">
-            الحساب يلزم لإتمام الشراء وتنزيل ما اشتريته لاحقاً.
+            الاسم ورقم الهاتف والبريد فقط. يعمل حسابك فوراً وتستطيع الشراء مباشرة.
           </p>
         </header>
 
-        <RegisterForm />
+        <RegisterForm next={next ?? null} />
 
         <p className="text-sm text-[var(--color-ink-soft)]">
           لديك حساب؟{' '}
-          <Link href="/login" className="font-semibold text-[var(--color-accent)] hover:underline">
+          <Link href={next ? `/login?next=${encodeURIComponent(next)}` : '/login'} className="font-semibold text-[var(--color-accent)] hover:underline">
             تسجيل الدخول
           </Link>
         </p>

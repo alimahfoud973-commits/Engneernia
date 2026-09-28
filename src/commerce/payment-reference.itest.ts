@@ -41,7 +41,7 @@ const ids = {
 const SLUG = `w13-ref-${suffix}`;
 
 let OWNER_RAW: { actorId: string; actorRole: string };
-const base = { kind: 'USER', displayName: 'T', locale: 'ar', sessionId: 's', twoFactorSatisfied: true, totpEnabled: false } as const;
+const base = { kind: 'USER', displayName: 'T', locale: 'ar', sessionId: 's' } as const;
 let owner: Actor;
 const buyer = (i: number): Actor => ({ ...base, userId: ids.buyers[i]!, role: 'CUSTOMER', contributorId: null, contributorActive: false });
 const asOwner = <T,>(fn: (tx: Transaction) => Promise<T>) => withRawActorContext(OWNER_RAW, fn);

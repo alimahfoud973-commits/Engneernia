@@ -53,7 +53,8 @@ function requireOwner(actor: Actor, what: string): void {
 export interface EngineerRosterRow {
   readonly contributorId: string;
   readonly userId: string;
-  readonly email: string;
+  /** Every subscriber has one since Stage 6; an older row may not. */
+  readonly email: string | null;
   readonly displayName: string;
   readonly publicSlug: string;
   readonly settlementCode: string;
@@ -397,18 +398,15 @@ export interface AddEngineerInput {
 /**
  * Give an existing account an engineer profile.
  *
- * WHY THIS TAKES AN EMAIL AND NOT A PASSWORD. The platform has self
- * registration with email confirmation (OPEN-23), and specification §32/§46
- * says plainly that registering grants no publication rights — the owner
- * authorises the contributor afterwards. So the engineer creates their own
- * account and chooses their own password, and this call turns that account
- * into an engineer.
+ * WHY THIS TAKES AN EMAIL. The engineer registers as a subscriber (name,
+ * phone, email — Stage 6) and signs in the way every subscriber does, with the
+ * phone and the email together; specification §32/§46 says registering grants
+ * no publication rights, so this call is what turns that account into an
+ * engineer. There is no password to set: engineers have none.
  *
- * An owner-typed password would mean the owner knows the engineer's
- * credentials, which makes every audit entry attributable to two people, and
- * would be a second account-creation path beside the registration one. If no
- * account exists yet this REFUSES and says so — the rule against guessing
- * applies to identity as much as to money.
+ * A second account-creation path beside registration would be a second way to
+ * mint an identity. If no account exists yet this REFUSES and says so — the
+ * rule against guessing applies to identity as much as to money.
  *
  * THE PROFILE IS CREATED INACTIVE. Activation is a separate, audited decision
  * (§46), and a profile that went live the moment it was typed would make the

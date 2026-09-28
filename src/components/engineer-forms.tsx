@@ -55,8 +55,8 @@ function DisciplineSelect({
 /**
  * Add an engineer (§32, §46).
  *
- * It asks for an EMAIL, not a password: the engineer registers themselves and
- * the owner authorises the profile afterwards. If no account carries that
+ * It asks for an EMAIL: the engineer registers as a subscriber (Stage 6) and
+ * the owner authorises the profile afterwards; there is no password to set. If no account carries that
  * address the server refuses and says so, rather than inventing one.
  */
 export function AddEngineerForm({ disciplines }: { disciplines: readonly DisciplineOption[] }) {

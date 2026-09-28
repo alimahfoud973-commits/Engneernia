@@ -37,7 +37,7 @@ const slugs = {
 };
 
 let OWNER_RAW: { actorId: string; actorRole: string };
-const base = { kind: 'USER', displayName: 'T', locale: 'ar', sessionId: 's', twoFactorSatisfied: true, totpEnabled: false } as const;
+const base = { kind: 'USER', displayName: 'T', locale: 'ar', sessionId: 's' } as const;
 let owner: Actor;
 const engineer: Actor = { ...base, userId: ids.engineerUser, role: 'CONTRIBUTOR', contributorId: ids.contributor, contributorActive: true };
 

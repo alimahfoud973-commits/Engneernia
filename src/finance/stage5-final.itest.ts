@@ -59,7 +59,6 @@ const slug = (key: string) => `s5f-${key}-${suffix}`;
 
 const base = {
   kind: 'USER', displayName: 'T', locale: 'ar', sessionId: 's',
-  twoFactorSatisfied: true, totpEnabled: true,
 } as const;
 let owner: Actor;
 let OWNER_RAW: { actorId: string; actorRole: string };

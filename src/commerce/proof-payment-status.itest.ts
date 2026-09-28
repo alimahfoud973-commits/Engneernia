@@ -44,7 +44,6 @@ const slugs = { paid: `w7-paid-${suffix}`, second: `w7-second-${suffix}`, free: 
 let OWNER_RAW: { actorId: string; actorRole: string };
 const base = {
   kind: 'USER', displayName: 'T', locale: 'ar', sessionId: 's',
-  twoFactorSatisfied: true, totpEnabled: false,
 } as const;
 let owner: Actor;
 const asCustomer = (id: string): Actor => ({

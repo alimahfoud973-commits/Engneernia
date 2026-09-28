@@ -52,7 +52,6 @@ const slug = `adj-prod-${suffix}`;
 let OWNER_RAW: { actorId: string; actorRole: string };
 const base = {
   kind: 'USER', displayName: 'Owner Name', locale: 'ar', sessionId: 's',
-  twoFactorSatisfied: true, totpEnabled: false,
 } as const;
 
 let owner: Actor;

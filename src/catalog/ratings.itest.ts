@@ -39,7 +39,6 @@ const ids = {
 let OWNER_RAW: { actorId: string; actorRole: string };
 const base = {
   kind: 'USER', displayName: 'T', locale: 'ar', sessionId: 's',
-  twoFactorSatisfied: true, totpEnabled: false,
 } as const;
 
 const buyer: Actor = {

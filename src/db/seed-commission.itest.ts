@@ -63,7 +63,7 @@ beforeAll(async () => {
   ids.owner = (await ensureTestOwner({ displayName: 'Owner' })).id;
   OWNER_RAW = { actorId: ids.owner, actorRole: 'OWNER' };
   owner = {
-    kind: 'USER', displayName: 'T', locale: 'ar', sessionId: 's', twoFactorSatisfied: true, totpEnabled: false,
+    kind: 'USER', displayName: 'T', locale: 'ar', sessionId: 's',
     userId: ids.owner, role: 'OWNER', contributorId: null, contributorActive: false,
   };
 

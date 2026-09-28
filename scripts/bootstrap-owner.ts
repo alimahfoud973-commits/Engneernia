@@ -3,7 +3,11 @@
  *
  * Run once, against a fresh database:
  *   npm run bootstrap:owner                       (interactive prompts)
- *   OWNER_EMAIL=... OWNER_NAME=... OWNER_PASSWORD=... npm run bootstrap:owner
+ *   OWNER_USERNAME=... OWNER_NAME=... OWNER_PASSWORD=... npm run bootstrap:owner
+ *   (OWNER_EMAIL=... optional)
+ *
+ * The owner signs in with the USERNAME and this PASSWORD (Stage 6) — no
+ * second factor. The password set here is the owner's password.
  *
  * The non-interactive form reads the password from the ENVIRONMENT, never
  * from a command-line argument: argv is visible to every process on the host
@@ -54,15 +58,16 @@ try {
     process.exit(1);
   }
 
-  let email = process.env.OWNER_EMAIL?.trim().toLowerCase() ?? '';
+  let username = process.env.OWNER_USERNAME?.trim().toLowerCase() ?? '';
+  const email = process.env.OWNER_EMAIL?.trim().toLowerCase() || null;
   let displayName = process.env.OWNER_NAME?.trim() ?? '';
   let password = process.env.OWNER_PASSWORD ?? '';
 
-  const needsPrompting = email === '' || displayName === '' || password === '';
+  const needsPrompting = username === '' || displayName === '' || password === '';
   if (needsPrompting) {
     const rl = createInterface({ input: stdin, output: stdout });
     try {
-      if (email === '') email = (await rl.question('Owner email: ')).trim().toLowerCase();
+      if (username === '') username = (await rl.question('Owner username: ')).trim().toLowerCase();
       if (displayName === '') displayName = (await rl.question('Display name: ')).trim();
       if (password === '') password = (await rl.question('Password (min 12 chars): ')).trim();
     } finally {
@@ -70,7 +75,11 @@ try {
     }
   }
 
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error('Invalid email address.');
+  // The same rule as the database's `users_username_format` (migration 0064).
+  if (!/^[a-z0-9][a-z0-9._-]{2,31}$/.test(username)) {
+    throw new Error('Username: 3-32 characters, letters, digits, dot, dash or underscore.');
+  }
+  if (email !== null && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error('Invalid email address.');
   if (displayName.length === 0) throw new Error('Display name is required.');
   if (password.length < MIN_PASSWORD_LENGTH) {
     throw new Error(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
@@ -79,8 +88,8 @@ try {
   const passwordHash = await argonHash(password, ARGON_OPTIONS);
 
   const [created] = await sql<Array<{ id: string }>>`
-    INSERT INTO users (email, password_hash, role, status, display_name, email_verified_at)
-    VALUES (${email}, ${passwordHash}, 'OWNER', 'ACTIVE', ${displayName}, now())
+    INSERT INTO users (username, email, password_hash, role, status, display_name)
+    VALUES (${username}, ${email}, ${passwordHash}, 'OWNER', 'ACTIVE', ${displayName})
     RETURNING id
   `;
 
@@ -90,9 +99,7 @@ try {
             ${sql.json({ role: 'OWNER', bootstrap: true })})
   `;
 
-  console.log(`\nOwner account created: ${email}`);
-  console.log('\nNEXT STEP — enable two-factor authentication before this account');
-  console.log('is used on any network you do not control.');
+  console.log(`\nOwner account created. Sign in at /login/owner as: ${username}`);
 } catch (error) {
   console.error(`\nBootstrap failed: ${(error as Error).message}`);
   process.exitCode = 1;

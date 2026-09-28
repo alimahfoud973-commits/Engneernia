@@ -20,43 +20,33 @@ export const currentActor = cache(async (): Promise<Actor> => {
 });
 
 /**
- * For pages that require a signed-in user. Sends guests to sign in — and sends
- * a session that still owes its second factor to the challenge.
- *
- * Without that second branch the page would render for a half-authenticated
- * session and then show nothing, because the policy layer and RLS both refuse
- * it: the person would see an empty console with no way to understand why.
- * The redirect turns a dead end into the step they actually have to take.
+ * For pages that require a signed-in user. Sends guests to sign in.
  */
 export async function requireActor(returnTo: string): Promise<Actor> {
   const actor = await currentActor();
   if (actor.kind !== 'USER') {
     redirect(`/login?next=${encodeURIComponent(returnTo)}`);
   }
-  if (!actor.twoFactorSatisfied) {
-    redirect(`/login/two-factor?next=${encodeURIComponent(returnTo)}`);
-  }
   return actor;
 }
 
 /**
- * For the admin console. A non-owner is sent away, not told it exists.
+ * For the admin console. A guest is sent to the OWNER's sign-in (username and
+ * password) — the subscriber form could never open this console, because the
+ * phone-and-email path cannot return the owner row. A signed-in non-owner is
+ * sent away, not told the console exists.
  *
- * An owner with NO second factor enrolled is sent to enrol instead. The
- * platform is operated by one account that approves payments, pays engineers
- * and writes ledger corrections; a password is not enough for it, and the
- * deployment checklist has always said so. What was missing was any way to
- * comply — so this is a guided step, not a lockout: /account/security is
- * reachable, and everything else about the account keeps working.
+ * No second factor (Stage 6, owner decision): the owner's password and the
+ * session rules are the whole of it.
  */
 export async function requireOwner(returnTo: string): Promise<Actor> {
-  const actor = await requireActor(returnTo);
+  const actor = await currentActor();
+  if (actor.kind !== 'USER') {
+    redirect(`/login/owner?next=${encodeURIComponent(returnTo)}`);
+  }
   if (!isOwner(actor)) {
     // Not a 403: confirming that an admin console exists is itself a hint.
     redirect('/');
-  }
-  if (actor.kind === 'USER' && !actor.totpEnabled) {
-    redirect(`/account/security?next=${encodeURIComponent(returnTo)}`);
   }
   return actor;
 }

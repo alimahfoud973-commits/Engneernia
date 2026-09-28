@@ -53,7 +53,7 @@ const ids = {
 const PRICE = 2500n;
 
 let OWNER_RAW: { actorId: string; actorRole: string };
-const base = { kind: 'USER', displayName: 'T', locale: 'ar', sessionId: 's', twoFactorSatisfied: true, totpEnabled: false } as const;
+const base = { kind: 'USER', displayName: 'T', locale: 'ar', sessionId: 's' } as const;
 let owner: Actor;
 const customer: Actor = { ...base, userId: ids.customer, role: 'CUSTOMER', contributorId: null, contributorActive: false };
 const engineer: Actor = { ...base, userId: ids.uOk, role: 'CONTRIBUTOR', contributorId: ids.eOk, contributorActive: true };

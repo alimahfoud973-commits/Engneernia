@@ -1,15 +1,14 @@
 /**
  * Test accounts for a local preview run. Development only.
  *
- * Creates an owner with an armed second factor, an engineer with a product and
- * a completed sale, and a customer — so every screen has something real to
- * show. Refuses to run unless NODE_ENV is development.
+ * Sets the owner's password, and creates an engineer with a product and a
+ * customer — so every screen has something real to show. Subscribers and
+ * engineers sign in with phone + email (Stage 6); the owner with username +
+ * password. Refuses to run unless NODE_ENV is development.
  */
 import postgres from 'postgres';
 import { hash as argonHash } from '@node-rs/argon2';
 import { randomUUID } from 'node:crypto';
-import { encryptSecret } from '@/auth/crypto';
-import { generateTotpSecret, generateTotp } from '@/auth/totp';
 
 process.loadEnvFile('.env.local');
 if (process.env.NODE_ENV === 'production') {
@@ -19,17 +18,13 @@ if (process.env.NODE_ENV === 'production') {
 
 const sql = postgres(process.env.DATABASE_MIGRATION_URL!, { onnotice: () => {} });
 const OWNER_PW = 'OwnerPassphrase9!x';
-const USER_PW = 'CorrectHorseBattery9!';
-const secret = generateTotpSecret();
 const t = Date.now();
 
 await sql`SELECT set_config('app.actor_role','OWNER',false)`;
 
-const [owner] = await sql`SELECT id, email FROM users WHERE role='OWNER' LIMIT 1`;
+const [owner] = await sql`SELECT id, username FROM users WHERE role='OWNER' LIMIT 1`;
 if (!owner) { console.error('No owner row. Run bootstrap:owner first.'); process.exit(1); }
-await sql`UPDATE users SET password_hash=${await argonHash(OWNER_PW)},
-            totp_secret_encrypted=${encryptSecret(secret)}, totp_enabled_at=now(),
-            email_verified_at=COALESCE(email_verified_at, now()), status='ACTIVE'
+await sql`UPDATE users SET password_hash=${await argonHash(OWNER_PW)}, status='ACTIVE'
           WHERE id=${owner.id}`;
 
 /*
@@ -68,8 +63,8 @@ const engUser = randomUUID(), contrib = randomUUID(), prod = randomUUID(), buyer
 const [disc] = await sql`SELECT id FROM disciplines WHERE slug = 'civil' LIMIT 1`;
 if (!disc) { console.error('No civil discipline. Run seed:catalog first.'); process.exit(1); }
 
-await sql`INSERT INTO users (id,email,password_hash,role,status,display_name,email_verified_at)
-          VALUES (${engUser},'engineer@preview.local',${await argonHash(USER_PW)},'CONTRIBUTOR','ACTIVE','م. سامر الحلبي',now())`;
+await sql`INSERT INTO users (id,email,phone,role,status,display_name)
+          VALUES (${engUser},'engineer@preview.local','+963900000101','CONTRIBUTOR','ACTIVE','م. سامر الحلبي')`;
 await sql`INSERT INTO contributors (id,user_id,public_slug,settlement_code,display_name,specialization,is_active)
           VALUES (${contrib},${engUser},${'preview-eng-'+t},${'PRV'+t},'م. سامر الحلبي','هندسة مدنية',true)`;
 await sql`INSERT INTO products (id,slug,title_ar,subtitle_ar,description_ar,discipline_id,file_type,status,currency,level,published_at)
@@ -80,8 +75,8 @@ await sql`INSERT INTO product_prices (product_id,amount_minor,currency) VALUES (
 await sql`INSERT INTO commission_agreements (contributor_id,model,engineer_bp,currency)
           VALUES (${contrib},'PERCENTAGE',8000,'USD')`;
 
-await sql`INSERT INTO users (id,email,password_hash,role,status,display_name,country_code,email_verified_at)
-          VALUES (${buyer},'customer@preview.local',${await argonHash(USER_PW)},'CUSTOMER','ACTIVE','عميل المعاينة','SY',now())`;
+await sql`INSERT INTO users (id,email,phone,role,status,display_name,country_code)
+          VALUES (${buyer},'customer@preview.local','+963900000102','CUSTOMER','ACTIVE','عميل المعاينة','SY')`;
 
 /*
  * NO MANUFACTURED SALE HERE.
@@ -98,9 +93,9 @@ await sql`INSERT INTO users (id,email,password_hash,role,status,display_name,cou
  */
 
 console.log(JSON.stringify({
-  owner: { email: owner.email, password: OWNER_PW, totpSecret: secret, codeNow: generateTotp(secret) },
-  engineer: { email: 'engineer@preview.local', password: USER_PW },
-  customer: { email: 'customer@preview.local', password: USER_PW },
+  owner: { username: owner.username, password: OWNER_PW },
+  engineer: { phone: '+963900000101', email: 'engineer@preview.local' },
+  customer: { phone: '+963900000102', email: 'customer@preview.local' },
   productSlug: 'preview-guide-' + t,
 }, null, 2));
 await sql.end();

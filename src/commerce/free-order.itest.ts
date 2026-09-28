@@ -48,7 +48,7 @@ const PAID_SLUG = `f1-paid-${suffix}`;
 const PAID_PRICE = 1500n;
 
 let OWNER_RAW: { actorId: string; actorRole: string };
-const base = { kind: 'USER', displayName: 'T', locale: 'ar', sessionId: 's', twoFactorSatisfied: true, totpEnabled: false } as const;
+const base = { kind: 'USER', displayName: 'T', locale: 'ar', sessionId: 's' } as const;
 let owner: Actor;
 const customer: Actor = { ...base, userId: ids.customer, role: 'CUSTOMER', contributorId: null, contributorActive: false };
 const stranger: Actor = { ...base, userId: ids.stranger, role: 'CUSTOMER', contributorId: null, contributorActive: false };

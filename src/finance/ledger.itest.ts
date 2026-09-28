@@ -70,7 +70,7 @@ const otherSlug = `p6-other-${suffix}`;
 
 let OWNER_RAW: { actorId: string; actorRole: string };
 const base = {
-  kind: 'USER', displayName: 'T', locale: 'ar', sessionId: 's', twoFactorSatisfied: true, totpEnabled: false,
+  kind: 'USER', displayName: 'T', locale: 'ar', sessionId: 's',
 } as const;
 
 let owner: Actor;

@@ -24,27 +24,28 @@ export const users = pgTable(
   'users',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    email: citext('email').notNull(),
-    passwordHash: text('password_hash').notNull(),
+    /**
+     * Stage 6. A subscriber (or engineer) has a phone AND an email, and signs
+     * in with both together; the owner has a username and a password. Neither
+     * pair is enforced on every row by the schema — the registration function
+     * and `users_owner_credentials` (migration 0064) are what guarantee it.
+     */
+    email: citext('email'),
+    /** E.164 (`+9639…`), unique. Never part of a public DTO. */
+    phone: text('phone'),
+    /** The owner's sign-in name. Only the owner row carries one. */
+    username: citext('username'),
+    /** The owner's password (argon2id). NULL for every subscriber and engineer. */
+    passwordHash: text('password_hash'),
     role: userRoleEnum('role').notNull().default('CUSTOMER'),
-    status: userStatusEnum('status').notNull().default('PENDING'),
+    status: userStatusEnum('status').notNull().default('ACTIVE'),
 
     displayName: text('display_name').notNull(),
     locale: text('locale').notNull().default('ar'),
     /** ISO-3166 alpha-2. Drives which payment methods are offered (phase P5). */
     countryCode: text('country_code'),
 
-    emailVerifiedAt: utcTimestamp('email_verified_at'),
-
-    /**
-     * TOTP secret, encrypted at rest with CONFIG_ENCRYPTION_KEY.
-     * Mandatory for OWNER (enforced in the login flow, not by the schema, so
-     * that enabling it is a guided step rather than a lockout).
-     */
-    totpSecretEncrypted: text('totp_secret_encrypted'),
-    totpEnabledAt: utcTimestamp('totp_enabled_at'),
-
-    /** Brute-force controls. Reset on a successful authentication. */
+    /** Brute-force controls for the owner's password. Reset on success. */
     failedLoginCount: integer('failed_login_count').notNull().default(0),
     lockedUntil: utcTimestamp('locked_until'),
     lastLoginAt: utcTimestamp('last_login_at'),
@@ -54,6 +55,8 @@ export const users = pgTable(
   },
   (table) => [
     uniqueIndex('users_email_unique').on(table.email),
+    uniqueIndex('users_phone_unique').on(table.phone),
+    uniqueIndex('users_username_unique').on(table.username),
     index('users_role_status_idx').on(table.role, table.status),
   ],
 );
@@ -79,9 +82,6 @@ export const sessions = pgTable(
     /** Idle expiry is derived from this on each request. */
     lastUsedAt: utcTimestamp('last_used_at').notNull().defaultNow(),
 
-    /** Set once the second factor has been satisfied for this session. */
-    twoFactorVerifiedAt: utcTimestamp('two_factor_verified_at'),
-
     ipHash: text('ip_hash'),
     userAgent: text('user_agent'),
 
@@ -94,35 +94,6 @@ export const sessions = pgTable(
     uniqueIndex('sessions_token_hash_unique').on(table.tokenHash),
     index('sessions_user_idx').on(table.userId),
     index('sessions_expiry_idx').on(table.expiresAt),
-  ],
-);
-
-/**
- * Email verification tokens (owner decision on OPEN-23).
- *
- * Declared here so the schema stays the single description of the database,
- * but NOTHING reads this table through Drizzle: row-level security denies it
- * to `app_user` outright, and the only way in is the three SECURITY DEFINER
- * functions in migration 0039. As with sessions, only a SHA-256 hash of the
- * token is stored — a leak of this table yields no usable link.
- */
-export const emailVerificationTokens = pgTable(
-  'email_verification_tokens',
-  {
-    id: uuid('id').primaryKey().defaultRandom(),
-    userId: uuid('user_id')
-      .notNull()
-      .references(() => users.id, { onDelete: 'cascade' }),
-    tokenHash: text('token_hash').notNull(),
-    expiresAt: utcTimestamp('expires_at').notNull(),
-    /** Set the moment the link is redeemed, or when a newer one supersedes it. */
-    consumedAt: utcTimestamp('consumed_at'),
-    createdAt: createdAt(),
-  },
-  (table) => [
-    uniqueIndex('email_verification_tokens_hash_unique').on(table.tokenHash),
-    index('email_verification_tokens_user_idx').on(table.userId),
-    index('email_verification_tokens_expiry_idx').on(table.expiresAt),
   ],
 );
 

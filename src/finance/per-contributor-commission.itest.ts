@@ -56,7 +56,6 @@ const C_FIXED = 500n; // engineer C is paid a flat $5.00 of their own slice
 let OWNER_RAW: { actorId: string; actorRole: string };
 const base = {
   kind: 'USER', displayName: 'T', locale: 'ar', sessionId: 's',
-  twoFactorSatisfied: true, totpEnabled: false,
 } as const;
 
 let owner: Actor;

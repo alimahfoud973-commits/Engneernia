@@ -32,15 +32,7 @@ export default async function LoginPage({
   const { next } = await searchParams;
 
   const actor = await currentActor();
-  if (actor.kind === 'USER') {
-    // A session mid-login belongs on the challenge, not back at the start and
-    // not at the destination it has not earned yet.
-    redirect(
-      actor.twoFactorSatisfied
-        ? safeReturnPath(next)
-        : `/login/two-factor?next=${encodeURIComponent(safeReturnPath(next))}`,
-    );
-  }
+  if (actor.kind === 'USER') redirect(safeReturnPath(next));
 
   return (
     <>
@@ -49,14 +41,14 @@ export default async function LoginPage({
         <header className="flex flex-col gap-2">
           <h1 className="text-2xl font-bold">تسجيل الدخول</h1>
           <p className="text-sm text-[var(--color-ink-soft)]">
-            ادخل إلى حسابك لمتابعة طلباتك وتنزيل مشترياتك.
+            ادخل برقم هاتفك وبريدك الإلكتروني لمتابعة طلباتك وتنزيل مشترياتك.
           </p>
         </header>
         <LoginForm next={next ?? null} />
 
         <p className="text-sm text-[var(--color-ink-soft)]">
           لا حساب لك بعد؟{' '}
-          <Link href="/register" className="font-semibold text-[var(--color-accent)] hover:underline">
+          <Link href={next ? `/register?next=${encodeURIComponent(next)}` : '/register'} className="font-semibold text-[var(--color-accent)] hover:underline">
             أنشئ حساباً
           </Link>
         </p>

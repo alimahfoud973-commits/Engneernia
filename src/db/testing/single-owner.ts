@@ -21,42 +21,45 @@ import { withRawActorContext } from '@/db/actor-context';
  */
 
 export const TEST_OWNER_EMAIL = 'test-owner@test.local';
+/** The owner signs in with a username (Stage 6). */
+export const TEST_OWNER_USERNAME = 'test-owner';
 const CTX = { actorId: '00000000-0000-0000-0000-0000000000ff', actorRole: 'OWNER' };
 
 export interface TestOwnerPatch {
   /** Some files assert on the name the owner acted under. */
   readonly displayName?: string;
   readonly passwordHash?: string;
-  readonly totpSecretEncrypted?: string | null;
-  readonly totpEnabledAt?: Date | null;
 }
 
 export interface TestOwner {
   readonly id: string;
   /**
-   * The address the owner row ACTUALLY has — not the constant above.
+   * The username the owner row ACTUALLY has — not the constant above.
    *
    * On a developer's database `bootstrap:owner` may already have created the
-   * one owner under a real address, and this fixture then adopts that row
+   * one owner under another name, and this fixture then adopts that row
    * rather than making a second one it is not allowed to make. A caller that
-   * looks the owner up by email (login.itest.ts does, because that is what a
-   * person types) must use this, and assuming the constant is how three
-   * two-factor tests failed the first time a real owner existed.
+   * signs the owner in (login.itest.ts) must use this; assuming the constant
+   * is how three tests failed the first time a real owner existed.
    */
-  readonly email: string;
+  readonly username: string;
+  /** May be null: the owner needs no email since Stage 6. */
+  readonly email: string | null;
 }
 
 export async function ensureTestOwner(patch?: TestOwnerPatch): Promise<TestOwner> {
   return withRawActorContext(CTX, async (tx) => {
     await tx.execute(sql`
-      INSERT INTO users (email, password_hash, role, status, display_name, email_verified_at)
-      VALUES (${TEST_OWNER_EMAIL}, ${patch?.passwordHash ?? 'x'}, 'OWNER', 'ACTIVE',
-              ${patch?.displayName ?? 'Owner'}, now())
+      INSERT INTO users (username, email, password_hash, role, status, display_name)
+      VALUES (${TEST_OWNER_USERNAME}, ${TEST_OWNER_EMAIL}, ${patch?.passwordHash ?? 'x'}, 'OWNER', 'ACTIVE',
+              ${patch?.displayName ?? 'Owner'})
       ON CONFLICT DO NOTHING
     `);
 
-    const found = await tx.execute(sql`SELECT id, email::text AS email FROM users WHERE role = 'OWNER'`);
-    const row = (found as unknown as Array<{ id: string; email: string }>)[0];
+    const found = await tx.execute(sql`
+      SELECT id, username::text AS username, email::text AS email FROM users WHERE role = 'OWNER'
+    `);
+    const row = (found as unknown as Array<{ id: string; username: string; email: string | null }>)[0];
     if (!row) throw new Error('No owner row after ensureTestOwner — is migration 0041 applied?');
 
     // Applied as an update so the caller gets what it asked for even when the
@@ -66,8 +69,6 @@ export async function ensureTestOwner(patch?: TestOwnerPatch): Promise<TestOwner
         UPDATE users SET
           display_name = COALESCE(${patch.displayName ?? null}, display_name),
           password_hash = COALESCE(${patch.passwordHash ?? null}, password_hash),
-          totp_secret_encrypted = ${patch.totpSecretEncrypted ?? null},
-          totp_enabled_at = ${patch.totpEnabledAt?.toISOString() ?? null}::timestamptz,
           status = 'ACTIVE',
           failed_login_count = 0,
           locked_until = NULL,
@@ -76,6 +77,6 @@ export async function ensureTestOwner(patch?: TestOwnerPatch): Promise<TestOwner
       `);
     }
 
-    return { id: row.id, email: row.email };
+    return { id: row.id, username: row.username, email: row.email };
   });
 }

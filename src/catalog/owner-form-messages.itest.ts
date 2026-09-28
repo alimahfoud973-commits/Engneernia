@@ -56,7 +56,7 @@ beforeAll(async () => {
   ids.owner = (await ensureTestOwner({ displayName: 'Owner' })).id;
   OWNER_RAW = { actorId: ids.owner, actorRole: 'OWNER' };
   owner = {
-    kind: 'USER', displayName: 'T', locale: 'ar', sessionId: 's', twoFactorSatisfied: true, totpEnabled: true,
+    kind: 'USER', displayName: 'T', locale: 'ar', sessionId: 's',
     userId: ids.owner, role: 'OWNER', contributorId: null, contributorActive: false,
   };
   await withRawActorContext(OWNER_RAW, async (tx) => {
@@ -158,7 +158,7 @@ describe('W10 — adding an engineer asks only for steps that exist', () => {
     const [user] = await withRawActorContext(OWNER_RAW, (tx) =>
       tx.select({ email: users.email }).from(users).where(eq(users.id, ids.customer)));
     const added = await addEngineer(owner, {
-      email: user!.email, displayName: 'مهندس جديد', publicSlug: `w10-eng-${suffix}`, settlementCode: `W10E${suffix}`,
+      email: user!.email!, displayName: 'مهندس جديد', publicSlug: `w10-eng-${suffix}`, settlementCode: `W10E${suffix}`,
     });
     expect(added.contributorId).toBeTruthy();
   });

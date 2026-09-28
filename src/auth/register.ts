@@ -4,89 +4,88 @@ import { withRawActorContext } from '@/db/actor-context';
 import { recordAudit } from '@/audit/log';
 import { GUEST } from '@/authz/actor';
 import { REGISTRATION_RULES, consumeRateLimit } from '@/lib/rate-limit';
-import { assertPasswordAcceptable, hashPassword } from './password';
+import { normalizePhone } from '@/lib/phone';
+import { ValidationError } from '@/lib/errors';
+import { succeed } from './login';
+import type { CreatedSession } from './session';
 
 /**
  * ===========================================================================
- * SELF-REGISTRATION (owner decision on OPEN-23, revised by 0056)
+ * SUBSCRIBER REGISTRATION (Stage 6, owner decision)
  * ===========================================================================
- * Anyone can create a customer account with an address and a password, and
- * sign in with them straight away. There is no confirmation step and no mail
- * at registration — the owner reversed the email confirmation OPEN-23 first
- * chose. That makes this the one path where a stranger can create a row in
- * `users`, so three properties matter more here than anywhere else:
+ * A name, a phone and an email — nothing else. The account is an ACTIVE
+ * CUSTOMER from its first moment and is signed in at once, so the subscriber
+ * can buy straight away: no approval, no confirmation link, no password.
  *
- *   1. THE FORM ANSWERS THE SAME THING EVERY TIME. Whether the address is new
- *      or already has an account, the browser is told the same sentence.
- *      Anything else turns the form into a way to ask whether a given person
- *      buys from this platform (§36).
+ * What still holds, because this is the one path where a stranger creates a
+ * row in `users`:
  *
- *   2. AN EXISTING ACCOUNT IS NEVER CHANGED. Registering an address that is
- *      already taken does nothing at all — no new password, no new name. The
- *      account is usable from its first moment, so replacing anything on it
- *      would hand it to whoever typed the address second.
+ *   1. THE ROLE AND STATUS ARE NOT INPUTS. `app_register_customer` writes
+ *      CUSTOMER and ACTIVE itself; nothing here can name either (§32, §46).
+ *   2. AN EXISTING ACCOUNT IS NEVER TOUCHED. A phone or an email that already
+ *      belongs to someone returns ALREADY_EXISTS and changes nothing — and the
+ *      answer does not say which of the two was taken.
+ *   3. THE DATABASE VALIDATES TOO. The function refuses a malformed name,
+ *      phone or email on its own, and the unique indexes decide two
+ *      simultaneous registrations of one number.
  *
- *   3. THE ROLE IS NOT AN INPUT. `app_register_customer` hard-codes CUSTOMER.
- *      Nothing on this path can name a role, so no future missing validation
- *      can promote anyone (§32, §46).
+ * An existing number cannot be answered like a new one — a new one is signed
+ * in, which the caller can see — so "already registered" is visible. The
+ * rate limits below are what keep that from being a fast way to test numbers.
  * ===========================================================================
  */
 
-export type RegisterOutcome = 'CREATED' | 'ALREADY_EXISTS';
+export type RegisterResult =
+  | { readonly outcome: 'CREATED'; readonly userId: string; readonly session: CreatedSession }
+  | { readonly outcome: 'ALREADY_EXISTS' };
 
 export interface RegisterRequest {
-  readonly email: string;
-  readonly password: string;
   readonly displayName: string;
+  readonly phone: string;
+  readonly email: string;
   readonly locale?: string;
   readonly ip?: string | null;
   readonly userAgent?: string | null;
 }
 
-/**
- * Accepts, or throws. Never returns a value the caller could turn into a
- * different message for the browser — the outcome is returned for the audit
- * log and the tests, and the action deliberately ignores it.
- */
-export async function registerCustomer(request: RegisterRequest): Promise<RegisterOutcome> {
-  /**
-   * Lowercased before anything else.
-   *
-   * `users.email` is citext and every lookup now casts to it, so matching no
-   * longer depends on this. Storing one canonical form anyway keeps the column
-   * consistent with the accounts `bootstrap-owner.ts` creates, and keeps the
-   * rate-limit bucket for `Ali@x.com` and `ali@x.com` the same bucket — which
-   * it would not otherwise be, since the bucket key is a hash of the string.
-   */
-  const email = request.email.trim().toLowerCase();
-  const displayName = request.displayName.trim();
+const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
-  assertPasswordAcceptable(request.password);
+export async function registerCustomer(request: RegisterRequest): Promise<RegisterResult> {
+  const displayName = request.displayName.trim();
+  const phone = normalizePhone(request.phone);
+  const email = request.email.trim().toLowerCase();
+
+  if (displayName.length < 2 || displayName.length > 80) {
+    throw new ValidationError('الاسم بين حرفين وثمانين حرفاً');
+  }
+  if (!phone) {
+    throw new ValidationError('رقم الهاتف غير صالح. اكتبه بالصيغة الدولية مثل +963933123456 أو 00963933123456');
+  }
+  if (email.length > 254 || !EMAIL_PATTERN.test(email)) {
+    throw new ValidationError('البريد الإلكتروني غير صالح');
+  }
 
   await consumeRateLimit('register:ip', request.ip ?? 'unknown', REGISTRATION_RULES.perIp);
-  await consumeRateLimit('register:address', email, REGISTRATION_RULES.perAddress);
+  await consumeRateLimit('register:address', phone, REGISTRATION_RULES.perAddress);
 
-  const passwordHash = await hashPassword(request.password);
-
-  const rows = await getSql()<Array<{ user_id: string; outcome: RegisterOutcome }>>`
-    SELECT * FROM app_register_customer(
-      ${email},
-      ${passwordHash},
-      ${displayName},
-      ${request.locale ?? 'ar'}
-    )
+  const rows = await getSql()<Array<{ user_id: string | null; outcome: 'CREATED' | 'ALREADY_EXISTS' }>>`
+    SELECT * FROM app_register_customer(${displayName}, ${phone}, ${email}, ${request.locale ?? 'ar'})
   `;
-
   const row = rows[0];
   if (!row) throw new Error('app_register_customer returned no row');
 
-  await audit('USER_REGISTERED', row.user_id, request, { outcome: row.outcome });
-  return row.outcome;
+  if (row.outcome !== 'CREATED' || !row.user_id) {
+    await audit('already-exists', request, { outcome: 'ALREADY_EXISTS' });
+    return { outcome: 'ALREADY_EXISTS' };
+  }
+
+  await audit(row.user_id, request, { outcome: 'CREATED', role: 'CUSTOMER', status: 'ACTIVE' });
+  const signedIn = await succeed(row.user_id, 'CUSTOMER', request);
+  return { outcome: 'CREATED', userId: row.user_id, session: signedIn.session };
 }
 
 async function audit(
-  action: 'USER_REGISTERED' | 'USER_EMAIL_VERIFIED',
-  userId: string,
+  entityId: string,
   request: { ip?: string | null; userAgent?: string | null },
   after: Record<string, unknown>,
 ): Promise<void> {
@@ -94,14 +93,12 @@ async function audit(
   // policy permits an unauthenticated append precisely for paths like this.
   await withRawActorContext({ actorId: '', actorRole: 'GUEST' }, (tx) =>
     recordAudit(tx, GUEST, {
-      action,
+      action: 'USER_REGISTERED',
       entityType: 'user',
-      entityId: userId,
+      entityId,
       after,
       ip: request.ip ?? null,
       userAgent: request.userAgent ?? null,
     }),
   );
 }
-
-export const __testing = { audit };

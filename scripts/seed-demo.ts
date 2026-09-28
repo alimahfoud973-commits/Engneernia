@@ -11,7 +11,6 @@
  * Never run this against production.
  */
 import postgres from 'postgres';
-import { hash as argonHash } from '@node-rs/argon2';
 
 try {
   process.loadEnvFile('.env.local');
@@ -153,14 +152,11 @@ try {
     await sql`DELETE FROM users WHERE email LIKE 'demo-%@example.com'`;
     console.log('Demonstration data removed.');
   } else {
-    const passwordHash = await argonHash('demo-account-not-for-production', {
-      algorithm: 2, memoryCost: 19_456, timeCost: 2, parallelism: 1,
-    });
-
+    // Engineers sign in with phone + email and have no password (Stage 6).
     const [user] = await sql<Array<{ id: string }>>`
-      INSERT INTO users (email, password_hash, role, status, display_name, email_verified_at)
-      VALUES ('demo-engineer@example.com', ${passwordHash}, 'CONTRIBUTOR', 'ACTIVE',
-              'م. عرض توضيحي', now())
+      INSERT INTO users (email, phone, role, status, display_name)
+      VALUES ('demo-engineer@example.com', '+963900000001', 'CONTRIBUTOR', 'ACTIVE',
+              'م. عرض توضيحي')
       ON CONFLICT (email) DO UPDATE SET display_name = EXCLUDED.display_name
       RETURNING id
     `;

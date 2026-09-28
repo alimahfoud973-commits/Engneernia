@@ -20,16 +20,13 @@ const base = {
   displayName: 'Test',
   locale: 'ar',
   sessionId: 'session-1',
-  twoFactorSatisfied: true,
-  totpEnabled: false,
   contributorId: null,
   contributorActive: false,
 } as const;
 
 const customer: Actor = { ...base, userId: 'u-customer', role: 'CUSTOMER' };
 const engineer: Actor = { ...base, userId: 'u-engineer', role: 'CONTRIBUTOR', contributorId: 'c-1', contributorActive: true };
-const owner: Actor = { ...base, userId: 'u-owner', role: 'OWNER', totpEnabled: true };
-const ownerOwingSecondFactor: Actor = { ...owner, twoFactorSatisfied: false };
+const owner: Actor = { ...base, userId: 'u-owner', role: 'OWNER' };
 
 describe('accountEntry', () => {
   it('offers a visitor the sign-in page', () => {
@@ -42,11 +39,6 @@ describe('accountEntry', () => {
     ['owner', owner],
   ])('offers a signed-in %s their account', (_name, actor) => {
     expect(accountEntry(actor)).toEqual({ href: '/account', label: 'الحساب' });
-  });
-
-  it('treats a session still owing its second factor as signed in', () => {
-    // /account then sends it to /login/two-factor — the step it has to take.
-    expect(accountEntry(ownerOwingSecondFactor).href).toBe('/account');
   });
 });
 

@@ -21,6 +21,7 @@ const CTX = { actorId: randomUUID(), actorRole: 'OWNER' };
 const suffix = Date.now();
 const candidate = randomUUID();
 const disabled = randomUUID();
+const bare = randomUUID();
 
 let ownerId = '';
 
@@ -35,8 +36,16 @@ beforeAll(async () => {
   await withRawActorContext(CTX, async (tx) => {
     await tx.insert(users).values([
       {
+        // An heir must be able to sign in as the owner (Stage 6): a username
+        // and a password, or `users_owner_credentials` refuses the promotion.
         id: candidate, email: `heir+${suffix}@test.local`, passwordHash: 'x',
+        username: `heir-${suffix}`,
         role: 'CUSTOMER', status: 'ACTIVE', displayName: 'Heir',
+      },
+      {
+        // A subscriber as registration makes one: phone + email, no password.
+        id: bare, email: `bare-heir+${suffix}@test.local`, phone: `+96395${String(suffix).slice(-7)}`,
+        role: 'CUSTOMER', status: 'ACTIVE', displayName: 'Bare Heir',
       },
       {
         id: disabled, email: `disabled-heir+${suffix}@test.local`, passwordHash: 'x',
@@ -51,7 +60,7 @@ afterAll(async () => {
   const db = privileged();
   try {
     await db`SELECT app_transfer_ownership(${ownerId}::uuid)`;
-    await db`DELETE FROM users WHERE id IN (${candidate}::uuid, ${disabled}::uuid)`;
+    await db`DELETE FROM users WHERE id IN (${candidate}::uuid, ${disabled}::uuid, ${bare}::uuid)`;
   } finally {
     await db.end();
   }
@@ -75,8 +84,8 @@ describe('a second owner cannot be created', () => {
     const db = privileged();
     try {
       await expect(db`
-        INSERT INTO users (email, password_hash, role, status, display_name)
-        VALUES (${`second+${suffix}@test.local`}, 'x', 'OWNER', 'ACTIVE', 'Second Owner')
+        INSERT INTO users (email, username, password_hash, role, status, display_name)
+        VALUES (${`second+${suffix}@test.local`}, ${`second-${suffix}`}, 'x', 'OWNER', 'ACTIVE', 'Second Owner')
       `).rejects.toThrow(/users_single_owner/);
     } finally {
       await db.end();
@@ -180,6 +189,21 @@ describe('handover', () => {
       await expect(
         db`SELECT app_transfer_ownership(${disabled}::uuid)`,
       ).rejects.toThrow(/DISABLED|not ACTIVE/i);
+    } finally {
+      await db.end();
+    }
+    expect(await ownerCount()).toBe(1);
+  });
+
+  it('refuses an heir who could not sign in as the owner — no username, no password', async () => {
+    const db = privileged();
+    try {
+      await expect(
+        db`SELECT app_transfer_ownership(${bare}::uuid)`,
+      ).rejects.toThrow(/users_owner_credentials/);
+      // The whole transfer rolled back: the demotion before it did not stick.
+      const rows = await db<Array<{ id: string }>>`SELECT id FROM users WHERE role = 'OWNER'`;
+      expect(rows.map((r) => r.id)).toEqual([candidate]);
     } finally {
       await db.end();
     }

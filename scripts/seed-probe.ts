@@ -4,7 +4,8 @@
  * =============================================================================
  *   node --experimental-strip-types scripts/seed-probe.ts
  *
- * `scripts/security-probe.mjs` needs two accounts it can sign in as and two
+ * `scripts/security-probe.mjs` needs two accounts it can sign in as — the owner
+ * (username + password) and an engineer (phone + email, Stage 6) — and two
  * ids belonging to SOMEBODY ELSE — a settlement and a payment receipt — so it
  * can prove that asking for them over HTTP returns nothing.
  *
@@ -13,13 +14,13 @@
  * that stops being true without anybody noticing. This makes it one command,
  * and prints the exact environment to paste.
  *
- * STAGING ONLY. It creates accounts with a known password and a settlement
+ * STAGING ONLY. It gives the owner a known password and creates a settlement
  * that was never earned. Pointing it at production would put a usable
  * credential in a real database — so it refuses to run against one.
  * =============================================================================
  */
 import postgres from 'postgres';
-import { createCipheriv, createHash, randomBytes, randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { hash as argonHash } from '@node-rs/argon2';
 
 const url = process.env.DATABASE_MIGRATION_URL ?? process.env.DATABASE_SUPERUSER_URL;
@@ -56,57 +57,6 @@ if (process.env.NODE_ENV === 'production' || process.env.ALLOW_PROBE_SEED !== 'y
  */
 const PASSWORD = `probe-${randomBytes(24).toString('base64url')}`;
 
-/**
- * THE PROBE'S OWNER IS TWO-FACTOR PROTECTED, like a real one.
- *
- * The admin console now refuses an owner with no second factor enrolled and
- * sends them to /account/security instead. That is the platform being correct,
- * and it made the probe's positive control fail — the check that proves the
- * owner CAN reach the finance report, which is what stops the whole probe from
- * passing because everything is broken.
- *
- * So the fixture arms one. The base32 and the AES-GCM envelope are written out
- * here rather than imported from `src/`, because this script runs outside the
- * application's module resolution — and because a fixture that shares the
- * application's crypto would keep agreeing with it even if it were wrong.
- */
-const BASE32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-
-function base32Encode(bytes: Buffer): string {
-  let bits = 0;
-  let value = 0;
-  let out = '';
-  for (const byte of bytes) {
-    value = (value << 8) | byte;
-    bits += 8;
-    while (bits >= 5) {
-      out += BASE32[(value >>> (bits - 5)) & 31];
-      bits -= 5;
-    }
-  }
-  if (bits > 0) out += BASE32[(value << (5 - bits)) & 31];
-  return out;
-}
-
-/** Mirrors src/auth/crypto.ts: v1.<iv>.<tag>.<ciphertext>, all base64url. */
-function encryptSecret(plaintext: string, configKey: string): string {
-  const key = createHash('sha256').update(configKey, 'utf8').digest();
-  const iv = randomBytes(12);
-  const cipher = createCipheriv('aes-256-gcm', key, iv);
-  const ciphertext = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
-  return [
-    'v1', iv.toString('base64url'),
-    cipher.getAuthTag().toString('base64url'),
-    ciphertext.toString('base64url'),
-  ].join('.');
-}
-
-const CONFIG_KEY = process.env.CONFIG_ENCRYPTION_KEY;
-if (!CONFIG_KEY) {
-  console.error('CONFIG_ENCRYPTION_KEY must be set: the probe owner needs an armed second factor.');
-  process.exit(1);
-}
-const TOTP_SECRET = base32Encode(randomBytes(20));
 const sql = postgres(url, { max: 1 });
 const stamp = Date.now();
 
@@ -133,7 +83,10 @@ try {
     method: randomUUID(), settlement: randomUUID(), proof: randomUUID(),
   };
   const engineerEmail = `probe-engineer+${stamp}@test.local`;
-  let ownerEmail = '';
+  // E.164, unique per run: +96390 + the last 7 digits of the stamp + a digit.
+  const phone = (n: number) => `+96390${String(stamp).slice(-7)}${n}`;
+  const engineerPhone = phone(1);
+  let ownerUsername = '';
   let foreignInvoiceId = '';
 
   await sql.begin(async (tx) => {
@@ -142,30 +95,27 @@ try {
   // --- the owner --------------------------------------------------------
   // There is exactly one (migration 0041), so the fixture ADOPTS it rather
   // than making a second — which the unique index would refuse anyway.
-  const [owner] = await tx<Array<{ id: string; email: string }>>`
-    SELECT id, email::text AS email FROM users WHERE role = 'OWNER' LIMIT 1
+  const [owner] = await tx<Array<{ id: string; username: string }>>`
+    SELECT id, username::text AS username FROM users WHERE role = 'OWNER' LIMIT 1
   `;
   if (!owner) {
     throw new Error('No owner account. Run `npm run bootstrap:owner` first.');
   }
-  ownerEmail = owner.email;
+  ownerUsername = owner.username;
   await tx`
     UPDATE users SET password_hash = ${passwordHash}, status = 'ACTIVE',
-                     email_verified_at = now(), failed_login_count = 0,
-                     locked_until = NULL,
-                     totp_secret_encrypted = ${encryptSecret(TOTP_SECRET, CONFIG_KEY)},
-                     totp_enabled_at = now()
+                     failed_login_count = 0, locked_until = NULL
      WHERE id = ${owner.id}::uuid
   `;
 
   // --- two engineers, so one can be asked for the other's statement -----
 
   await tx`
-    INSERT INTO users (id, email, password_hash, role, status, display_name, email_verified_at)
+    INSERT INTO users (id, email, phone, role, status, display_name)
     VALUES
-      (${ids.engineerUser}::uuid, ${engineerEmail}, ${passwordHash}, 'CONTRIBUTOR', 'ACTIVE', 'Probe Engineer', now()),
-      (${ids.strangerUser}::uuid, ${`probe-stranger+${stamp}@test.local`}, ${passwordHash}, 'CONTRIBUTOR', 'ACTIVE', 'Probe Stranger', now()),
-      (${ids.customer}::uuid, ${`probe-customer+${stamp}@test.local`}, ${passwordHash}, 'CUSTOMER', 'ACTIVE', 'Probe Customer', now())
+      (${ids.engineerUser}::uuid, ${engineerEmail}, ${engineerPhone}, 'CONTRIBUTOR', 'ACTIVE', 'Probe Engineer'),
+      (${ids.strangerUser}::uuid, ${`probe-stranger+${stamp}@test.local`}, ${phone(2)}, 'CONTRIBUTOR', 'ACTIVE', 'Probe Stranger'),
+      (${ids.customer}::uuid, ${`probe-customer+${stamp}@test.local`}, ${phone(3)}, 'CUSTOMER', 'ACTIVE', 'Probe Customer')
   `;
 
   await tx`
@@ -224,7 +174,7 @@ try {
   /**
    * CLEAR THE RATE-LIMIT BUCKETS.
    *
-   * The probe signs in several times and registers three accounts. Run twice
+   * The probe signs in several times and registers accounts. Run twice
    * in a row it trips the platform's own limiters — and then reports that the
    * engineer cannot sign in, and that two registration answers differ. Both
    * read exactly like security failures and neither is one.
@@ -245,11 +195,10 @@ try {
 
   console.log('\nProbe fixtures created. Export these, then run the probe:\n');
   console.log('# The password is generated per run and is printed ONLY here.');
-  console.log(`export PROBE_OWNER_EMAIL='${ownerEmail}'`);
+  console.log(`export PROBE_OWNER_USERNAME='${ownerUsername}'`);
   console.log(`export PROBE_OWNER_PASSWORD='${PASSWORD}'`);
-  console.log(`export PROBE_OWNER_TOTP_SECRET='${TOTP_SECRET}'`);
+  console.log(`export PROBE_ENGINEER_PHONE='${engineerPhone}'`);
   console.log(`export PROBE_ENGINEER_EMAIL='${engineerEmail}'`);
-  console.log(`export PROBE_ENGINEER_PASSWORD='${PASSWORD}'`);
   console.log(`export PROBE_FOREIGN_SETTLEMENT_ID='${ids.settlement}'`);
   console.log(`export PROBE_FOREIGN_PROOF_ID='${ids.proof}'`);
   if (foreignInvoiceId) {

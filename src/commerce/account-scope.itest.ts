@@ -44,7 +44,7 @@ const SLUG1 = `w12-one-${suffix}`;
 const SLUG2 = `w12-two-${suffix}`;
 
 let OWNER_RAW: { actorId: string; actorRole: string };
-const base = { kind: 'USER', displayName: 'T', locale: 'ar', sessionId: 's', twoFactorSatisfied: true, totpEnabled: false } as const;
+const base = { kind: 'USER', displayName: 'T', locale: 'ar', sessionId: 's' } as const;
 let owner: Actor;
 const buyerA: Actor = { ...base, userId: ids.a, role: 'CUSTOMER', contributorId: null, contributorActive: false };
 const buyerB: Actor = { ...base, userId: ids.b, role: 'CUSTOMER', contributorId: null, contributorActive: false };

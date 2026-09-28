@@ -4,34 +4,101 @@ import { withRawActorContext } from '@/db/actor-context';
 import { recordAudit } from '@/audit/log';
 import { GUEST, type Role } from '@/authz/actor';
 import { LOCKOUT, LOGIN_RULES, consumeRateLimit } from '@/lib/rate-limit';
+import { normalizePhone } from '@/lib/phone';
 import { verifyPassword, wasteTimeLikeAVerification } from './password';
 import { createSession, type CreatedSession } from './session';
-import { decryptSecret } from './crypto';
-import { verifyTotp } from './totp';
 
 /**
  * ===========================================================================
- * LOGIN
+ * SIGNING IN — TWO DOORS (Stage 6, owner decision)
  * ===========================================================================
- * Three defences layered, because each covers what the others miss:
+ * A SUBSCRIBER or ENGINEER signs in with their phone AND their email. There
+ * is no password: both must belong to the same account, and the database
+ * answers only on a full match (`app_auth_lookup_member`). That function
+ * cannot return the owner — the OWNER role is excluded in SQL, so knowing the
+ * owner's phone and email opens nothing.
  *
- *   1. RATE LIMIT per IP and per account — blunts distributed guessing.
- *   2. ACCOUNT LOCKOUT after repeated failures — blunts targeted guessing.
- *   3. UNIFORM TIMING AND MESSAGING — an attempt against an unknown address
- *      costs the same time and returns the same answer as one against a known
- *      address, so the login form cannot be used to enumerate the user table.
+ * The OWNER signs in with a username and a password, through a function that
+ * can return the owner row and nothing else (`app_auth_lookup_owner`).
+ *
+ * Neither phone nor email is a secret. The owner accepted that (DECISIONS.md,
+ * Stage 6); what this file adds is what can still be added:
+ *   1. RATE LIMITS per IP and per identifier, counted BEFORE the lookup, so an
+ *      unknown identifier costs exactly what a known one does;
+ *   2. ONE ANSWER for every mismatch — an unknown phone, a known phone with
+ *      another email, an unknown username and a wrong password all read the
+ *      same. Only a caller who presented the account's full credentials learns
+ *      that it is disabled;
+ *   3. for the owner's password, the ACCOUNT LOCKOUT and uniform timing the
+ *      password path always had.
  * ===========================================================================
  */
 
 export type LoginOutcome =
   | { readonly status: 'SUCCESS'; readonly userId: string; readonly role: Role; readonly session: CreatedSession }
-  | { readonly status: 'TWO_FACTOR_REQUIRED'; readonly userId: string; readonly session: CreatedSession }
   | { readonly status: 'INVALID_CREDENTIALS' }
   | { readonly status: 'ACCOUNT_LOCKED'; readonly until: Date }
-  | { readonly status: 'ACCOUNT_DISABLED' }
-  | { readonly status: 'EMAIL_NOT_VERIFIED' };
+  | { readonly status: 'ACCOUNT_DISABLED' };
 
-interface LookupRow {
+interface RequestContext {
+  readonly ip?: string | null;
+  readonly userAgent?: string | null;
+  readonly correlationId?: string | null;
+}
+
+export interface MemberLoginRequest extends RequestContext {
+  readonly phone: string;
+  readonly email: string;
+}
+
+interface MemberRow {
+  id: string;
+  role: Role;
+  status: 'ACTIVE' | 'DISABLED' | 'PENDING';
+  display_name: string;
+}
+
+/** A subscriber or an engineer: phone + email, one account. */
+export async function attemptMemberLogin(request: MemberLoginRequest): Promise<LoginOutcome> {
+  const phone = normalizePhone(request.phone);
+  const email = request.email.trim().toLowerCase();
+
+  // Counted before anything is looked up, and keyed on what was TYPED when it
+  // is not a number at all — a malformed phone is still an attempt.
+  await consumeRateLimit('login:ip', request.ip ?? 'unknown', LOGIN_RULES.perIp);
+  await consumeRateLimit('login:member', phone ?? request.phone.trim(), LOGIN_RULES.perAccount);
+
+  if (!phone || email.length === 0) {
+    await audit(null, null, 'LOGIN_FAILED', 'unknown-member', request);
+    return { status: 'INVALID_CREDENTIALS' };
+  }
+
+  const rows = await getSql()<MemberRow[]>`
+    SELECT * FROM app_auth_lookup_member(${phone}, ${email})
+  `;
+  const user = rows[0];
+
+  if (!user) {
+    await audit(null, null, 'LOGIN_FAILED', 'unknown-member', request);
+    return { status: 'INVALID_CREDENTIALS' };
+  }
+
+  // Both credentials matched, so saying WHY they cannot get in is a remedy,
+  // not a disclosure.
+  if (user.status !== 'ACTIVE') {
+    await audit(user.id, user.role, 'LOGIN_FAILED', user.id, request);
+    return { status: 'ACCOUNT_DISABLED' };
+  }
+
+  return succeed(user.id, user.role, request);
+}
+
+export interface OwnerLoginRequest extends RequestContext {
+  readonly username: string;
+  readonly password: string;
+}
+
+interface OwnerRow {
   id: string;
   password_hash: string;
   role: Role;
@@ -39,36 +106,25 @@ interface LookupRow {
   display_name: string;
   locked_until: Date | string | null;
   failed_login_count: number;
-  totp_secret_encrypted: string | null;
-  totp_enabled_at: Date | string | null;
 }
 
-export interface LoginRequest {
-  readonly email: string;
-  readonly password: string;
-  readonly ip?: string | null;
-  readonly userAgent?: string | null;
-  readonly correlationId?: string | null;
-}
+/** The owner: username + password. No second factor (owner decision). */
+export async function attemptOwnerLogin(request: OwnerLoginRequest): Promise<LoginOutcome> {
+  const username = request.username.trim().toLowerCase();
 
-export async function attemptLogin(request: LoginRequest): Promise<LoginOutcome> {
-  const email = request.email.trim().toLowerCase();
-
-  // Defence 1. Throws RateLimitedError, which the route turns into a 429.
   await consumeRateLimit('login:ip', request.ip ?? 'unknown', LOGIN_RULES.perIp);
-  await consumeRateLimit('login:account', email, LOGIN_RULES.perAccount);
+  await consumeRateLimit('login:owner', username, LOGIN_RULES.perAccount);
 
-  const rows = await getSql()<LookupRow[]>`SELECT * FROM app_auth_lookup_user(${email})`;
+  const rows = await getSql()<OwnerRow[]>`SELECT * FROM app_auth_lookup_owner(${username})`;
   const user = rows[0];
 
-  // Defence 3. An unknown address still pays for a password verification.
+  // An unknown username still pays for a password verification.
   if (!user) {
     await wasteTimeLikeAVerification(request.password);
-    await audit(null, null, 'LOGIN_FAILED', 'unknown-email', request);
+    await audit(null, null, 'LOGIN_FAILED', 'unknown-owner', request);
     return { status: 'INVALID_CREDENTIALS' };
   }
 
-  // Defence 2.
   const lockedUntil = toDate(user.locked_until);
   if (lockedUntil && lockedUntil.getTime() > Date.now()) {
     await audit(user.id, user.role, 'LOGIN_LOCKED_OUT', user.id, request);
@@ -76,7 +132,6 @@ export async function attemptLogin(request: LoginRequest): Promise<LoginOutcome>
   }
 
   const passwordOk = await verifyPassword(user.password_hash, request.password);
-
   if (!passwordOk) {
     await getSql()`
       SELECT app_auth_record_failure(${user.id}::uuid, ${LOCKOUT.maxAttempts}, ${LOCKOUT.lockMinutes})
@@ -85,91 +140,28 @@ export async function attemptLogin(request: LoginRequest): Promise<LoginOutcome>
     return { status: 'INVALID_CREDENTIALS' };
   }
 
-  // The password was right, so telling them WHY they cannot get in is useful
-  // rather than a disclosure — they already proved they own the credentials.
-  //
-  // PENDING and DISABLED are separated because the remedy is not the same, and
-  // since self-registration exists (OPEN-23) PENDING is the common case: an
-  // account waiting on its verification link. Telling that person to "contact
-  // the platform" — as this did when PENDING was unreachable — sends them to
-  // the owner's inbox for something a link in their own inbox already solves.
-  if (user.status === 'PENDING') {
-    await audit(user.id, user.role, 'LOGIN_FAILED', user.id, request);
-    return { status: 'EMAIL_NOT_VERIFIED' };
-  }
-
   if (user.status !== 'ACTIVE') {
     await audit(user.id, user.role, 'LOGIN_FAILED', user.id, request);
     return { status: 'ACCOUNT_DISABLED' };
   }
 
-  await getSql()`SELECT app_auth_record_success(${user.id}::uuid)`;
-
-  const twoFactorRequired = toDate(user.totp_enabled_at) !== null;
-  const session = await createSession({
-    userId: user.id,
-    ip: request.ip ?? null,
-    userAgent: request.userAgent ?? null,
-    twoFactorVerified: !twoFactorRequired,
-  });
-
-  if (twoFactorRequired) {
-    // The session exists but is not yet trusted: `twoFactorSatisfied` is false
-    // until the challenge is answered, and the route gate refuses it.
-    return { status: 'TWO_FACTOR_REQUIRED', userId: user.id, session };
-  }
-
-  await audit(user.id, user.role, 'LOGIN_SUCCEEDED', user.id, request);
-  return { status: 'SUCCESS', userId: user.id, role: user.role, session };
+  return succeed(user.id, user.role, request);
 }
 
-/** Second step for accounts with TOTP enrolled. */
-export async function verifyLoginTotp(input: {
-  userId: string;
-  /**
-   * Resolved through a TRUSTED lookup, not an ordinary query.
-   *
-   * This read `(SELECT email FROM users WHERE id = …)` through `getSql()`,
-   * which carries no actor context: `app_actor_id()` is empty, `users_select`
-   * admits nothing, the subquery yielded NULL, and the trusted function was
-   * handed NULL — so this answered FALSE for every code ever submitted, and
-   * the second factor could not be passed at all.
-   *
-   * The caller cannot look the address up either: a session that has not yet
-   * answered its factor is announced to PostgreSQL as a guest, which is the
-   * point of that rule. So the lookup is by id, through a SECURITY DEFINER
-   * function, exactly as `attemptLogin` reaches the one by email. Migration
-   * 0044.
-   *
-   * Nothing caught this: no screen called it, and no test did either — the
-   * two-factor tests exercised `attemptLogin` and the secret's round-trip
-   * through encryption, and stopped short of the one function that decides
-   * whether a code is right.
-   */
-  code: string;
-  ip?: string | null;
-  userAgent?: string | null;
-  correlationId?: string | null;
-}): Promise<boolean> {
-  await consumeRateLimit('login:totp', input.userId, LOGIN_RULES.perAccount);
-
-  const rows = await getSql()<LookupRow[]>`
-    SELECT * FROM app_auth_lookup_user_by_id(${input.userId}::uuid)
-  `;
-  const user = rows[0];
-  if (!user?.totp_secret_encrypted) return false;
-
-  const secret = decryptSecret(user.totp_secret_encrypted);
-  const ok = verifyTotp(secret, input.code);
-
-  await audit(
-    user.id,
-    user.role,
-    ok ? 'LOGIN_SUCCEEDED' : 'LOGIN_FAILED',
-    user.id,
-    input,
-  );
-  return ok;
+/** The one place either door opens a session. */
+export async function succeed(
+  userId: string,
+  role: Role,
+  request: RequestContext,
+): Promise<LoginOutcome & { status: 'SUCCESS' }> {
+  await getSql()`SELECT app_auth_record_success(${userId}::uuid)`;
+  const session = await createSession({
+    userId,
+    ip: request.ip ?? null,
+    userAgent: request.userAgent ?? null,
+  });
+  await audit(userId, role, 'LOGIN_SUCCEEDED', userId, request);
+  return { status: 'SUCCESS', userId, role, session };
 }
 
 /**
@@ -195,7 +187,6 @@ async function audit(
           sessionId: '',
           contributorId: null,
           contributorActive: false,
-          twoFactorSatisfied: false, totpEnabled: false,
         })
       : GUEST;
 

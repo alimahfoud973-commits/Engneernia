@@ -9,7 +9,7 @@ import pino from 'pino';
  * a signed URL, or a payment secret. Add to this list whenever a new sensitive
  * field name enters the codebase.
  */
-const REDACTED_PATHS = [
+export const REDACTED_PATHS = [
   'password',
   'passwordHash',
   'token',
@@ -20,8 +20,13 @@ const REDACTED_PATHS = [
   'authorization',
   'cookie',
   'providerConfig',
+  // Stage 6: the subscriber's sign-in identifiers are personal data.
+  'phone',
+  'password_hash',
   '*.password',
   '*.passwordHash',
+  '*.password_hash',
+  '*.phone',
   '*.secret',
   '*.token',
   'req.headers.authorization',

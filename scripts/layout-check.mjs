@@ -34,6 +34,7 @@ const PATHS = [
   '/ar',
   '/ar/register',
   '/ar/login',
+  '/ar/login/owner',
   '/ar/search?q=',
   '/ar/civil',
   // Arabic only: `routing.locales` in src/i18n/routing.ts lists one locale, so

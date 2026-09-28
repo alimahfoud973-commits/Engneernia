@@ -49,7 +49,7 @@ const ids = {
 const slug = (p: string) => `w14-${p}-${suffix}`;
 
 let OWNER_RAW: { actorId: string; actorRole: string };
-const base = { kind: 'USER', displayName: 'T', locale: 'ar', sessionId: 's', twoFactorSatisfied: true, totpEnabled: false } as const;
+const base = { kind: 'USER', displayName: 'T', locale: 'ar', sessionId: 's' } as const;
 let owner: Actor;
 const customer = (id: string): Actor => ({ ...base, userId: id, role: 'CUSTOMER', contributorId: null, contributorActive: false });
 const buyerA = customer(ids.a);

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { ACTIONS, type Action } from './actions';
 import { can, authorize, contributorScopeFor } from './policy';
-import { GUEST, type Actor } from './actor';
+import { GUEST, actorDatabaseContext, isOwner, type Actor, type Role } from './actor';
 import { NotFoundError, UnauthenticatedError } from '@/lib/errors';
 
 /**
@@ -30,7 +30,6 @@ const base = {
   displayName: 'Test',
   locale: 'ar',
   sessionId: 'session-1',
-  twoFactorSatisfied: true, totpEnabled: false,
 } as const;
 
 const owner: Actor = { ...base, userId: OWNER_USER, role: 'OWNER', contributorId: null, contributorActive: false };
@@ -306,52 +305,47 @@ describe('query scoping', () => {
 
 /**
  * ===========================================================================
- * A SESSION THAT HAS NOT ANSWERED ITS SECOND FACTOR AUTHORISES NOTHING
+ * BEING THE OWNER IS THE ROLE ON THE ROW (Stage 6)
  * ===========================================================================
- * The login flow issues the session cookie as soon as the password is
- * accepted — the `TWO_FACTOR_REQUIRED` branch sets it exactly like `SUCCESS`
- * does — and `twoFactorSatisfied` is false until the challenge is answered.
- *
- * Nothing read that flag. `isOwner()` compares a role and nothing else, so
- * `requireOwner` admitted a session that had shown a password and no more,
- * and a comment in login.ts said "the route gate refuses it" about a gate
- * that was never written. Password alone reached /admin/finance,
- * /admin/settlements, /admin/payments and /admin/adjustments — the account
- * that approves payments, pays engineers and writes ledger corrections.
- *
- * Enumerated here rather than asserted once, because the property has to hold
- * for EVERY action: a rule added later must not be able to forget it.
+ * The second factor is gone (owner decision), so nothing but the role read
+ * from the database makes a session the owner's. Enumerated for every role
+ * so a rule cannot come back that treats some other session as the owner.
  * ===========================================================================
  */
-describe('a pending second factor', () => {
-  const pendingOwner: Actor = {
+describe('owner identity after Stage 6', () => {
+  const as = (role: Role): Actor => ({
     ...base,
-    twoFactorSatisfied: false, totpEnabled: false,
-    userId: OWNER_USER,
-    role: 'OWNER',
+    userId: `${role}-user`,
+    role,
     contributorId: null,
     contributorActive: false,
-  };
-  const pendingContributor: Actor = {
-    ...base,
-    twoFactorSatisfied: false, totpEnabled: false,
-    userId: CONTRIB_A_USER,
-    role: 'CONTRIBUTOR',
-    contributorId: CONTRIB_A,
-    contributorActive: true,
-  };
-
-  it.each(ACTIONS)('refuses %s to an owner who has not completed it', (action) => {
-    expect(can(pendingOwner, action, { ownerUserId: OWNER_USER, contributorId: CONTRIB_A, isPublic: true }))
-      .toBe(false);
   });
 
-  it.each(ACTIONS)('refuses %s to a contributor who has not completed it', (action) => {
-    expect(can(pendingContributor, action, { ownerUserId: CONTRIB_A_USER, contributorId: CONTRIB_A, isPublic: true }))
-      .toBe(false);
+  it('only the OWNER role is the owner', () => {
+    expect(isOwner(as('OWNER'))).toBe(true);
+    for (const role of ['ADMIN', 'CONTRIBUTOR', 'CUSTOMER'] as const) {
+      expect(isOwner(as(role))).toBe(false);
+    }
+    expect(isOwner(GUEST)).toBe(false);
   });
 
-  it('scopes such a session to nothing, so no query can widen it', () => {
-    expect(contributorScopeFor(pendingOwner)).toEqual({ kind: 'NONE' });
+  it('declares each session to PostgreSQL under its own role, and a guest as GUEST', () => {
+    expect(actorDatabaseContext(as('OWNER')).actorRole).toBe('OWNER');
+    expect(actorDatabaseContext(as('CUSTOMER')).actorRole).toBe('CUSTOMER');
+    expect(actorDatabaseContext(GUEST)).toEqual({
+      actorId: '', actorRole: 'GUEST', contributorId: '', financialContributorId: '',
+    });
   });
+
+  // What any signed-in subscriber may do by being one: enter their own
+  // console, and rate (the database then demands a purchase — 0045).
+  const EVERY_SUBSCRIBER: readonly Action[] = ['console.customer.access', 'product.rate'];
+
+  it.each(ACTIONS.filter((a) => !EVERY_SUBSCRIBER.includes(a)))(
+    'a customer is refused %s on somebody else\'s non-public resource',
+    (action) => {
+      expect(can(as('CUSTOMER'), action, { ownerUserId: OWNER_USER, contributorId: CONTRIB_A, isPublic: false }))
+        .toBe(false);
+    },
+  );
 });

@@ -4,124 +4,161 @@ import { cookies, headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { safeReturnPath } from './return-path';
 import { z } from 'zod';
-import { attemptLogin, verifyLoginTotp } from './login';
-import {
-  beginTotpEnrolment, confirmTotpEnrolment, disableTotp, formatSecretForReading,
-  revokeOtherSessionsAfterEnrolment,
-} from './totp-enrolment';
-import { currentActor } from './current';
-import { toUserMessage } from '@/lib/action-errors';
-import { revalidatePath } from 'next/cache';
+import { attemptMemberLogin, attemptOwnerLogin, type LoginOutcome } from './login';
 import { registerCustomer } from './register';
-import {
-  createSession, markTwoFactorVerified, resolveActor,
-  revokeAllSessions, sessionCookie,
-} from './session';
+import { resolveActor, revokeAllSessions, sessionCookie } from './session';
 import { RateLimitedError } from '@/lib/rate-limit';
 import { ValidationError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { waitLabelAr } from '@/lib/duration-ar';
+import { submittedValues, type SubmittedValues } from '@/lib/form-values';
 
 /**
- * Authentication server actions.
+ * Authentication server actions (Stage 6).
  *
  * The cookie is set HERE and nowhere else, so there is one place where a
- * session becomes a browser credential. Failure messages are deliberately
- * uniform: the form must not reveal whether an email exists (§36).
+ * session becomes a browser credential. Nothing typed into these forms — no
+ * phone, email, username or password — is ever written to a log line: the
+ * logger receives the error object only.
  */
 
-const loginSchema = z.object({
+function clientIp(headerStore: Headers): string | null {
+  return headerStore.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null;
+}
+
+function tooMany(error: RateLimitedError): string {
+  /**
+   * Say how long, not just "later". The person most likely to see this is
+   * someone who mistyped a few times, and a refusal with no remedy reads as a
+   * broken site. An attacker learns the window by measuring it anyway.
+   */
+  return `محاولات كثيرة. أعد المحاولة بعد ${waitLabelAr(error.retryAfterSeconds)}.`;
+}
+
+async function setSessionCookie(rawToken: string): Promise<void> {
+  const cookieStore = await cookies();
+  cookieStore.set(sessionCookie().name, rawToken, sessionCookie().options);
+}
+
+/**
+ * `values` hands back what was typed with a refusal, so React's form reset
+ * restores it (see src/lib/form-values.ts) — never the password.
+ */
+export type LoginState = { error: string | null; values?: SubmittedValues };
+
+function typedWithout(formData: FormData, ...secret: string[]): SubmittedValues {
+  const values = { ...submittedValues(formData) };
+  for (const name of secret) delete values[name];
+  return values;
+}
+
+/* ---------------------------------------------------------------------------
+ * Subscribers and engineers: phone + email.
+ * ------------------------------------------------------------------------- */
+
+const memberLoginSchema = z.object({
+  phone: z.string().trim().min(3).max(40),
   email: z.string().trim().min(3).max(254),
-  password: z.string().min(1).max(256),
   next: z.string().optional(),
 });
-
-export type LoginState = { error: string | null };
 
 export async function loginAction(
   _previous: LoginState,
   formData: FormData,
 ): Promise<LoginState> {
-  const parsed = loginSchema.safeParse({
+  const typed = typedWithout(formData);
+  const parsed = memberLoginSchema.safeParse({
+    phone: formData.get('phone'),
     email: formData.get('email'),
-    password: formData.get('password'),
     next: formData.get('next') ?? undefined,
   });
-
   if (!parsed.success) {
-    return { error: 'يرجى إدخال بريد إلكتروني وكلمة مرور صحيحين' };
+    return { error: 'يرجى إدخال رقم الهاتف والبريد الإلكتروني', values: typed };
   }
 
   const headerStore = await headers();
-  const ip = headerStore.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null;
-
-  let outcome;
+  let outcome: LoginOutcome;
   try {
-    outcome = await attemptLogin({
+    outcome = await attemptMemberLogin({
+      phone: parsed.data.phone,
       email: parsed.data.email,
-      password: parsed.data.password,
-      ip,
+      ip: clientIp(headerStore),
       userAgent: headerStore.get('user-agent'),
     });
   } catch (error) {
-    if (error instanceof RateLimitedError) {
-      /**
-       * Say how long, not just "later".
-       *
-       * A refusal with no remedy in it reads as a broken site, and the person
-       * most likely to see this message is the legitimate owner of the account
-       * who mistyped a password a few times — not the attacker the limit is
-       * for. The number costs nothing: an attacker already learns the window
-       * by measuring it.
-       */
-      return { error: `محاولات كثيرة. أعد المحاولة بعد ${waitLabelAr(error.retryAfterSeconds)}.` };
-    }
-    logger.error({ err: error }, 'Login failed unexpectedly');
-    return { error: 'تعذّر إتمام تسجيل الدخول' };
+    if (error instanceof RateLimitedError) return { error: tooMany(error), values: typed };
+    logger.error({ err: error }, 'Member login failed unexpectedly');
+    return { error: 'تعذّر إتمام تسجيل الدخول', values: typed };
   }
 
   switch (outcome.status) {
     case 'INVALID_CREDENTIALS':
-      // Same message whether the address is unknown or the password is wrong.
-      return { error: 'البريد الإلكتروني أو كلمة المرور غير صحيحة' };
     case 'ACCOUNT_LOCKED':
-      return { error: 'الحساب مقفل مؤقتاً بسبب محاولات متكررة. حاول لاحقاً.' };
+      // One sentence for an unknown phone and for a phone with another email.
+      return { error: 'رقم الهاتف أو البريد الإلكتروني غير صحيح', values: typed };
     case 'ACCOUNT_DISABLED':
-      return { error: 'هذا الحساب معطّل. تواصل مع إدارة المنصة.' };
-    case 'EMAIL_NOT_VERIFIED':
-      // Unreachable since 0056 activated every PENDING account and stopped
-      // creating them. Kept so an unexpected row is refused with a remedy,
-      // not with an instruction to open a link nobody sends any more.
-      return { error: 'هذا الحساب غير مفعّل. تواصل مع إدارة المنصة.' };
-    case 'TWO_FACTOR_REQUIRED':
-    case 'SUCCESS': {
-      const cookieStore = await cookies();
-      cookieStore.set(
-        sessionCookie().name,
-        outcome.session.rawToken,
-        sessionCookie().options,
-      );
+      return { error: 'هذا الحساب معطّل. تواصل مع إدارة المنصة.', values: typed };
+    case 'SUCCESS':
+      await setSessionCookie(outcome.session.rawToken);
       break;
-    }
   }
 
-  // Validated, never merely prefix-checked: `//evil.com` starts with a slash
-  // and is a protocol-relative URL. See src/auth/return-path.ts.
-  const destination = safeReturnPath(parsed.data.next);
+  // Validated, never merely prefix-checked: `//evil.com` starts with a slash.
+  redirect(safeReturnPath(parsed.data.next));
+}
 
-  /**
-   * A session that still owes a factor goes to the challenge, not onward.
-   *
-   * The cookie is set for both outcomes because the challenge needs to know
-   * which session is being completed — but the session authorises nothing
-   * until it is answered (`isFullyAuthenticated` in src/authz/actor.ts), so
-   * what the cookie carries here is an unfinished login, not access.
-   */
-  if (outcome.status === 'TWO_FACTOR_REQUIRED') {
-    redirect(`/login/two-factor?next=${encodeURIComponent(destination)}`);
+/* ---------------------------------------------------------------------------
+ * The owner: username + password. No second factor (owner decision).
+ * ------------------------------------------------------------------------- */
+
+const ownerLoginSchema = z.object({
+  username: z.string().trim().min(1).max(64),
+  password: z.string().min(1).max(256),
+  next: z.string().optional(),
+});
+
+export async function ownerLoginAction(
+  _previous: LoginState,
+  formData: FormData,
+): Promise<LoginState> {
+  const typed = typedWithout(formData, 'password');
+  const parsed = ownerLoginSchema.safeParse({
+    username: formData.get('username'),
+    password: formData.get('password'),
+    next: formData.get('next') ?? undefined,
+  });
+  if (!parsed.success) {
+    return { error: 'يرجى إدخال اسم المستخدم وكلمة المرور', values: typed };
   }
 
-  redirect(destination);
+  const headerStore = await headers();
+  let outcome: LoginOutcome;
+  try {
+    outcome = await attemptOwnerLogin({
+      username: parsed.data.username,
+      password: parsed.data.password,
+      ip: clientIp(headerStore),
+      userAgent: headerStore.get('user-agent'),
+    });
+  } catch (error) {
+    if (error instanceof RateLimitedError) return { error: tooMany(error), values: typed };
+    logger.error({ err: error }, 'Owner login failed unexpectedly');
+    return { error: 'تعذّر إتمام تسجيل الدخول', values: typed };
+  }
+
+  switch (outcome.status) {
+    case 'INVALID_CREDENTIALS':
+      return { error: 'اسم المستخدم أو كلمة المرور غير صحيحة', values: typed };
+    case 'ACCOUNT_LOCKED':
+      return { error: 'الحساب مقفل مؤقتاً بسبب محاولات متكررة. حاول لاحقاً.', values: typed };
+    case 'ACCOUNT_DISABLED':
+      return { error: 'هذا الحساب معطّل.', values: typed };
+    case 'SUCCESS':
+      await setSessionCookie(outcome.session.rawToken);
+      break;
+  }
+
+  redirect(safeReturnPath(parsed.data.next, '/admin'));
 }
 
 export async function logoutAction(): Promise<void> {
@@ -139,315 +176,76 @@ export async function logoutAction(): Promise<void> {
   redirect('/');
 }
 
-/**
- * ===========================================================================
- * REGISTRATION (owner decision on OPEN-23, revised by 0056)
- * ===========================================================================
- * THE SUCCESS MESSAGE IS THE ONLY MESSAGE.
- *
- * Whether the address was new or already has an account, this returns the
- * same "account created unless the address was already registered — sign in".
- * The outcome is known —
- * `registerCustomer` returns it — and is deliberately discarded here. A
- * different word in any of those cases would let anyone type an address into
- * a public form and learn whether that person has an account on this
- * platform, which is precisely what §36 forbids and what the login form is
- * already careful not to do.
- *
- * The only things that CAN change the answer are conditions the sender
- * controls and can fix: a malformed address, a short password, too many
- * attempts.
- * ===========================================================================
- */
+/* ---------------------------------------------------------------------------
+ * Registration: name + phone + email → ACTIVE CUSTOMER, signed in.
+ * ------------------------------------------------------------------------- */
 
 const registerSchema = z.object({
+  displayName: z.string().trim().min(2, 'الاسم قصير').max(80, 'الاسم طويل'),
+  phone: z.string().trim().min(3, 'أدخل رقم الهاتف').max(40, 'رقم الهاتف طويل'),
   email: z
     .string()
     .trim()
-    .min(3)
+    .min(3, 'أدخل البريد الإلكتروني')
     .max(254)
     .regex(/^[^@\s]+@[^@\s]+\.[^@\s]+$/, 'بريد إلكتروني غير صالح'),
-  password: z.string().min(1).max(256),
-  displayName: z.string().trim().min(2, 'الاسم قصير').max(80),
   /**
-   * A field no human fills in, hidden from sight in the form.
-   *
-   * Not a CAPTCHA: it is the cheap half of bot prevention that costs a real
-   * person nothing and stops the indiscriminate form-fillers, which are most
-   * of what a small site sees. The rate limits behind it are what stop anyone
-   * who bothers to look at the HTML.
+   * A field no human fills in, hidden from sight in the form. Not a CAPTCHA:
+   * the cheap half of bot prevention that costs a real person nothing. The
+   * rate limits behind it stop anyone who bothers to read the HTML.
    */
   company: z.string().max(0).optional(),
+  next: z.string().optional(),
 });
 
-export type RegisterState = { error: string | null; done: boolean };
+export type RegisterState = { error: string | null; values?: SubmittedValues };
 
 export async function registerAction(
   _previous: RegisterState,
   formData: FormData,
 ): Promise<RegisterState> {
+  const typed = typedWithout(formData);
   const parsed = registerSchema.safeParse({
-    email: formData.get('email'),
-    password: formData.get('password'),
     displayName: formData.get('displayName'),
+    phone: formData.get('phone'),
+    email: formData.get('email'),
     company: formData.get('company') ?? undefined,
-  });
-
-  if (!parsed.success) {
-    const first = parsed.error.issues[0];
-    return { error: first?.message ?? 'تعذّر قبول البيانات المُدخَلة', done: false };
-  }
-
-  // Filled in means a bot. Answered exactly like a success, so the bot learns
-  // nothing and stops; a real person can never reach this branch.
-  if (parsed.data.company) {
-    return { error: null, done: true };
-  }
-
-  const headerStore = await headers();
-  const ip = headerStore.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null;
-
-  try {
-    await registerCustomer({
-      email: parsed.data.email,
-      password: parsed.data.password,
-      displayName: parsed.data.displayName,
-      ip,
-      userAgent: headerStore.get('user-agent'),
-    });
-  } catch (error) {
-    if (error instanceof RateLimitedError) {
-      return {
-        error: `محاولات كثيرة. أعد المحاولة بعد ${waitLabelAr(error.retryAfterSeconds)}.`,
-        done: false,
-      };
-    }
-    if (error instanceof ValidationError) {
-      // The password policy speaks for itself; nothing here names the address.
-      return { error: error.message, done: false };
-    }
-    logger.error({ err: error }, 'Registration failed unexpectedly');
-    /**
-     * NO PASSWORD HINT HERE.
-     *
-     * This branch used to append "the password must be at least N characters".
-     * By the time it runs that cause has already been ruled out twice: the Zod
-     * schema accepted the field above, and `assertPasswordAcceptable` throws a
-     * ValidationError, which the branch before this one returns. So the hint
-     * named the one thing that could not be wrong.
-     *
-     * What actually reaches here is our side failing — the database, not the
-     * person's input. A message blaming their password would send them to
-     * change it, fail again, and leave, and send whoever reads the report to
-     * the password policy instead of the real fault.
-     *
-     * The text stays identical for every address — a message that varied would
-     * be the enumeration oracle this whole path avoids.
-     */
-    return {
-      error: 'تعذّر إتمام إنشاء الحساب لخلل مؤقت من جانبنا، لا في بياناتك. أعد المحاولة بعد قليل.',
-      done: false,
-    };
-  }
-
-  return { error: null, done: true };
-}
-
-const twoFactorSchema = z.object({
-  // Six digits. Trimmed and stripped of spaces because authenticator apps
-  // display the code as "123 456" and people copy what they see.
-  code: z.string().trim().transform((value) => value.replace(/\s+/g, '')).pipe(z.string().regex(/^\d{6}$/)),
-  next: z.string().optional(),
-});
-
-export type TwoFactorState = { error: string | null };
-
-/**
- * The second step of signing in.
- *
- * WHICH SESSION IS BEING COMPLETED COMES FROM THE COOKIE, never from the form.
- * A user id in a form field would let anyone who knows an id — or guesses one —
- * attempt codes against another person's account, and the rate limiter would
- * count those attempts against the victim, locking them out. The cookie
- * already names exactly one session, and that session is the only thing this
- * can finish.
- */
-export async function verifyTwoFactorAction(
-  _previous: TwoFactorState,
-  formData: FormData,
-): Promise<TwoFactorState> {
-  const parsed = twoFactorSchema.safeParse({
-    code: formData.get('code'),
     next: formData.get('next') ?? undefined,
   });
-
   if (!parsed.success) {
-    return { error: 'الرمز ستة أرقام.' };
+    return { error: parsed.error.issues[0]?.message ?? 'تعذّر قبول البيانات المُدخَلة', values: typed };
   }
 
-  const cookieStore = await cookies();
-  const actor = await resolveActor(cookieStore.get(sessionCookie().name)?.value);
-
-  // No session, or one that expired while the code was being typed.
-  if (actor.kind !== 'USER') {
-    redirect('/login');
-  }
-
-  // Already satisfied: nothing to do, and re-running the check would let a
-  // completed session be used to grind codes.
-  if (actor.twoFactorSatisfied) {
-    redirect(safeReturnPath(parsed.data.next));
+  // Filled in means a bot: no account, no session, and nothing to learn.
+  if (parsed.data.company) {
+    redirect('/');
   }
 
   const headerStore = await headers();
-
-  let ok: boolean;
+  let rawToken: string;
   try {
-    ok = await verifyLoginTotp({
-      userId: actor.userId,
-      code: parsed.data.code,
-      ip: headerStore.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null,
+    const result = await registerCustomer({
+      displayName: parsed.data.displayName,
+      phone: parsed.data.phone,
+      email: parsed.data.email,
+      ip: clientIp(headerStore),
       userAgent: headerStore.get('user-agent'),
     });
-  } catch (error) {
-    if (error instanceof RateLimitedError) {
-      return { error: `محاولات كثيرة. أعد المحاولة بعد ${waitLabelAr(error.retryAfterSeconds)}.` };
+    if (result.outcome === 'ALREADY_EXISTS') {
+      // Neither which field was taken, nor anything about the account.
+      return { error: 'رقم الهاتف أو البريد الإلكتروني مسجّل لحساب قائم. سجّل الدخول بهما.', values: typed };
     }
-    logger.error({ err: error }, 'Two-factor verification failed unexpectedly');
-    return { error: 'تعذّر التحقق من الرمز' };
-  }
-
-  if (!ok) {
-    // One message for a wrong code and for a code that has already rolled
-    // over. Distinguishing them tells an attacker how close their clock is.
-    return { error: 'رمز غير صحيح. تحقّق من التطبيق وأعد المحاولة.' };
-  }
-
-  await markTwoFactorVerified(actor.sessionId);
-  redirect(safeReturnPath(parsed.data.next));
-}
-
-/* ---------------------------------------------------------------------------
- * The second factor, from the account's side (enrolment).
- * ------------------------------------------------------------------------- */
-
-/** The shape both confirm and disable return: an error, or nothing. */
-export type TotpActionState = { error: string | null };
-
-export type EnrolState = {
-  error: string | null;
-  /** Present only on the response that created it. Never re-fetched. */
-  offer: { secret: string; readable: string; uri: string } | null;
-};
-
-const passwordOnly = z.object({ password: z.string().min(1).max(256) });
-const codeOnly = z.object({
-  code: z.string().trim().transform((v) => v.replace(/\s+/g, '')).pipe(z.string().regex(/^\d{6}$/)),
-});
-const passwordAndCode = passwordOnly.merge(codeOnly);
-
-/** Step one: mint a secret and show it once. */
-export async function beginTotpAction(
-  _previous: EnrolState,
-  formData: FormData,
-): Promise<EnrolState> {
-  const parsed = passwordOnly.safeParse({ password: formData.get('password') });
-  if (!parsed.success) return { error: 'أدخل كلمة المرور', offer: null };
-
-  const actor = await currentActor();
-
-  try {
-    const offer = await beginTotpEnrolment(actor, { password: parsed.data.password });
+    rawToken = result.session.rawToken;
+  } catch (error) {
+    if (error instanceof RateLimitedError) return { error: tooMany(error), values: typed };
+    if (error instanceof ValidationError) return { error: error.message, values: typed };
+    logger.error({ err: error }, 'Registration failed unexpectedly');
     return {
-      error: null,
-      offer: {
-        secret: offer.secret,
-        readable: formatSecretForReading(offer.secret),
-        uri: offer.uri,
-      },
+      error: 'تعذّر إتمام إنشاء الحساب لخلل مؤقت من جانبنا، لا في بياناتك. أعد المحاولة بعد قليل.',
+      values: typed,
     };
-  } catch (error) {
-    if (error instanceof RateLimitedError) {
-      return {
-        error: `محاولات كثيرة. أعد المحاولة بعد ${waitLabelAr(error.retryAfterSeconds)}.`,
-        offer: null,
-      };
-    }
-    return { error: toUserMessage(error, 'Starting TOTP enrolment failed'), offer: null };
-  }
-}
-
-/** Step two: prove the app has the same secret, then arm it. */
-export async function confirmTotpAction(
-  _previous: TotpActionState,
-  formData: FormData,
-): Promise<TotpActionState> {
-  const parsed = codeOnly.safeParse({ code: formData.get('code') });
-  if (!parsed.success) return { error: 'الرمز ستة أرقام.' };
-
-  const actor = await currentActor();
-
-  try {
-    await confirmTotpEnrolment(actor, { code: parsed.data.code });
-  } catch (error) {
-    if (error instanceof RateLimitedError) {
-      return { error: `محاولات كثيرة. أعد المحاولة بعد ${waitLabelAr(error.retryAfterSeconds)}.` };
-    }
-    return { error: toUserMessage(error, 'Confirming TOTP enrolment failed') };
   }
 
-  /**
-   * Every other session goes, and this one stays.
-   *
-   * Turning the factor on is a statement that the password alone is no longer
-   * enough; sessions opened under the old rule are exactly what that statement
-   * is about. The current session is re-established immediately below so the
-   * person who just proved a code is not thrown back to the login screen for
-   * having secured their account.
-   */
-  await revokeOtherSessionsAfterEnrolment(actor);
-
-  const headerStore = await headers();
-  const session = await createSession({
-    userId: actor.kind === 'USER' ? actor.userId : '',
-    ip: headerStore.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null,
-    userAgent: headerStore.get('user-agent'),
-    twoFactorVerified: true,
-  });
-
-  const cookieStore = await cookies();
-  cookieStore.set(
-    sessionCookie().name,
-    session.rawToken,
-    sessionCookie().options,
-  );
-
-  revalidatePath('/account/security');
-  return { error: null };
-}
-
-/** Removing it needs the password AND a live code — see totp-enrolment.ts. */
-export async function disableTotpAction(
-  _previous: TotpActionState,
-  formData: FormData,
-): Promise<TotpActionState> {
-  const parsed = passwordAndCode.safeParse({
-    password: formData.get('password'),
-    code: formData.get('code'),
-  });
-  if (!parsed.success) return { error: 'أدخل كلمة المرور ورمزاً من ستة أرقام.' };
-
-  const actor = await currentActor();
-
-  try {
-    await disableTotp(actor, { password: parsed.data.password, code: parsed.data.code });
-  } catch (error) {
-    if (error instanceof RateLimitedError) {
-      return { error: `محاولات كثيرة. أعد المحاولة بعد ${waitLabelAr(error.retryAfterSeconds)}.` };
-    }
-    return { error: toUserMessage(error, 'Disabling TOTP failed') };
-  }
-
-  revalidatePath('/account/security');
-  return { error: null };
+  await setSessionCookie(rawToken);
+  redirect(safeReturnPath(parsed.data.next));
 }

@@ -21,18 +21,6 @@ export interface AuthenticatedActor {
   readonly contributorId: string | null;
   /** A contributor whose profile the owner has deactivated keeps no powers. */
   readonly contributorActive: boolean;
-  /** True once the second factor has been satisfied for this session. */
-  readonly twoFactorSatisfied: boolean;
-  /**
-   * Whether this ACCOUNT has a second factor armed at all — distinct from
-   * whether this SESSION has satisfied it.
-   *
-   * An owner with no factor enrolled satisfies `twoFactorSatisfied` trivially,
-   * because there is nothing to satisfy. That is the state the route gate has
-   * to tell apart in order to send them to enrol, and no other field can: it
-   * looks identical to a completed challenge.
-   */
-  readonly totpEnabled: boolean;
 }
 
 export interface GuestActor {
@@ -48,33 +36,16 @@ export function isAuthenticated(actor: Actor): actor is AuthenticatedActor {
 }
 
 /**
- * Has this session finished authenticating?
+ * The owner, and nothing else.
  *
- * The cookie is issued when the PASSWORD is accepted, not when the login is
- * complete: `TWO_FACTOR_REQUIRED` sets it exactly as `SUCCESS` does. So a
- * session can be real, resolvable, and still owe a factor.
- */
-export function isFullyAuthenticated(actor: Actor): actor is AuthenticatedActor {
-  return actor.kind === 'USER' && actor.twoFactorSatisfied;
-}
-
-/**
- * THE SECOND FACTOR IS PART OF BEING THE OWNER, not a separate check.
- *
- * This compared a role and nothing else, and it is the gate in eight places —
- * settlements, adjustments, product writes, the balance report, the admin
- * console. A session holding the owner's password and no second factor passed
- * every one of them: /admin/finance, /admin/payments, /admin/settlements,
- * /admin/adjustments, all of it, on a password alone. A comment in login.ts
- * claimed a route gate refused such a session; no such gate existed, and
- * `twoFactorSatisfied` was read by no code outside tests.
- *
- * Folding the requirement in here closes all eight at once, and closes the
- * ones nobody has written yet — which is the point: the next `if (isOwner…)`
- * inherits it without its author having to know this happened.
+ * Stage 6 removed the second factor (owner decision), so being the owner is
+ * a signed-in session whose ROW says OWNER — read from the database on every
+ * request, never from the cookie. The owner row can only be reached by the
+ * username-and-password path (`app_auth_lookup_owner`); the subscriber path
+ * refuses the OWNER role in SQL.
  */
 export function isOwner(actor: Actor): boolean {
-  return isFullyAuthenticated(actor) && actor.role === 'OWNER';
+  return actor.kind === 'USER' && actor.role === 'OWNER';
 }
 
 /**
@@ -83,8 +54,7 @@ export function isOwner(actor: Actor): boolean {
  * their account, but resolves to no contributor scope.
  */
 export function activeContributorId(actor: Actor): string | null {
-  // An unfinished login is not an identity to scope anything by.
-  if (!isFullyAuthenticated(actor)) return null;
+  if (actor.kind !== 'USER') return null;
   if (!actor.contributorActive) return null;
   return actor.contributorId;
 }
@@ -99,7 +69,7 @@ export function activeContributorId(actor: Actor): string | null {
  * every financial write remains the owner's.
  */
 export function financialContributorId(actor: Actor): string | null {
-  if (!isFullyAuthenticated(actor)) return null;
+  if (actor.kind !== 'USER') return null;
   return actor.contributorId;
 }
 
@@ -110,17 +80,7 @@ export function actorDatabaseContext(actor: Actor): {
   contributorId: string;
   financialContributorId: string;
 } {
-  /**
-   * A pending session is announced to PostgreSQL as a guest.
-   *
-   * The policy layer already refuses it, and this is the layer underneath: row
-   * policies read these three settings, so a half-authenticated session sees
-   * what an anonymous visitor sees even if some future code path skips the
-   * policy check entirely. Defence in depth means the layers do not share an
-   * assumption — so this one is written from `isFullyAuthenticated`, not from
-   * a caller having remembered.
-   */
-  if (!isFullyAuthenticated(actor)) {
+  if (actor.kind !== 'USER') {
     return { actorId: '', actorRole: 'GUEST', contributorId: '', financialContributorId: '' };
   }
   return {

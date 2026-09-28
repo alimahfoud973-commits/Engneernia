@@ -16,10 +16,12 @@
  * Both were found by operating the running site, which is what this automates.
  *
  * WHAT IT NEEDS. Two accounts and two ids, supplied through the environment,
- * because the probe must sign in as somebody to prove anything:
+ * because the probe must sign in as somebody to prove anything. Since Stage 6
+ * the owner signs in with a username and password, and an engineer (like
+ * every subscriber) with a phone and an email:
  *
- *   PROBE_OWNER_EMAIL / PROBE_OWNER_PASSWORD
- *   PROBE_ENGINEER_EMAIL / PROBE_ENGINEER_PASSWORD
+ *   PROBE_OWNER_USERNAME / PROBE_OWNER_PASSWORD
+ *   PROBE_ENGINEER_PHONE / PROBE_ENGINEER_EMAIL
  *   PROBE_FOREIGN_SETTLEMENT_ID   a settlement belonging to a DIFFERENT engineer
  *   PROBE_FOREIGN_PROOF_ID        a payment receipt belonging to someone else
  *
@@ -28,45 +30,15 @@
  * ===========================================================================
  */
 import { chromium } from 'playwright';
-import { createHmac } from 'node:crypto';
 
 const BASE = process.argv[2] ?? process.env.PROBE_BASE_URL ?? 'http://localhost:3111';
 const CHROME = process.env.PROBE_CHROMIUM ?? undefined;
 
-/**
- * TOTP, reimplemented here on purpose.
- *
- * The probe is a black-box check: it drives the site over HTTP and must not
- * import the application's own code, or it would agree with a broken
- * implementation. RFC 6238 is thirty lines; sharing the platform's would leave
- * the owner's second factor untested rather than tested.
- */
-function totpNow(base32Secret) {
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-  let bits = '';
-  for (const char of base32Secret.replace(/=+$/, '').toUpperCase()) {
-    const index = alphabet.indexOf(char);
-    if (index === -1) continue;
-    bits += index.toString(2).padStart(5, '0');
-  }
-  const bytes = Buffer.from((bits.match(/.{8}/g) ?? []).map((b) => Number.parseInt(b, 2)));
-
-  const counter = Buffer.alloc(8);
-  counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 1000 / 30)));
-
-  const digest = createHmac('sha1', bytes).update(counter).digest();
-  const offset = digest[digest.length - 1] & 0x0f;
-  const binary = ((digest[offset] & 0x7f) << 24) | ((digest[offset + 1] & 0xff) << 16)
-    | ((digest[offset + 2] & 0xff) << 8) | (digest[offset + 3] & 0xff);
-  return String(binary % 1_000_000).padStart(6, '0');
-}
-
 const required = [
-  'PROBE_OWNER_EMAIL',
+  'PROBE_OWNER_USERNAME',
   'PROBE_OWNER_PASSWORD',
-  'PROBE_OWNER_TOTP_SECRET',
+  'PROBE_ENGINEER_PHONE',
   'PROBE_ENGINEER_EMAIL',
-  'PROBE_ENGINEER_PASSWORD',
   'PROBE_FOREIGN_SETTLEMENT_ID',
   'PROBE_FOREIGN_PROOF_ID',
 ];
@@ -108,29 +80,26 @@ const GUARDED_PAGES = [
 
 const browser = await chromium.launch(CHROME ? { executablePath: CHROME } : {});
 
-async function signIn(ctx, email, password, totpSecret) {
+/** A subscriber or engineer: phone + email at /login. Lands on /account. */
+async function signIn(ctx, phone, email) {
   const page = await ctx.newPage();
   await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' });
+  await page.fill('input[name="phone"]', phone);
   await page.fill('input[name="email"]', email);
+  await page.click('button[type="submit"]');
+  await page.waitForTimeout(2000);
+  return { page, signedIn: page.url().includes('/account') };
+}
+
+/** The owner: username + password at /login/owner. Lands on the console. */
+async function signInOwner(ctx, username, password) {
+  const page = await ctx.newPage();
+  await page.goto(`${BASE}/login/owner`, { waitUntil: 'domcontentloaded' });
+  await page.fill('input[name="username"]', username);
   await page.fill('input[name="password"]', password);
   await page.click('button[type="submit"]');
   await page.waitForTimeout(2000);
-
-  /**
-   * The second factor, answered the way a person would.
-   *
-   * The owner's account is two-factor protected, so the password alone lands
-   * here and not on /account — which is the platform being correct. Driving
-   * the real challenge keeps the positive control honest: it proves the owner
-   * reaches the console THROUGH the factor, not around it.
-   */
-  if (totpSecret && page.url().includes('/login/two-factor')) {
-    await page.fill('input[name="code"]', totpNow(totpSecret));
-    await page.click('button[type="submit"]');
-    await page.waitForTimeout(2000);
-  }
-
-  return { page, signedIn: page.url().includes('/account') };
+  return { page, signedIn: page.url().includes('/admin') };
 }
 
 async function get(page, path) {
@@ -197,7 +166,7 @@ console.log('\n2. NOBODY UNAUTHENTICATED REACHES A FINANCIAL SURFACE');
 console.log('\n3. A SIGNED-IN ENGINEER REACHES ONLY THEIR OWN');
 {
   const ctx = await browser.newContext({ locale: 'ar' });
-  const { page, signedIn } = await signIn(ctx, env.PROBE_ENGINEER_EMAIL, env.PROBE_ENGINEER_PASSWORD);
+  const { page, signedIn } = await signIn(ctx, env.PROBE_ENGINEER_PHONE, env.PROBE_ENGINEER_EMAIL);
   check(signedIn, 'the engineer can sign in at all (control)');
   for (const path of GUARDED_PAGES) {
     const r = await get(page, path);
@@ -220,7 +189,7 @@ console.log('\n3. A SIGNED-IN ENGINEER REACHES ONLY THEIR OWN');
 console.log('\n4. THE OWNER DOES REACH THEM (POSITIVE CONTROL)');
 {
   const ctx = await browser.newContext({ locale: 'ar' });
-  const { page, signedIn } = await signIn(ctx, env.PROBE_OWNER_EMAIL, env.PROBE_OWNER_PASSWORD, env.PROBE_OWNER_TOTP_SECRET);
+  const { page, signedIn } = await signInOwner(ctx, env.PROBE_OWNER_USERNAME, env.PROBE_OWNER_PASSWORD);
   check(signedIn, 'the owner can sign in');
   const finance = await get(page, '/admin/finance');
   check(finance.landedOn.startsWith('/admin/finance'), 'the owner reaches the finance report');
@@ -254,8 +223,8 @@ console.log('\n5. THE POST-LOGIN DESTINATION CANNOT LEAVE THIS SITE');
       return route.continue();
     });
     await page.goto(`${BASE}/login?next=${encodeURIComponent(next)}`, { waitUntil: 'domcontentloaded' });
+    await page.fill('input[name="phone"]', env.PROBE_ENGINEER_PHONE);
     await page.fill('input[name="email"]', env.PROBE_ENGINEER_EMAIL);
-    await page.fill('input[name="password"]', env.PROBE_ENGINEER_PASSWORD);
     await page.click('button[type="submit"]');
     await page.waitForTimeout(2000);
     check(offSite === null, `next=${next} does not leave the site`, offSite ?? '');
@@ -275,8 +244,8 @@ console.log('\n6. A SERVER ACTION REFUSES A FOREIGN ORIGIN');
     }
   });
   await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' });
+  await page.fill('input[name="phone"]', env.PROBE_ENGINEER_PHONE);
   await page.fill('input[name="email"]', env.PROBE_ENGINEER_EMAIL);
-  await page.fill('input[name="password"]', env.PROBE_ENGINEER_PASSWORD);
   await page.click('button[type="submit"]');
   await page.waitForTimeout(2000);
 
@@ -301,127 +270,60 @@ console.log('\n6. A SERVER ACTION REFUSES A FOREIGN ORIGIN');
 }
 
 // ---------------------------------------------------------------------------
-// Added after the review was first written, because these surfaces did not
-// exist then. Self-registration (0039) and invoices (0042) are the two things
-// that changed what an anonymous stranger can touch.
-console.log('\n7. REGISTRATION DOES NOT ANSWER "DOES THIS PERSON HAVE AN ACCOUNT?"');
+// Rewritten for Stage 6. Registration now signs a NEW subscriber in at once,
+// so "is this number registered?" is visible by construction (the owner's
+// model); what must still hold is that registering can never hand anybody an
+// EXISTING account, and that the answer does not say WHICH field was taken.
+console.log('\n7. REGISTRATION NEVER HANDS OVER AN EXISTING ACCOUNT');
 {
-  /**
-   * THE POINT OF THIS SECTION.
-   *
-   * The registration form takes an email and says something back. If it says
-   * anything different for an address that already has an account, it becomes
-   * a way to ask, one address at a time, who buys from this platform — which
-   * is the §36 rule applied to a form instead of an API.
-   *
-   * A FRESH CONTEXT PER ATTEMPT, and the comparison is of <main> rather than
-   * the whole document. Written the other way first, it reported a difference
-   * that turned out to be the probe's own carry-over between two submissions
-   * in one page — a false alarm, which in a security check is as costly as a
-   * miss: it is the report nobody believes the second time.
-   */
-  const register = async (email) => {
+  const register = async (phone, email) => {
     const ctx = await browser.newContext({ locale: 'ar' });
     const page = await ctx.newPage();
     await page.goto(`${BASE}/register`, { waitUntil: 'domcontentloaded' });
     await page.fill('#displayName', 'Probe');
+    await page.fill('#phone', phone);
     await page.fill('#email', email);
-    await page.fill('#password', 'probe-password-that-is-long-enough');
     await page.click('button[type="submit"]');
     await page.waitForTimeout(2500);
-    const main = (await page.textContent('main')) ?? '';
+    const main = ((await page.textContent('main')) ?? '').replace(/\s+/g, ' ').trim();
+    const session = (await ctx.cookies()).some((c) => c.name.includes('session'));
     await ctx.close();
-    return main.replace(/\s+/g, ' ').trim();
+    return { main, session };
   };
 
-  const knownAnswer = await register(env.PROBE_ENGINEER_EMAIL);
-  const unknownAnswer = await register(`nobody-${Date.now()}@test.local`);
-  /**
-   * A CONTROL, because this check has a second way to differ.
-   *
-   * Registration is rate limited per IP. Once the limit is crossed the form
-   * answers differently — and if one of the two attempts above straddles that
-   * boundary, they differ for a reason that has nothing to do with whether an
-   * address exists. That happened on the first run of this section and looked
-   * exactly like a leak.
-   *
-   * Two UNKNOWN addresses must always agree. When they do not, the
-   * environment is what is noisy, and the check says so instead of crying
-   * wolf. Run the probe against a database whose registration buckets are
-   * fresh — `DELETE FROM rate_limit_buckets WHERE key LIKE 'register%'`.
-   */
-  const controlAnswer = await register(`nobody-${Date.now()}-b@test.local`);
-
-  /**
-   * A SECOND WAY TO BE INCONCLUSIVE, found the same way as the first.
-   *
-   * If outbound mail is unreachable, every registration ends in the same
-   * server-side failure — so the three answers agree perfectly, the sameness
-   * check passes, and only the "is it the neutral message" check fails. That
-   * reads exactly like the neutral message having regressed, and it is not: it
-   * is the mail server. Seen on a run whose SMTP host did not resolve.
-   *
-   * Enumeration is genuinely untested in that state, so say so rather than
-   * report a failure whose cause is somewhere else entirely.
-   */
-  const mailDown = /تعذّر إتمام إنشاء الحساب/.test(unknownAnswer);
-
-  /**
-   * THE RATE LIMIT, DETECTED RATHER THAN INFERRED.
-   *
-   * Comparing the two unknown addresses was meant to catch this, and it does
-   * not catch all of it: the per-IP bucket is shared by all three attempts and
-   * the known address goes first, so a limit crossed after it leaves the two
-   * unknowns agreeing with each other and disagreeing with the known one —
-   * which is indistinguishable, from here, from the leak this section exists
-   * to find. It reported exactly that on a run whose buckets were not cleared.
-   *
-   * Reading the limiter's own message is order-independent and needs no
-   * inference. The equality control below stays, because it still catches the
-   * case where the limit lands between the second and third attempt.
-   */
-  const rateLimited = [knownAnswer, unknownAnswer, controlAnswer]
-    .some((answer) => /محاولات كثيرة/.test(answer));
+  const stamp = String(Date.now()).slice(-7);
+  const takenPhone = await register(env.PROBE_ENGINEER_PHONE, `probe-new-${stamp}@test.local`);
+  const takenEmail = await register(`+96391${stamp}9`, env.PROBE_ENGINEER_EMAIL);
+  const rateLimited = [takenPhone, takenEmail].some((r) => /محاولات كثيرة/.test(r.main));
 
   if (rateLimited) {
-    console.log('  SKIP  registration is rate limited right now — enumeration check not conclusive');
+    console.log('  SKIP  registration is rate limited right now — check not conclusive');
     console.log('        run `ALLOW_PROBE_SEED=yes npm run seed:probe` immediately before the probe.');
-  } else if (unknownAnswer !== controlAnswer) {
-    console.log('  SKIP  registration is rate limited right now — enumeration check not conclusive');
-    console.log('        clear the buckets and re-run: DELETE FROM rate_limit_buckets WHERE key LIKE \'register%\'');
-  } else if (mailDown) {
-    console.log('  SKIP  registration is failing on the server — enumeration check not conclusive');
-    console.log('        every address gets the same error, so this proves nothing either way.');
-    console.log('        check MAIL_TRANSPORT_URL: the host must resolve and accept the credentials.');
   } else {
+    check(!takenPhone.session, "a registration with somebody's phone gets no session");
+    check(!takenEmail.session, "a registration with somebody's email gets no session");
     check(
-      knownAnswer === unknownAnswer,
-      'a known address and an unknown one get the SAME answer',
+      takenPhone.main === takenEmail.main,
+      'a taken phone and a taken email get the SAME answer (which field is not said)',
     );
-    check(
-      /تحقّق من بريدك/.test(knownAnswer),
-      'and that answer is the neutral one',
-    );
+    check(/مسجّل لحساب قائم/.test(takenPhone.main), 'and that answer is the neutral one');
   }
 }
 
 // ---------------------------------------------------------------------------
-console.log('\n8. A VERIFICATION LINK CANNOT BE GUESSED OR REPLAYED BLINDLY');
+console.log('\n8. THE REMOVED PATHS ARE GONE, NOT DORMANT');
 {
   const ctx = await browser.newContext({ locale: 'ar' });
   const page = await ctx.newPage();
-
-  for (const token of ['', 'not-a-token', 'a'.repeat(43), '../../etc/passwd']) {
-    const res = await page.goto(
-      `${BASE}/verify-email?token=${encodeURIComponent(token)}`,
-      { waitUntil: 'domcontentloaded' },
-    );
-    const body = (await page.textContent('body')) ?? '';
-    // It must answer, and it must not confirm anything.
+  // Stage 6 removed email verification (it could turn an account ACTIVE) and
+  // the second factor. Their pages must not answer at all.
+  for (const path of ['/verify-email?token=anything', '/login/two-factor', '/account/security']) {
+    const res = await page.goto(`${BASE}${path}`, { waitUntil: 'domcontentloaded' });
+    const landed = page.url().replace(BASE, '');
     check(
-      res.status() < 500 && !/تم تأكيد بريدك/.test(body),
-      `a forged token verifies nothing`,
-      JSON.stringify(token.slice(0, 16)),
+      res.status() === 404 || landed.startsWith('/login'),
+      `${path.split('?')[0]} no longer exists`,
+      `${res.status()} ${landed}`,
     );
   }
   await ctx.close();
@@ -443,7 +345,7 @@ console.log('\n9. AN INVOICE REACHES ONLY ITS BUYER');
     const malformed = await get(page, '/api/invoices/not-a-uuid');
     check(malformed.status === 404, 'a malformed invoice id is 404, not a server error', String(malformed.status));
 
-    const { page: enginPage } = await signIn(ctx, env.PROBE_ENGINEER_EMAIL, env.PROBE_ENGINEER_PASSWORD);
+    const { page: enginPage } = await signIn(ctx, env.PROBE_ENGINEER_PHONE, env.PROBE_ENGINEER_EMAIL);
     const asEngineer = await get(enginPage, `/api/invoices/${env.PROBE_FOREIGN_INVOICE_ID}`);
     // A contributor sells the product and still may not see who bought it.
     check(asEngineer.status === 404, "an engineer cannot fetch a customer's invoice", String(asEngineer.status));

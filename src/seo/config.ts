@@ -27,10 +27,6 @@ export const PRIVATE_PREFIXES = [
   '/checkout',
   '/login',
   '/register',
-  // Carries a single-use token in the query string. Indexing it would put
-  // that token into a search engine's record, and a crawler following the
-  // link would spend it before the person ever clicked.
-  '/verify-email',
   '/api',
 ] as const;
 

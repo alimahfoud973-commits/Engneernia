@@ -29,6 +29,8 @@ const FORBIDDEN_FIELDS = new Set([
   'secret',
   'providerConfig',
   'providerConfigEncrypted',
+  // Stage 6: a subscriber's phone identifies them and half-opens their account.
+  'phone',
 ]);
 
 /**

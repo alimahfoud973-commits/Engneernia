@@ -105,7 +105,6 @@ export async function createSession(input: {
   userId: string;
   ip?: string | null;
   userAgent?: string | null;
-  twoFactorVerified: boolean;
 }): Promise<CreatedSession> {
   const rawToken = generateSessionToken();
   const expiresAt = new Date(Date.now() + SESSION_ABSOLUTE_LIFETIME_MS);
@@ -116,8 +115,7 @@ export async function createSession(input: {
       ${hashSessionToken(rawToken)},
       ${expiresAt.toISOString()}::timestamptz,
       ${hashIp(input.ip)},
-      ${input.userAgent ?? null},
-      ${input.twoFactorVerified}
+      ${input.userAgent ?? null}
     )
   `;
 
@@ -138,8 +136,6 @@ interface ResolvedRow {
   contributor_active: boolean;
   // Timestamps arrive as Date or ISO string depending on the connection —
   // always read them through toDate(). See src/db/index.ts.
-  two_factor_verified_at: Date | string | null;
-  totp_enabled_at: Date | string | null;
   expires_at: Date | string;
   last_used_at: Date | string;
 }
@@ -168,11 +164,6 @@ export async function resolveActor(rawToken: string | undefined | null): Promise
     return GUEST;
   }
 
-  // Two-factor is satisfied if the account has no TOTP enrolled, or if this
-  // session completed the challenge.
-  const twoFactorSatisfied =
-    toDate(row.totp_enabled_at) === null || toDate(row.two_factor_verified_at) !== null;
-
   const actor: AuthenticatedActor = {
     kind: 'USER',
     userId: row.user_id,
@@ -182,18 +173,12 @@ export async function resolveActor(rawToken: string | undefined | null): Promise
     sessionId: row.session_id,
     contributorId: row.contributor_id,
     contributorActive: row.contributor_active,
-    twoFactorSatisfied,
-    totpEnabled: toDate(row.totp_enabled_at) !== null,
   };
   return actor;
 }
 
 export async function touchSession(sessionId: string): Promise<void> {
   await getSql()`SELECT app_auth_touch_session(${sessionId}::uuid)`;
-}
-
-export async function markTwoFactorVerified(sessionId: string): Promise<void> {
-  await getSql()`SELECT app_auth_mark_two_factor(${sessionId}::uuid)`;
 }
 
 /**

@@ -35,22 +35,6 @@ export function hashSessionToken(rawToken: string): string {
  * Keyed with the session secret so the hashes are not reversible by rainbow
  * table over the small IPv4 space.
  */
-/**
- * A single-use token for a link sent by email (address verification today).
- *
- * Same primitives as a session token, deliberately a separate pair of
- * functions: the two have different lifetimes and different threat models, and
- * a future change to how sessions are minted must not silently change what
- * lands in people's inboxes.
- */
-export function generateLinkToken(): string {
-  return randomBytes(TOKEN_BYTES).toString('base64url');
-}
-
-export function hashLinkToken(rawToken: string): string {
-  return createHash('sha256').update(rawToken, 'utf8').digest('hex');
-}
-
 export function hashIp(ip: string | null | undefined): string | null {
   if (!ip) return null;
   return createHash('sha256')
@@ -67,8 +51,8 @@ export function constantTimeEquals(a: string, b: string): boolean {
 }
 
 /**
- * AES-256-GCM encryption for secrets held at rest: TOTP seeds today, payment
- * provider credentials from phase P5. Authenticated, so a tampered ciphertext
+ * AES-256-GCM encryption for secrets held at rest (payment provider
+ * credentials). Authenticated, so a tampered ciphertext
  * fails to decrypt rather than yielding garbage.
  *
  * Format: v1.<iv>.<authTag>.<ciphertext>, all base64url. The version prefix

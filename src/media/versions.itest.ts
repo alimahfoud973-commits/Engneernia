@@ -57,7 +57,7 @@ const slug = `s4-prod-${suffix}`;
 const PRICE = 2000n;
 
 let OWNER_RAW: { actorId: string; actorRole: string };
-const base = { kind: 'USER', displayName: 'مشترٍ', locale: 'ar', sessionId: 's', twoFactorSatisfied: true, totpEnabled: false } as const;
+const base = { kind: 'USER', displayName: 'مشترٍ', locale: 'ar', sessionId: 's' } as const;
 let owner: Actor;
 const customer = (userId: string): Actor => ({ ...base, userId, role: 'CUSTOMER', contributorId: null, contributorActive: false });
 const buyerA = customer(ids.buyerA);
