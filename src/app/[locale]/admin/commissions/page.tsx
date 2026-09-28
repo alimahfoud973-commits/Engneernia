@@ -44,6 +44,9 @@ export default async function AdminCommissionsPage({
     if (row.model === 'FIXED_ENGINEER' && row.engineerFixedMinor !== null) {
       return `${formatMinor(row.engineerFixedMinor, row.currency ?? currency)} ثابت للمهندس`;
     }
+    if (row.model === 'FIXED_BOTH' && row.engineerFixedMinor !== null && row.platformFixedMinor !== null) {
+      return `${formatMinor(row.engineerFixedMinor, row.currency ?? currency)} ثابت للمهندس · ${formatMinor(row.platformFixedMinor, row.currency ?? currency)} ثابت للمنصة`;
+    }
     if (row.model === 'FIXED_PLATFORM' && row.platformFixedMinor !== null) {
       return `${formatMinor(row.platformFixedMinor, row.currency ?? currency)} ثابت للمنصة`;
     }

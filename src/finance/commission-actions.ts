@@ -23,9 +23,11 @@ const schema = z.object({
   contributorId: z.string().uuid(),
   // Empty means this engineer's default rather than one product's override.
   productId: z.string().uuid().or(z.literal('')).optional(),
-  model: z.enum(['PERCENTAGE', 'FIXED_ENGINEER', 'FIXED_PLATFORM']),
+  model: z.enum(['PERCENTAGE', 'FIXED_ENGINEER', 'FIXED_PLATFORM', 'FIXED_BOTH']),
   percent: z.string().max(10).optional(),
   amount: z.string().max(20).optional(),
+  // FIXED_BOTH only: `amount` is the engineer's, this is the platform's.
+  platformAmount: z.string().max(20).optional(),
   currency: z.string().regex(/^[A-Z]{3}$/),
   note: z.string().max(400).optional(),
 });
@@ -40,6 +42,7 @@ export async function saveCommissionAction(
     model: formData.get('model'),
     percent: formData.get('percent') ?? undefined,
     amount: formData.get('amount') ?? undefined,
+    platformAmount: formData.get('platformAmount') ?? undefined,
     currency: formData.get('currency'),
     note: formData.get('note') ?? undefined,
   });
@@ -76,6 +79,14 @@ export async function saveCommissionAction(
         agreement = {
           model: 'FIXED_PLATFORM',
           platformFixedMinor: parseMajorUnits(parsed.data.amount ?? '', currency).amountMinor,
+          currency,
+        };
+        break;
+      case 'FIXED_BOTH':
+        agreement = {
+          model: 'FIXED_BOTH',
+          engineerFixedMinor: parseMajorUnits(parsed.data.amount ?? '', currency).amountMinor,
+          platformFixedMinor: parseMajorUnits(parsed.data.platformAmount ?? '', currency).amountMinor,
           currency,
         };
         break;

@@ -118,10 +118,19 @@ export type PurchaseState =
     readonly priceMinor: bigint | null;
     readonly currency: string;
   }
-  | { readonly kind: 'IN_ORDER'; readonly orderId: string };
+  | { readonly kind: 'IN_ORDER'; readonly orderId: string }
+  /**
+   * Credited to a deactivated engineer (owner's final Stage 5 decision): on
+   * the platform, not for sale. Asked of `app_product_on_hold` — the same
+   * answer the order-line trigger gives — since neither a buyer nor a guest
+   * may read who is credited.
+   */
+  | { readonly kind: 'ON_HOLD' };
 
 export async function purchaseState(actor: Actor, productId: string): Promise<PurchaseState> {
-  if (actor.kind !== 'USER') return { kind: 'BUYABLE' };
+  if (actor.kind !== 'USER') {
+    return (await productOnHold(actor, productId)) ? { kind: 'ON_HOLD' } : { kind: 'BUYABLE' };
+  }
 
   const me = actor.userId;
 
@@ -190,6 +199,13 @@ export async function purchaseState(actor: Actor, productId: string): Promise<Pu
 
     if (pending) return { kind: 'IN_ORDER', orderId: pending.orderId } as const;
 
+    // What they hold and what they have ordered stay theirs; only a NEW
+    // purchase — or an upgrade — waits while the product is on hold.
+    const [hold] = (await tx.execute(
+      sql`SELECT app_product_on_hold(${productId}::uuid) AS on_hold`,
+    )) as unknown as Array<{ on_hold: boolean }>;
+    if (hold?.on_hold) return { kind: 'ON_HOLD' } as const;
+
     const earlier = held[0];
     if (earlier && product?.currentVersionId && product.priceMinor !== null && product.currency) {
       let priceMinor: bigint | null = null;
@@ -211,6 +227,15 @@ export async function purchaseState(actor: Actor, productId: string): Promise<Pu
     }
 
     return { kind: 'BUYABLE' } as const;
+  });
+}
+
+async function productOnHold(actor: Actor, productId: string): Promise<boolean> {
+  return withActor(actor, async (tx) => {
+    const [row] = (await tx.execute(
+      sql`SELECT app_product_on_hold(${productId}::uuid) AS on_hold`,
+    )) as unknown as Array<{ on_hold: boolean }>;
+    return row?.on_hold === true;
   });
 }
 

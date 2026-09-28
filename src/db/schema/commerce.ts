@@ -60,6 +60,9 @@ export const commissionModelEnum = pgEnum('commission_model', [
   'PERCENTAGE',
   'FIXED_ENGINEER',
   'FIXED_PLATFORM',
+  // A fixed amount for each side, the pot shared in their ratio — added by
+  // migration 0063 (owner's final Stage 5 decision).
+  'FIXED_BOTH',
 ]);
 
 /**
@@ -316,7 +319,8 @@ export const orderItemContributors = pgTable(
     /**
      * What a FIXED agreement asked for on this slice before the cap (S5-02,
      * migration 0062): the engineer's side for FIXED_ENGINEER, the platform's
-     * for FIXED_PLATFORM. Null on percentage terms and on rows written before
+     * for FIXED_PLATFORM, both sides together for FIXED_BOTH (0063). Null on
+     * percentage terms and on rows written before
      * 0062. With `commission_clamped` it tells the owner not only that a sale
      * was capped but what the agreement had promised.
      */

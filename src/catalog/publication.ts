@@ -46,7 +46,7 @@ interface Transition {
 const TRANSITIONS: Readonly<Record<ProductStatus, readonly Transition[]>> = Object.freeze({
   DRAFT: [
     { to: 'SUBMITTED', allowedFor: ['OWNER', 'CONTRIBUTOR'], label: 'إرسال للمراجعة' },
-    { to: 'ARCHIVED', allowedFor: ['OWNER'], label: 'أرشفة' },
+    { to: 'ARCHIVED', allowedFor: ['OWNER'], label: 'أرشفة (حذف من المنصة)' },
   ],
   SUBMITTED: [
     { to: 'IN_REVIEW', allowedFor: ['OWNER'], label: 'بدء المراجعة' },
@@ -59,7 +59,7 @@ const TRANSITIONS: Readonly<Record<ProductStatus, readonly Transition[]>> = Obje
   ],
   REVISION_REQUESTED: [
     { to: 'SUBMITTED', allowedFor: ['OWNER', 'CONTRIBUTOR'], label: 'إعادة الإرسال' },
-    { to: 'ARCHIVED', allowedFor: ['OWNER'], label: 'أرشفة' },
+    { to: 'ARCHIVED', allowedFor: ['OWNER'], label: 'أرشفة (حذف من المنصة)' },
   ],
   APPROVED: [
     { to: 'PUBLISHED', allowedFor: ['OWNER'], label: 'نشر' },
@@ -68,7 +68,7 @@ const TRANSITIONS: Readonly<Record<ProductStatus, readonly Transition[]>> = Obje
   PUBLISHED: [{ to: 'UNPUBLISHED', allowedFor: ['OWNER'], label: 'إلغاء النشر' }],
   UNPUBLISHED: [
     { to: 'PUBLISHED', allowedFor: ['OWNER'], label: 'إعادة النشر' },
-    { to: 'ARCHIVED', allowedFor: ['OWNER'], label: 'أرشفة' },
+    { to: 'ARCHIVED', allowedFor: ['OWNER'], label: 'أرشفة (حذف من المنصة)' },
   ],
   // Terminal. Specification §16/§37: history is kept, never destroyed.
   ARCHIVED: [],

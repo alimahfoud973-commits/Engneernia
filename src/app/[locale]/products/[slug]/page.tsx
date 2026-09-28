@@ -290,6 +290,12 @@ export default async function ProductPage({
                   أكمِل الطلب
                 </Link>
               </div>
+            ) : purchase.kind === 'ON_HOLD' ? (
+              // Credited to a deactivated engineer: listed, not for sale. The
+              // order-line trigger refuses regardless (migration 0063).
+              <p className="rounded-[var(--radius-card)] border border-[var(--color-line-strong)] bg-[var(--color-surface-muted)] px-3 py-2 text-sm text-[var(--color-ink-soft)]">
+                هذا المنتج غير متاح للشراء حالياً.
+              </p>
             ) : (
               <BuyButton
                 slug={product.slug}

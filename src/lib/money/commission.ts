@@ -26,7 +26,7 @@ import {
  * ===========================================================================
  */
 
-export type CommissionModel = 'PERCENTAGE' | 'FIXED_ENGINEER' | 'FIXED_PLATFORM';
+export type CommissionModel = 'PERCENTAGE' | 'FIXED_ENGINEER' | 'FIXED_PLATFORM' | 'FIXED_BOTH';
 
 /**
  * A discriminated union so that illegal combinations — a percentage agreement
@@ -35,7 +35,25 @@ export type CommissionModel = 'PERCENTAGE' | 'FIXED_ENGINEER' | 'FIXED_PLATFORM'
 export type CommissionAgreement =
   | { readonly model: 'PERCENTAGE'; readonly engineerBp: BasisPoints; readonly currency: CurrencyCode }
   | { readonly model: 'FIXED_ENGINEER'; readonly engineerFixedMinor: bigint; readonly currency: CurrencyCode }
-  | { readonly model: 'FIXED_PLATFORM'; readonly platformFixedMinor: bigint; readonly currency: CurrencyCode };
+  | { readonly model: 'FIXED_PLATFORM'; readonly platformFixedMinor: bigint; readonly currency: CurrencyCode }
+  /**
+   * A fixed amount for EACH side (owner's final Stage 5 decision). Both are
+   * scaled by the discount like any fixed amount, and what was paid is then
+   * divided between the two in the ratio of those amounts — so a remainder
+   * above the two fixed figures is shared in the same proportion, and a
+   * shortfall below them is borne in the same proportion.
+   *
+   *   $100, platform $20 + engineer $30, paid $50:
+   *     fixed commissions after the discount   platform $10, engineer $15 ($25)
+   *     the remaining $25, shared 20:30        platform $10, engineer $15
+   *     booked                                  platform $20, engineer $30
+   */
+  | {
+    readonly model: 'FIXED_BOTH';
+    readonly engineerFixedMinor: bigint;
+    readonly platformFixedMinor: bigint;
+    readonly currency: CurrencyCode;
+  };
 
 /** Exactly the shape persisted onto `order_items`. */
 export interface CommissionSnapshot {
@@ -64,6 +82,14 @@ export interface CommissionSnapshot {
    * owner that something was cut, not what the agreement had promised.
    */
   readonly requestedMinor: bigint | null;
+  /**
+   * The two parts of `requestedMinor` for a fixed agreement: what the terms
+   * asked for the engineer and for the platform on this pot, after the
+   * discount and before any cap. Null where that side is not fixed. For
+   * FIXED_BOTH `requestedMinor` is their sum.
+   */
+  readonly requestedEngineerMinor: bigint | null;
+  readonly requestedPlatformMinor: bigint | null;
 }
 
 export interface SplitInput {
@@ -168,6 +194,8 @@ export function computeCommissionSnapshot(input: SplitInput): CommissionSnapshot
   let platform: Money;
   let clamped = false;
   let requestedMinor: bigint | null = null;
+  let requestedEngineerMinor: bigint | null = null;
+  let requestedPlatformMinor: bigint | null = null;
 
   switch (agreement.model) {
     case 'PERCENTAGE': {
@@ -186,6 +214,7 @@ export function computeCommissionSnapshot(input: SplitInput): CommissionSnapshot
         });
       }
       requestedMinor = scaleFixed(fixed.amountMinor, netPrice.amountMinor, base);
+      requestedEngineerMinor = requestedMinor;
       // Capped when the agreement asks for more than the price it is quoted
       // against: then no pot, at any discount, can pay it (S5-02).
       clamped = fixed.amountMinor > base;
@@ -201,9 +230,36 @@ export function computeCommissionSnapshot(input: SplitInput): CommissionSnapshot
         });
       }
       requestedMinor = scaleFixed(fixed.amountMinor, netPrice.amountMinor, base);
+      requestedPlatformMinor = requestedMinor;
       clamped = fixed.amountMinor > base;
       platform = money(minBig(requestedMinor, netPrice.amountMinor), currency);
       engineer = subtract(netPrice, platform);
+      break;
+    }
+    case 'FIXED_BOTH': {
+      const e = agreement.engineerFixedMinor;
+      const p = agreement.platformFixedMinor;
+      if (e < 0n || p < 0n) {
+        throw new ValidationError('المبلغ الثابت للمهندس أو للمنصة لا يكون سالباً', {
+          engineerFixedMinor: e.toString(),
+          platformFixedMinor: p.toString(),
+        });
+      }
+      if (e + p === 0n) {
+        // Nothing to divide the pot in proportion to — refused rather than
+        // guessing a split (CLAUDE.md, no-guessing rule).
+        throw new ValidationError('اتفاق المبلغين الثابتين يحتاج مبلغاً أكبر من صفر لأحد الطرفين على الأقل');
+      }
+      requestedEngineerMinor = scaleFixed(e, netPrice.amountMinor, base);
+      requestedPlatformMinor = scaleFixed(p, netPrice.amountMinor, base);
+      requestedMinor = requestedEngineerMinor + requestedPlatformMinor;
+      // Capped when the two fixed amounts together exceed the price they are
+      // quoted against: the sale still completes, both sides share the cut.
+      clamped = e + p > base;
+      // The pot is divided in the ratio of the two fixed amounts: the engineer
+      // side is the rounded one, the platform the remainder (rule 3).
+      engineer = money(divRoundHalfAwayFromZero(netPrice.amountMinor * e, e + p), currency);
+      platform = subtract(netPrice, engineer);
       break;
     }
   }
@@ -217,12 +273,20 @@ export function computeCommissionSnapshot(input: SplitInput): CommissionSnapshot
     netPriceMinor: netPrice.amountMinor,
     model: agreement.model,
     engineerBp: agreement.model === 'PERCENTAGE' ? agreement.engineerBp : null,
-    engineerFixedMinor: agreement.model === 'FIXED_ENGINEER' ? agreement.engineerFixedMinor : null,
-    platformFixedMinor: agreement.model === 'FIXED_PLATFORM' ? agreement.platformFixedMinor : null,
+    engineerFixedMinor:
+      agreement.model === 'FIXED_ENGINEER' || agreement.model === 'FIXED_BOTH'
+        ? agreement.engineerFixedMinor
+        : null,
+    platformFixedMinor:
+      agreement.model === 'FIXED_PLATFORM' || agreement.model === 'FIXED_BOTH'
+        ? agreement.platformFixedMinor
+        : null,
     engineerAmountMinor: engineer.amountMinor,
     platformAmountMinor: platform.amountMinor,
     clamped,
     requestedMinor,
+    requestedEngineerMinor,
+    requestedPlatformMinor,
   });
 }
 

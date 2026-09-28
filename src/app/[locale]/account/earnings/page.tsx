@@ -335,7 +335,11 @@ export default async function EarningsPage({
                   </dl>
                   {line.commissionModel && line.commissionModel !== 'PERCENTAGE' ? (
                     <p className="text-xs text-[var(--color-ink-soft)]">
-                      {line.commissionModel === 'FIXED_ENGINEER' ? 'مبلغ ثابت للمهندس' : 'مبلغ ثابت للمنصة'}
+                      {line.commissionModel === 'FIXED_ENGINEER'
+                        ? 'مبلغ ثابت للمهندس'
+                        : line.commissionModel === 'FIXED_PLATFORM'
+                          ? 'مبلغ ثابت للمنصة'
+                          : 'مبلغان ثابتان للمهندس والمنصة يُقسَم المدفوع بنسبتهما'}
                       ، والنسبتان أعلاه ما بلغه في هذا البيع.
                       {line.clamped ? ' المبلغ الثابت تجاوز المدفوع فقُصّ إليه.' : ''}
                     </p>

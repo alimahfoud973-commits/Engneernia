@@ -525,3 +525,110 @@ describe('Stage 5 — discounts and fixed amounts keep their original proportion
     );
   });
 });
+
+/**
+ * ===========================================================================
+ * STAGE 5 — THE OWNER'S FINAL DECISIONS ON FIXED COMMISSIONS
+ * ===========================================================================
+ * Prices are final prices, tax included; these cases run at a zero tax rate
+ * so the owner's figures are the figures on the snapshot.
+ * ===========================================================================
+ */
+describe('Stage 5 final — fixed commissions under a discount, and both fixed at once', () => {
+  it('Test B — fixed platform $20 on $100, paid $50: platform $10', () => {
+    const s = computeCommissionSnapshot({
+      listPrice: usd(10_000n), discount: usd(5_000n),
+      agreement: { model: 'FIXED_PLATFORM', platformFixedMinor: 2_000n, currency: 'USD' },
+    });
+    expect(s.platformAmountMinor).toBe(1_000n);
+    expect(s.engineerAmountMinor).toBe(4_000n);
+    expect(s.requestedPlatformMinor).toBe(1_000n);
+    expect(s.requestedEngineerMinor).toBeNull();
+  });
+
+  it('Test C — fixed engineer $30 on $100, paid $50: engineer $15', () => {
+    const s = computeCommissionSnapshot({
+      listPrice: usd(10_000n), discount: usd(5_000n),
+      agreement: { model: 'FIXED_ENGINEER', engineerFixedMinor: 3_000n, currency: 'USD' },
+    });
+    expect(s.engineerAmountMinor).toBe(1_500n);
+    expect(s.requestedEngineerMinor).toBe(1_500n);
+  });
+
+  it('Test D — fixed engineer $20 shared 60/40: $12 and $8, and $6 and $4 at half price', () => {
+    const agreement: CommissionAgreement = { model: 'FIXED_ENGINEER', engineerFixedMinor: 2_000n, currency: 'USD' };
+    const at = (sliceMinor: bigint) =>
+      computeCommissionSnapshot({ listPrice: usd(sliceMinor), agreement, fixedBaseMinor: 10_000n });
+    expect(at(6_000n).engineerAmountMinor).toBe(1_200n);
+    expect(at(4_000n).engineerAmountMinor).toBe(800n);
+    // Half price: the slices of the $50 paid are $30 and $20.
+    expect(at(3_000n).engineerAmountMinor).toBe(600n);
+    expect(at(2_000n).engineerAmountMinor).toBe(400n);
+  });
+
+  it('Test E — platform $20 + engineer $30 on $100, paid $50: fixed $10 + $15 = $25, the $25 left shared 20:30', () => {
+    const s = computeCommissionSnapshot({
+      listPrice: usd(10_000n), discount: usd(5_000n),
+      agreement: { model: 'FIXED_BOTH', engineerFixedMinor: 3_000n, platformFixedMinor: 2_000n, currency: 'USD' },
+    });
+    // The fixed commissions after the discount.
+    expect(s.requestedPlatformMinor).toBe(1_000n);
+    expect(s.requestedEngineerMinor).toBe(1_500n);
+    expect(s.requestedMinor).toBe(2_500n);
+    // What is booked: the fixed amounts plus the remainder in their ratio.
+    expect(s.platformAmountMinor).toBe(2_000n);
+    expect(s.engineerAmountMinor).toBe(3_000n);
+    expect(s.engineerAmountMinor + s.platformAmountMinor).toBe(5_000n);
+    expect(s.clamped).toBe(false);
+    expect(s.engineerFixedMinor).toBe(3_000n);
+    expect(s.platformFixedMinor).toBe(2_000n);
+  });
+
+  it('both fixed amounts above the price: the sale completes, capped, nothing negative or above what was paid', () => {
+    const s = computeCommissionSnapshot({
+      listPrice: usd(1_000n),
+      agreement: { model: 'FIXED_BOTH', engineerFixedMinor: 3_000n, platformFixedMinor: 2_000n, currency: 'USD' },
+    });
+    expect(s.clamped).toBe(true);
+    expect(s.requestedMinor).toBe(5_000n);
+    expect(s.engineerAmountMinor).toBe(600n);
+    expect(s.platformAmountMinor).toBe(400n);
+    expect(s.engineerAmountMinor + s.platformAmountMinor).toBe(1_000n);
+  });
+
+  it('refuses a combined agreement with nothing to divide by, or a negative side', () => {
+    const run = (e: bigint, p: bigint) => () => computeCommissionSnapshot({
+      listPrice: usd(1_000n),
+      agreement: { model: 'FIXED_BOTH', engineerFixedMinor: e, platformFixedMinor: p, currency: 'USD' },
+    });
+    expect(run(0n, 0n)).toThrow(ValidationError);
+    expect(run(-1n, 100n)).toThrow(ValidationError);
+  });
+
+  it('property — a combined agreement always re-adds to the pot, in the ratio of its amounts, never negative', () => {
+    fc.assert(
+      fc.property(
+        fc.bigInt({ min: 1n, max: 10_000_000n }),
+        fc.bigInt({ min: 0n, max: 5_000_000n }),
+        fc.bigInt({ min: 0n, max: 5_000_000n }),
+        fc.integer({ min: 0, max: 10_000 }),
+        (list, e, p, discountBp) => {
+          fc.pre(e + p > 0n);
+          const discount = (list * BigInt(discountBp)) / 10_000n;
+          const s = computeCommissionSnapshot({
+            listPrice: usd(list), discount: usd(discount),
+            agreement: { model: 'FIXED_BOTH', engineerFixedMinor: e, platformFixedMinor: p, currency: 'USD' },
+          });
+          const net = list - discount;
+          expect(s.engineerAmountMinor + s.platformAmountMinor).toBe(net);
+          expect(s.engineerAmountMinor >= 0n && s.platformAmountMinor >= 0n).toBe(true);
+          // engineer ≈ net × e / (e + p), rounded once
+          const twice = 2n * s.engineerAmountMinor * (e + p) - 2n * net * e;
+          expect(twice <= e + p && -twice <= e + p).toBe(true);
+          expect(s.clamped).toBe(e + p > list);
+        },
+      ),
+      { numRuns: 1_000 },
+    );
+  });
+});

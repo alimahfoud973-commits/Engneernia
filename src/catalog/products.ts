@@ -2,6 +2,7 @@ import 'server-only';
 import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { contributors, products, productPrices, productContributors, productFiles } from '@/db/schema';
 import { serverEnv } from '@/lib/config/env';
+import { toDate } from '@/db';
 import { supportsPreview } from '@/media/file-types';
 import { isServable } from '@/media/scanner';
 import { withActor, type Transaction } from '@/db/actor-context';
@@ -313,6 +314,30 @@ export async function changeProductStatus(
 
     const readiness = await publishReadiness(tx, input.productId);
     assertTransition(product.status, input.to, actor, readiness);
+
+    /*
+     * DELETING A DEACTIVATED ENGINEER'S PRODUCT WAITS A MONTH (owner's final
+     * Stage 5 decision). Deleting is archiving — the product leaves the
+     * platform, and every sale, snapshot, entitlement, statement and audit row
+     * stays. Said here with its date; refused underneath by the trigger
+     * `products_hold_period_before_delete` (migration 0063) whatever the path.
+     */
+    if (input.to === 'ARCHIVED') {
+      const [hold] = (await tx.execute(sql`
+        SELECT MAX(c.deactivated_at) + interval '1 month' AS until
+          FROM product_contributors pc
+          JOIN contributors c ON c.id = pc.contributor_id
+         WHERE pc.product_id = ${input.productId}::uuid
+           AND NOT c.is_active
+      `)) as unknown as Array<{ until: string | Date | null }>;
+      const until = toDate(hold?.until ?? null);
+      if (until !== null && until.getTime() > Date.now()) {
+        throw new RuleViolationError(
+          `منتج المهندس الموقوف يبقى على المنصة شهراً من تاريخ إيقافه، ولا يُحذف قبل ${until.toISOString().slice(0, 10)}`,
+          { productId: input.productId, until: until.toISOString() },
+        );
+      }
+    }
 
     if (isOwner(actor)) {
       const updated = await tx

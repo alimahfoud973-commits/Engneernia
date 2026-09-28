@@ -96,6 +96,7 @@ export function CommissionForm({
             <option value="PERCENTAGE">نسبة مئوية للمهندس</option>
             <option value="FIXED_ENGINEER">مبلغ ثابت للمهندس</option>
             <option value="FIXED_PLATFORM">مبلغ ثابت للمنصة</option>
+            <option value="FIXED_BOTH">مبلغان ثابتان للمهندس والمنصة</option>
           </select>
         </label>
 
@@ -107,17 +108,30 @@ export function CommissionForm({
             <input name="percent" inputMode="decimal" required className={FIELD} placeholder="80" defaultValue={typed?.percent} />
           </label>
         ) : (
-          <label className="flex flex-col gap-1.5">
-            <span className="text-xs text-[var(--color-ink-faint)]">
-              المبلغ الثابت ({currency})
-            </span>
-            <input name="amount" inputMode="decimal" required className={FIELD} placeholder="11.00" defaultValue={typed?.amount} />
+          <div className="flex flex-col gap-3">
+            <label className="flex flex-col gap-1.5">
+              <span className="text-xs text-[var(--color-ink-faint)]">
+                {model === 'FIXED_PLATFORM' ? 'المبلغ الثابت للمنصة' : 'المبلغ الثابت للمهندس'} ({currency})
+              </span>
+              <input name="amount" inputMode="decimal" required className={FIELD} placeholder="11.00" defaultValue={typed?.amount} />
+            </label>
+            {model === 'FIXED_BOTH' ? (
+              <label className="flex flex-col gap-1.5">
+                <span className="text-xs text-[var(--color-ink-faint)]">
+                  المبلغ الثابت للمنصة ({currency})
+                </span>
+                <input name="platformAmount" inputMode="decimal" required className={FIELD} placeholder="20.00" defaultValue={typed?.platformAmount} />
+              </label>
+            ) : null}
             <span className="text-xs leading-relaxed text-[var(--color-ink-faint)]">
-              المبلغ للمنتج كاملاً بسعره الكامل قبل الضريبة: عند الخصم أو الترقية يُطبَّق بنسبته نفسها من
-              المدفوع، وعلى المنتج المشترك يُقسَم بين المهندسين بحسب نسب مساهمتهم. إن تجاوز السعر قُصَّ إلى
-              المبلغ المدفوع وظهر ذلك في سجل المبيعات.
+              المبلغ للمنتج كاملاً بسعره المعروض (الشامل للضريبة): عند الخصم أو الترقية ينخفض بنسبة انخفاض
+              المدفوع، وعلى المنتج المشترك يُقسَم مبلغ المهندسين بحسب نسب مساهمتهم ولا يتكرّر مبلغ المنصة.
+              {model === 'FIXED_BOTH'
+                ? ' ويُقسَم المدفوع بين المهندس والمنصة بنسبة المبلغين: ما زاد عليهما أو نقص عنهما يُوزَّع بالنسبة نفسها.'
+                : ''}
+              {' '}إن تجاوزت العمولة ما يبقى من المدفوع بعد الضريبة قُصَّت إليه وظهر ذلك في سجل المبيعات.
             </span>
-          </label>
+          </div>
         )}
       </div>
 

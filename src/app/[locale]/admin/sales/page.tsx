@@ -10,6 +10,7 @@ import {
   SETTLEMENT_STATUS_LABELS, formatPercent,
 } from '@/lib/labels';
 import { isUuid } from '@/lib/uuid';
+import { divRoundHalfAwayFromZero } from '@/lib/money/money';
 
 export const dynamic = 'force-dynamic';
 
@@ -277,6 +278,22 @@ function termsOf(row: {
   const label = COMMISSION_MODEL_LABELS[row.commissionModel] ?? row.commissionModel;
   if (row.commissionModel === 'PERCENTAGE' && row.engineerBp !== null) {
     return `${label}: المهندس ${percent(row.engineerBp)} · المنصة ${percent(10_000 - row.engineerBp)}`;
+  }
+  if (row.commissionModel === 'FIXED_BOTH') {
+    if (row.engineerFixedMinor === null || row.platformFixedMinor === null) return label;
+    const e = row.engineerFixedMinor;
+    const p = row.platformFixedMinor;
+    // What the two fixed amounts came to on this sale, before the pot was
+    // shared in their ratio: `requestedMinor` is their total (migration 0063).
+    // Display only, with the engine's own rounding (engineer rounded, platform
+    // the remainder) so the two figures shown re-add to the recorded total.
+    const engineerPart = row.requestedMinor === null || e + p === 0n
+      ? null
+      : divRoundHalfAwayFromZero(row.requestedMinor * e, e + p);
+    const scaled = engineerPart === null || row.requestedMinor === null
+      ? ''
+      : ` · بعد الخصم: للمهندس ${formatMinor(engineerPart, row.currency)} وللمنصة ${formatMinor(row.requestedMinor - engineerPart, row.currency)}، والمدفوع بنسبتهما`;
+    return `${label}: ${formatMinor(e, row.currency)} للمهندس و${formatMinor(p, row.currency)} للمنصة للمنتج كاملاً${scaled}`;
   }
   const fixed = row.commissionModel === 'FIXED_ENGINEER' ? row.engineerFixedMinor : row.platformFixedMinor;
   if (fixed === null) return label;

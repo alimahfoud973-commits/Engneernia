@@ -158,6 +158,15 @@ export const contributors = pgTable(
     bio: text('bio'),
 
     isActive: boolean('is_active').notNull().default(false),
+    /**
+     * When the owner last deactivated this engineer (migration 0063), kept by
+     * the database itself: set when `is_active` turns false, cleared when it
+     * turns true, and not writable on its own. The owner's final Stage 5
+     * decision hangs off it: the engineer's products stay on the platform,
+     * unsellable, for one month from this moment, and only then may the owner
+     * delete (archive) them.
+     */
+    deactivatedAt: utcTimestamp('deactivated_at'),
     /** Specification §3.2: draft submission only if the owner enables it. */
     canSubmitDrafts: boolean('can_submit_drafts').notNull().default(false),
 

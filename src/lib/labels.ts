@@ -79,6 +79,7 @@ export const COMMISSION_MODEL_LABELS: Readonly<Record<string, string>> = {
   PERCENTAGE: 'نسبة مئوية',
   FIXED_ENGINEER: 'مبلغ ثابت للمهندس',
   FIXED_PLATFORM: 'مبلغ ثابت للمنصة',
+  FIXED_BOTH: 'مبلغان ثابتان للمهندس والمنصة',
 };
 
 /**

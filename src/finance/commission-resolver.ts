@@ -4,6 +4,7 @@ import {
   commissionAgreements, contributors, productContributors, productPrices, products,
 } from '@/db/schema';
 import type { Transaction } from '@/db/actor-context';
+import { toDate } from '@/db';
 import { extractTax, type TaxBreakdown } from '@/lib/money/tax';
 import { MoneyInvariantError, RuleViolationError, ValidationError } from '@/lib/errors';
 import { money, subtract, type Money } from '@/lib/money/money';
@@ -112,6 +113,16 @@ function toAgreement(row: typeof commissionAgreements.$inferSelect): CommissionA
       }
       return {
         model: 'FIXED_PLATFORM',
+        platformFixedMinor: row.platformFixedMinor,
+        currency: row.currency,
+      };
+    case 'FIXED_BOTH':
+      if (row.engineerFixedMinor === null || row.platformFixedMinor === null) {
+        throw new RuleViolationError('اتفاق المبلغين الثابتين بلا قيمة', { agreementId: row.id });
+      }
+      return {
+        model: 'FIXED_BOTH',
+        engineerFixedMinor: row.engineerFixedMinor,
         platformFixedMinor: row.platformFixedMinor,
         currency: row.currency,
       };
@@ -233,6 +244,9 @@ async function saleBlockersByProduct(
       contributorId: productContributors.contributorId,
       displayName: contributors.displayName,
       isActive: contributors.isActive,
+      deactivatedAt: contributors.deactivatedAt,
+      // PostgreSQL's month, the same one the deletion guard uses (0063).
+      deletableFrom: sql<string | null>`${contributors.deactivatedAt} + interval '1 month'`,
     })
     .from(productContributors)
     .leftJoin(contributors, eq(contributors.id, productContributors.contributorId))
@@ -250,10 +264,18 @@ async function saleBlockersByProduct(
    */
   for (const credit of allCredits) {
     if (credit.isActive === false) {
+      // The owner's final decision: on the platform, unsellable, for a month;
+      // only then may it be deleted (archived). Both dates said here.
+      const since = credit.deactivatedAt;
+      const deletable = toDate(credit.deletableFrom);
       add(credit.productId, {
         contributorId: credit.contributorId,
         reason: 'INACTIVE_ENGINEER',
-        message: `المهندس ${credit.displayName ?? credit.contributorId} موقوف، ولا يُباع منتج منسوب إليه حتى يُعاد تفعيله أو تُعدَّل نسبة المنتج`,
+        message: `المهندس ${credit.displayName ?? credit.contributorId} موقوف${
+          since ? ` منذ ${since.toISOString().slice(0, 10)}` : ''
+        }، ولا يُباع منتج منسوب إليه حتى يُعاد تفعيله أو تُعدَّل نسبة المنتج${
+          deletable ? `، ولا يُحذف المنتج قبل ${deletable.toISOString().slice(0, 10)}` : ''
+        }`,
       });
     }
   }
@@ -351,9 +373,17 @@ export async function productCommissionCapWarnings(
     if (!row || row.currency !== price.currency) continue;
     const fixed = row.model === 'FIXED_ENGINEER'
       ? row.engineerFixedMinor
-      : row.model === 'FIXED_PLATFORM' ? row.platformFixedMinor : null;
+      : row.model === 'FIXED_PLATFORM'
+        ? row.platformFixedMinor
+        : row.model === 'FIXED_BOTH'
+          ? (row.engineerFixedMinor ?? 0n) + (row.platformFixedMinor ?? 0n)
+          : null;
     if (fixed !== null && fixed > netList) {
-      const side = row.model === 'FIXED_ENGINEER' ? 'حصة المهندس الثابتة' : 'حصة المنصة الثابتة';
+      const side = row.model === 'FIXED_ENGINEER'
+        ? 'حصة المهندس الثابتة'
+        : row.model === 'FIXED_PLATFORM'
+          ? 'حصة المنصة الثابتة'
+          : 'مجموع المبلغين الثابتين للمهندس والمنصة';
       warnings.push(
         `${side} في اتفاق ${credit.displayName ?? credit.contributorId} أكبر من سعر المنتج قبل الضريبة، وستُقصّ عند كل بيع إلى المبلغ المدفوع`,
       );
@@ -785,9 +815,13 @@ async function writeAgreement(
       model: input.agreement.model,
       engineerBp: input.agreement.model === 'PERCENTAGE' ? input.agreement.engineerBp : null,
       engineerFixedMinor:
-        input.agreement.model === 'FIXED_ENGINEER' ? input.agreement.engineerFixedMinor : null,
+        input.agreement.model === 'FIXED_ENGINEER' || input.agreement.model === 'FIXED_BOTH'
+          ? input.agreement.engineerFixedMinor
+          : null,
       platformFixedMinor:
-        input.agreement.model === 'FIXED_PLATFORM' ? input.agreement.platformFixedMinor : null,
+        input.agreement.model === 'FIXED_PLATFORM' || input.agreement.model === 'FIXED_BOTH'
+          ? input.agreement.platformFixedMinor
+          : null,
       currency: input.agreement.currency,
       effectiveFrom: now,
       createdBy: input.createdBy,

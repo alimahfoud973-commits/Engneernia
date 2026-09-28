@@ -222,8 +222,16 @@ export async function saveCommissionAgreement(
   if (
     (agreement.model === 'FIXED_ENGINEER' && agreement.engineerFixedMinor < 0n)
     || (agreement.model === 'FIXED_PLATFORM' && agreement.platformFixedMinor < 0n)
+    || (agreement.model === 'FIXED_BOTH'
+      && (agreement.engineerFixedMinor < 0n || agreement.platformFixedMinor < 0n))
   ) {
     throw new ValidationError('المبلغ الثابت في اتفاق العمولة لا يكون سالباً');
+  }
+  if (
+    agreement.model === 'FIXED_BOTH'
+    && agreement.engineerFixedMinor + agreement.platformFixedMinor === 0n
+  ) {
+    throw new ValidationError('اتفاق المبلغين الثابتين يحتاج مبلغاً أكبر من صفر لأحد الطرفين على الأقل');
   }
 
   return withActor(actor, async (tx) => {
@@ -315,11 +323,11 @@ export async function saveCommissionAgreement(
         model: input.agreement.model,
         engineerBp: input.agreement.model === 'PERCENTAGE' ? input.agreement.engineerBp : null,
         engineerFixedMinor:
-          input.agreement.model === 'FIXED_ENGINEER'
+          input.agreement.model === 'FIXED_ENGINEER' || input.agreement.model === 'FIXED_BOTH'
             ? input.agreement.engineerFixedMinor.toString()
             : null,
         platformFixedMinor:
-          input.agreement.model === 'FIXED_PLATFORM'
+          input.agreement.model === 'FIXED_PLATFORM' || input.agreement.model === 'FIXED_BOTH'
             ? input.agreement.platformFixedMinor.toString()
             : null,
         currency: input.agreement.currency,

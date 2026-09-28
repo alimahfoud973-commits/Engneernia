@@ -36,6 +36,10 @@ function describeTerms(row: EngineerProductRow): string {
       return row.engineerFixedMinor === null
         ? 'اتفاق ناقص'
         : `${formatMinor(row.engineerFixedMinor, currency)} ثابت للمهندس · والباقي للمنصة`;
+    case 'FIXED_BOTH':
+      return row.engineerFixedMinor === null || row.platformFixedMinor === null
+        ? 'اتفاق ناقص'
+        : `${formatMinor(row.engineerFixedMinor, currency)} ثابت للمهندس · ${formatMinor(row.platformFixedMinor, currency)} للمنصة · المدفوع بنسبتهما`;
     case 'FIXED_PLATFORM':
       return row.platformFixedMinor === null
         ? 'اتفاق ناقص'

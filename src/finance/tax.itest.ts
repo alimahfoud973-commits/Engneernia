@@ -320,8 +320,14 @@ describe('the seller identity the owner sets (Stage 2 audit, F4)', () => {
 
 describe('the document the customer receives', () => {
   it('renders as a real PDF carrying the split', async () => {
+    // THIS file's customer's taxed invoice. Invoices are append-only, so
+    // another suite's taxed invoice (Stage 5's $10 price test is one) is in
+    // the table for good; "any taxed invoice" was never this file's own.
     const [invoice] = await withRawActorContext(OWNER_RAW, (tx) =>
-      tx.select().from(invoices).where(sql`tax_bp > 0`).limit(1),
+      tx.select().from(invoices)
+        .where(sql`tax_bp = 1500 AND customer_id = ${ids.customer}`)
+        .orderBy(invoices.createdAt)
+        .limit(1),
     );
     expect(invoice, 'a taxed invoice should exist by now').toBeDefined();
 
