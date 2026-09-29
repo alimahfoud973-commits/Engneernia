@@ -143,6 +143,18 @@ export function renderNotification(
         tone: 'warn',
       };
 
+    // The owner cancelled the order (Stage 7, D6). The number and the reason,
+    // and no claim that any money was returned — the platform returns none (D5).
+    case 'ORDER_CANCELLED': {
+      const reason = text(payload, 'reason');
+      return {
+        title: 'أُلغي طلبك',
+        detail: [orderNumber ? `الطلب ${orderNumber}` : null, reason].filter(Boolean).join(' — ') || null,
+        href: '/account',
+        tone: 'warn',
+      };
+    }
+
     /*
      * The four refund messages below are HISTORICAL. The platform issues no
      * refunds, so nothing produces them any more — but rows written before

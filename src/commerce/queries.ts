@@ -1,11 +1,12 @@
 import 'server-only';
-import { and, desc, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, ne, notInArray, sql } from 'drizzle-orm';
 import {
-  entitlements, orderItems, orders, paymentMethods, paymentProofs, payments, productPrices,
+  entitlements, orderItems, orders, paymentProofs, payments, productPrices,
   products, productVersions,
 } from '@/db/schema';
 import { money, percentOf, subtract } from '@/lib/money/money';
 import { readUpgradeDiscountBp } from './version-policy';
+import { isOpenPayment } from './payment-status';
 import { withActor } from '@/db/actor-context';
 import { availableMethods, whatsappHelpLink } from '@/payments/registry';
 import type { Actor } from '@/authz/actor';
@@ -18,6 +19,9 @@ import type { PaymentContext } from '@/payments/port';
  * resolves. A customer asking for "the order at this id" gets nothing if it
  * is not theirs — the queries do not re-implement that check.
  */
+
+/** Where the buyer still chooses, changes or cancels (Stage 7, D2/D4). */
+const BUYER_CAN_ACT: readonly string[] = ['DRAFT', 'AWAITING_PAYMENT', 'PAYMENT_ISSUE'];
 
 export async function checkoutView(actor: Actor, orderId: string) {
   return withActor(actor, async (tx) => {
@@ -38,6 +42,11 @@ export async function checkoutView(actor: Actor, orderId: string) {
     // What the customer was told when they chose the method — kept on the
     // payment (migration 0055), not read from the method, which the owner may
     // since have changed or disabled (and RLS hides a disabled one).
+    //
+    // Every attempt is its own row (Stage 7, K1). The page shows the OPEN one
+    // — at most one exists — and, when there is none, why the last one was
+    // rejected. A rejected or cancelled attempt is never shown as if it were
+    // still waiting for a receipt: that was the dead end S7-01.
     const paymentRows = await tx
       .select({
         id: payments.id,
@@ -47,11 +56,17 @@ export async function checkoutView(actor: Actor, orderId: string) {
         instructionsAr: payments.instructionsSnapshot,
         accountDetailsAr: payments.accountDetailsSnapshot,
         requiresProof: payments.requiresProofSnapshot,
+        rejectedReason: payments.rejectedReason,
+        updatedAt: payments.updatedAt,
       })
       .from(payments)
       .where(eq(payments.orderId, order.id))
-      .orderBy(desc(payments.createdAt))
-      .limit(1);
+      .orderBy(desc(payments.createdAt), desc(payments.id));
+    const openPayment = paymentRows.find((row) => isOpenPayment(row.status)) ?? null;
+    const latest = paymentRows[0] ?? null;
+    const lastRejection = !openPayment && latest?.status === 'REJECTED'
+      ? { reason: latest.rejectedReason, at: latest.updatedAt }
+      : null;
 
     const context: PaymentContext = {
       orderId: order.id,
@@ -66,10 +81,23 @@ export async function checkoutView(actor: Actor, orderId: string) {
     // §23: the WhatsApp fallback for this order, when a number is set (W2).
     const whatsappHelp = await whatsappHelpLink(tx, context);
 
+    // What the buyer may do from here (Stage 7). For rendering only: every
+    // one of these is refused on the server again (CLAUDE.md rule 4).
+    const isBuyer = actor.kind === 'USER' && actor.userId === order.customerId;
+    const waitsForPayment = BUYER_CAN_ACT.includes(order.status);
+    const canChangeMethod = isBuyer
+      && waitsForPayment
+      && order.totalMinor > 0n
+      && (openPayment === null || openPayment.status !== 'PROOF_SUBMITTED');
+    const canCancel = isBuyer && waitsForPayment;
+
     return {
       order,
       items,
-      payment: paymentRows[0] ?? null,
+      payment: openPayment,
+      lastRejection,
+      canChangeMethod,
+      canCancel,
       whatsappHelp,
       methods: methods.map((m) => ({
         id: m.config.id,
@@ -339,12 +367,19 @@ export async function verificationQueue(actor: Actor) {
         orderId: orders.id,
         orderNumber: orders.orderNumber,
         orderStatus: orders.status,
-        methodName: paymentMethods.displayNameAr,
+        // The name the buyer chose, as it was then (S7-11) — not the method's
+        // name today, which the owner may have changed since.
+        methodName: payments.methodNameSnapshot,
       })
       .from(payments)
       .innerJoin(orders, eq(orders.id, payments.orderId))
-      .leftJoin(paymentMethods, eq(paymentMethods.id, payments.paymentMethodId))
-      .where(inArray(payments.status, ['PROOF_SUBMITTED', 'AWAITING_PROOF', 'INITIATED']))
+      .where(and(
+        inArray(payments.status, ['PROOF_SUBMITTED', 'AWAITING_PROOF', 'INITIATED']),
+        // An open payment on a settled or cancelled order can never be
+        // decided; it is not work for the owner (C-2). Migration 0066 closed
+        // the ones the old code left, and none can be made now.
+        notInArray(orders.status, ['PAID', 'COMPLETED', 'CANCELLED', 'REFUNDED']),
+      ))
       .orderBy(desc(payments.createdAt))
       .limit(50);
 

@@ -284,7 +284,7 @@ describe('Scenario B — the 50% upgrade: $100 list, $50 paid, 70/30 kept', () =
 
   it('a fixed agreement under the same discount keeps its proportion too (D-02 with D-03)', async () => {
     // The approval path's own resolver, with the upgrade discount on the line.
-    const terms = await withActor(owner, (tx) => resolveTermsForSale(tx, ids.pCo, 0, 5_000n));
+    const terms = await withActor(owner, (tx) => resolveTermsForSale(tx, ids.pCo, { amountMinor: 10_000n, currency: 'USD', priceRowId: null }, 0, 5_000n));
     const f1 = terms.distribution.find((d) => d.contributorId === ids.contribF1)!;
     const f2 = terms.distribution.find((d) => d.contributorId === ids.contribF2)!;
     // $20 fixed for the product, 60/40, at half price: $6 and $4.

@@ -3,7 +3,9 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { setRequestLocale } from 'next-intl/server';
 import { SiteHeader, SiteFooter } from '@/components/site-chrome';
-import { FreeOrderForm, PaymentMethodPicker, ProofUploadForm } from '@/components/commerce-forms';
+import {
+  CancelOrderForm, FreeOrderForm, PaymentMethodPicker, ProofUploadForm,
+} from '@/components/commerce-forms';
 import { formatPrice } from '@/components/product-card';
 import { requireActor } from '@/auth/current';
 import { checkoutView } from '@/commerce/queries';
@@ -73,8 +75,11 @@ export default async function CheckoutPage({
 
   const view = await resolveOrder(orderId);
 
-  const { order, items, payment, methods, whatsappHelp } = view;
+  const { order, items, payment, lastRejection, canChangeMethod, canCancel, methods, whatsappHelp } = view;
   const isSettled = order.status === 'PAID' || order.status === 'COMPLETED';
+  const isCancelled = order.status === 'CANCELLED';
+  // Where a method is still chosen (Stage 7): nothing open, the order waiting.
+  const waitsForPayment = ['DRAFT', 'AWAITING_PAYMENT', 'PAYMENT_ISSUE'].includes(order.status);
   // A free order is taken, not paid for: no method to choose, nothing to confirm.
   const isFree = order.totalMinor === 0n;
 
@@ -136,53 +141,101 @@ export default async function CheckoutPage({
               الذهاب إلى مشترياتي
             </Link>
           </section>
+        ) : isCancelled ? (
+          // Stage 7 (K3-A): a cancelled order offers nothing more to do here;
+          // the product can be ordered again from its page.
+          <section className="rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-surface)] p-5">
+            <p className="text-sm">أُلغي هذا الطلب. يمكنك شراء المنتج من جديد من صفحته.</p>
+          </section>
         ) : payment ? (
-          <section className="flex flex-col gap-5 rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-surface)] p-5">
-            <div className="flex flex-col gap-2">
-              <h2 className="text-sm font-semibold text-[var(--color-ink-soft)]">
-                تعليمات الدفع — {payment.methodName}
-              </h2>
-              {payment.instructionsAr ? (
-                <p className="whitespace-pre-line text-sm leading-loose">{payment.instructionsAr}</p>
-              ) : null}
-              {payment.accountDetailsAr ? (
-                <div className="rounded-[var(--radius-card)] bg-[var(--color-surface-muted)] px-4 py-3">
-                  <p className="mb-1 text-xs text-[var(--color-ink-faint)]">بيانات الحساب</p>
-                  <p className="technical-term text-sm font-semibold">{payment.accountDetailsAr}</p>
-                </div>
-              ) : null}
-              {/* A transfer to annotate exists only where there is an account to
-                  pay into or a receipt to send — not for WhatsApp assistance (W2). */}
-              {payment.accountDetailsAr || payment.requiresProof ? (
-                <p className="rounded-[var(--radius-card)] border border-dashed border-[var(--color-line-strong)] px-4 py-2.5 text-sm">
-                  اكتب رقم الطلب{' '}
-                  <span className="technical-term font-bold">{order.orderNumber}</span>{' '}
-                  في خانة البيان عند التحويل.
+          <>
+            <section className="flex flex-col gap-5 rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-surface)] p-5">
+              <div className="flex flex-col gap-2">
+                <h2 className="text-sm font-semibold text-[var(--color-ink-soft)]">
+                  تعليمات الدفع — {payment.methodName}
+                </h2>
+                {payment.instructionsAr ? (
+                  <p className="whitespace-pre-line text-sm leading-loose">{payment.instructionsAr}</p>
+                ) : null}
+                {payment.accountDetailsAr ? (
+                  <div className="rounded-[var(--radius-card)] bg-[var(--color-surface-muted)] px-4 py-3">
+                    <p className="mb-1 text-xs text-[var(--color-ink-faint)]">بيانات الحساب</p>
+                    <p className="technical-term text-sm font-semibold">{payment.accountDetailsAr}</p>
+                  </div>
+                ) : null}
+                {/* A transfer to annotate exists only where there is an account to
+                    pay into or a receipt to send — not for WhatsApp assistance (W2). */}
+                {payment.accountDetailsAr || payment.requiresProof ? (
+                  <p className="rounded-[var(--radius-card)] border border-dashed border-[var(--color-line-strong)] px-4 py-2.5 text-sm">
+                    اكتب رقم الطلب{' '}
+                    <span className="technical-term font-bold">{order.orderNumber}</span>{' '}
+                    في خانة البيان عند التحويل.
+                  </p>
+                ) : null}
+              </div>
+
+              {payment.status === 'AWAITING_PROOF' ? (
+                <ProofUploadForm paymentId={payment.id} />
+              ) : payment.status === 'PROOF_SUBMITTED' ? (
+                <p className="rounded-[var(--radius-card)] border border-[var(--color-warn)] bg-[var(--color-warn-soft)] px-4 py-3 text-sm text-[var(--color-warn)]">
+                  استلمنا الإيصال. تُراجَع الطلبات يدوياً، وسيُفعَّل الوصول فور تأكيد وصول المبلغ.
+                </p>
+              ) : payment.status === 'INITIATED' ? (
+                // WhatsApp assistance (K2): a conversation, not a payment — the
+                // buyer may still pay by any method below.
+                <p className="text-sm text-[var(--color-ink-soft)]">
+                  يمكنك متابعة المحادثة معنا عبر واتساب، أو اختيار طريقة دفع أخرى أدناه.
                 </p>
               ) : null}
-            </div>
+            </section>
 
-            {payment.requiresProof && order.status !== 'PROOF_SUBMITTED' ? (
-              <ProofUploadForm paymentId={payment.id} />
-            ) : order.status === 'PROOF_SUBMITTED' ? (
-              <p className="rounded-[var(--radius-card)] border border-[var(--color-warn)] bg-[var(--color-warn-soft)] px-4 py-3 text-sm text-[var(--color-warn)]">
-                استلمنا الإيصال. تُراجَع الطلبات يدوياً، وسيُفعَّل الوصول فور تأكيد وصول المبلغ.
-              </p>
+            {canChangeMethod ? (
+              payment.status === 'INITIATED' ? (
+                <section className="rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-surface)] p-5">
+                  <PaymentMethodPicker orderId={order.id} methods={methods} />
+                </section>
+              ) : (
+                // Before a receipt only (D2): choosing another method closes
+                // this attempt and opens a new one.
+                <details className="rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-surface)] p-5">
+                  <summary className="cursor-pointer text-sm font-semibold text-[var(--color-ink-soft)]">
+                    تغيير طريقة الدفع
+                  </summary>
+                  <div className="mt-4">
+                    <PaymentMethodPicker orderId={order.id} methods={methods} />
+                  </div>
+                </details>
+              )
             ) : null}
-          </section>
+          </>
         ) : (
-          <section className="rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-surface)] p-5">
+          <section className="flex flex-col gap-4 rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-surface)] p-5">
             {isFree && order.status === 'DRAFT' ? (
               <FreeOrderForm orderId={order.id} />
+            ) : waitsForPayment ? (
+              <>
+                {/* K1: the rejected attempt is history; the buyer tries again
+                    with any method, and is told why the last one failed. */}
+                {lastRejection ? (
+                  <div className="rounded-[var(--radius-card)] border border-[var(--color-danger)] bg-[var(--color-danger-soft)] px-4 py-3 text-sm text-[var(--color-danger)]">
+                    <p className="font-semibold">لم يُعتمد الدفع السابق.</p>
+                    {lastRejection.reason ? <p>السبب: {lastRejection.reason}</p> : null}
+                    <p>يمكنك المحاولة مرة أخرى بالطريقة نفسها أو بطريقة أخرى.</p>
+                  </div>
+                ) : null}
+                <PaymentMethodPicker orderId={order.id} methods={methods} />
+              </>
             ) : (
-              <PaymentMethodPicker orderId={order.id} methods={methods} />
+              <p className="text-sm text-[var(--color-ink-soft)]">الطلب قيد المراجعة.</p>
             )}
           </section>
         )}
 
+        {canCancel ? <CancelOrderForm orderId={order.id} /> : null}
+
         {/* §23: the permanent fallback, wherever the order still waits for
             payment and the owner has set a WhatsApp number (W2). */}
-        {!isSettled && !isFree && whatsappHelp ? (
+        {!isSettled && !isCancelled && !isFree && whatsappHelp ? (
           <section className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-surface)] p-5">
             <p className="text-sm font-semibold">تواجه صعوبة في الدفع؟</p>
             <a

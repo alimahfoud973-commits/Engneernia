@@ -5,7 +5,7 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { currentActor, requireActor, requireOwner } from '@/auth/current';
 import {
-  createOrder, completeFreeOrder, placeOrder, approvePayment, rejectPayment,
+  createOrder, completeFreeOrder, placeOrder, approvePayment, rejectPayment, cancelOrder,
 } from './orders';
 import { toUserMessage } from '@/lib/action-errors';
 import { submittedValues, type SubmittedValues } from '@/lib/form-values';
@@ -164,6 +164,63 @@ export async function rejectPaymentAction(
       paymentId: parsed.data.paymentId,
       reason: parsed.data.reason.trim(),
     });
+  } catch (error) {
+    return { error: toMessage(error), values: submittedValues(formData) };
+  }
+
+  revalidatePath('/admin/payments');
+  return { error: null, ok: true };
+}
+
+const cancelSchema = z.object({
+  orderId: z.string().uuid(),
+  reason: z.string().max(400).optional(),
+});
+
+/**
+ * The buyer cancels their own order while it still waits for payment —
+ * DRAFT, AWAITING_PAYMENT or PAYMENT_ISSUE (Stage 7, D4). `cancelOrder`
+ * decides; this only carries the order id from the checkout page.
+ */
+export async function cancelOrderAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const parsed = cancelSchema.safeParse({ orderId: formData.get('orderId') });
+  if (!parsed.success) return { error: 'طلب غير صالح' };
+
+  const actor = await requireActor(`/checkout/${parsed.data.orderId}`);
+
+  try {
+    await cancelOrder(actor, { orderId: parsed.data.orderId });
+  } catch (error) {
+    return { error: toMessage(error) };
+  }
+
+  revalidatePath(`/checkout/${parsed.data.orderId}`);
+  return { error: null, ok: true };
+}
+
+/**
+ * The owner cancels an order, and must say why (Stage 7, D4–D6). No money
+ * moves: the platform has no refund, and says so on the form (D5).
+ */
+export async function ownerCancelOrderAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const parsed = cancelSchema.safeParse({
+    orderId: formData.get('orderId'),
+    reason: formData.get('reason') ?? undefined,
+  });
+  if (!parsed.success || !parsed.data.reason?.trim()) {
+    return { error: 'يرجى كتابة سبب إلغاء الطلب', values: submittedValues(formData) };
+  }
+
+  const actor = await requireOwner('/admin/payments');
+
+  try {
+    await cancelOrder(actor, { orderId: parsed.data.orderId, reason: parsed.data.reason.trim() });
   } catch (error) {
     return { error: toMessage(error), values: submittedValues(formData) };
   }

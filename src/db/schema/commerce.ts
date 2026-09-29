@@ -397,6 +397,11 @@ export const payments = pgTable(
     index('payments_status_idx').on(table.status, table.createdAt),
     uniqueIndex('payments_provider_ref_unique').on(table.paymentMethodId, table.providerRef),
     uniqueIndex('payments_idempotency_unique').on(table.idempotencyKey),
+    // At most one open attempt per order (Stage 7, migration 0066). Every
+    // retry is a new row; the one before it is decided or closed first.
+    uniqueIndex('payments_one_open_per_order')
+      .on(table.orderId)
+      .where(sql`${table.status} IN ('INITIATED', 'AWAITING_PROOF', 'PROOF_SUBMITTED')`),
   ],
 );
 

@@ -92,6 +92,21 @@ function codes(values: readonly string[], pattern: RegExp, label: string): strin
   return out;
 }
 
+/**
+ * A manual transfer always asks for its receipt (Stage 7 — owner decision D3).
+ *
+ * A manual method without one produced a payment nobody could finish: the
+ * buyer had nothing to upload, and the owner's queue had no decision to make
+ * on a payment with no receipt. WhatsApp assistance is not a transfer and may
+ * still go without one; it is an attempt the buyer can leave for another
+ * method (K2).
+ */
+export function assertReceiptRule(type: string, requiresProof: boolean): void {
+  if (type === 'MANUAL' && !requiresProof) {
+    throw new ValidationError('طرق الدفع اليدوية تتطلب إيصال الدفع دائماً');
+  }
+}
+
 /** Trim, bound and normalise what the owner typed. Throws on anything unusable. */
 export function normalizeFields(input: PaymentMethodFields): PaymentMethodFields {
   const displayNameAr = text(input.displayNameAr, 'اسم طريقة الدفع', 100);
@@ -129,9 +144,9 @@ const FIELD_COLUMNS = {
 async function readFields(
   tx: Transaction,
   methodId: string,
-): Promise<(PaymentMethodFields & { isActive: boolean; code: string }) | null> {
+): Promise<(PaymentMethodFields & { isActive: boolean; code: string; type: string }) | null> {
   const [row] = await tx
-    .select({ ...FIELD_COLUMNS, isActive: paymentMethods.isActive, code: paymentMethods.code })
+    .select({ ...FIELD_COLUMNS, isActive: paymentMethods.isActive, code: paymentMethods.code, type: paymentMethods.type })
     .from(paymentMethods)
     .where(eq(paymentMethods.id, methodId))
     .limit(1);
@@ -207,6 +222,7 @@ export async function createPaymentMethod(
     throw new ValidationError('نوع طريقة الدفع غير مدعوم');
   }
   const fields = normalizeFields(input);
+  assertReceiptRule(input.type, fields.requiresProof);
 
   return withActor(actor, async (tx) => {
     let created: { id: string } | undefined;
@@ -251,9 +267,11 @@ export async function updatePaymentMethod(
   return withActor(actor, async (tx) => {
     const current = await readFields(tx, methodId);
     if (!current) throw new NotFoundError('طريقة الدفع غير موجودة');
+    assertReceiptRule(current.type, fields.requiresProof);
 
-    const { isActive: _active, code, ...before } = current;
+    const { isActive: _active, code, type: _type, ...before } = current;
     void _active;
+    void _type;
     const diff = changes(before, { ...fields });
     if (Object.keys(diff.after).length === 0) return { changed: false };
 

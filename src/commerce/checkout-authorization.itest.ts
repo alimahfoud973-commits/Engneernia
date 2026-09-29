@@ -245,7 +245,9 @@ describe('W14 — a payment starts only where the order still waits for one', ()
     await rejectPayment(owner, { paymentId: await paymentOf(orderId), reason: 'الإيصال غير واضح' });
     expect((await footprint(orderId)).order).toBe('PAYMENT_ISSUE');
     await placeOrder(buyerB, { orderId, paymentMethodId: ids.bank });
-    expect((await footprint(orderId)).order).toBe('AWAITING_PAYMENT');
+    // The retry is a NEW attempt beside the rejected one (Stage 7, K1) — it
+    // used to be swallowed by the idempotency key, leaving only REJECTED.
+    expect(await footprint(orderId)).toMatchObject({ order: 'AWAITING_PAYMENT', payments: 'AWAITING_PROOF,REJECTED' });
   });
 });
 

@@ -10,6 +10,7 @@ import { getStorage, newStorageKey } from '@/media/storage';
 import { getScanner } from '@/media/scanner';
 import { detectContainer } from '@/media/file-types';
 import { moveOrderForProof } from './proof-transition';
+import { lockOrder } from './order-lock';
 
 /**
  * ===========================================================================
@@ -193,7 +194,22 @@ export async function submitPaymentProof(
      * Checked again here, not instead of above: the pre-flight closes the
      * storage hole, and this is still the check that governs the write. A
      * payment revoked between the two reads must not produce a proof row.
+     *
+     * Under the ORDER lock (Stage 7, S7-04): a change of method or a
+     * cancellation that lands meanwhile is seen here, not written over.
      */
+    const [seen] = await tx
+      .select({ orderId: payments.orderId })
+      .from(payments)
+      .where(eq(payments.id, input.paymentId))
+      .limit(1);
+    if (!seen) throw new NotFoundError('الدفعة غير موجودة');
+
+    const order = await lockOrder(tx, seen.orderId);
+    if (!order) {
+      throw new RuleViolationError('لا تقبل هذه الدفعة إيصالاً الآن: تغيّرت حالة الطلب. تابع من صفحة الطلب.');
+    }
+
     const [payment] = await tx
       .select()
       .from(payments)
@@ -201,9 +217,6 @@ export async function submitPaymentProof(
       .limit(1);
     if (!payment) throw new NotFoundError('الدفعة غير موجودة');
     assertAwaitingProof(payment.status);
-
-    const [order] = await tx.select().from(orders).where(eq(orders.id, payment.orderId)).limit(1);
-    if (!order) throw new NotFoundError('الطلب غير موجود');
 
     const [proof] = await tx
       .insert(paymentProofs)
@@ -224,7 +237,9 @@ export async function submitPaymentProof(
     await moveOrderForProof(tx, actor, order);
 
     await recordAudit(tx, actor, {
-      action: 'PAYMENT_APPROVED', // reused enum member; the entity says what it is
+      // Its own word since migration 0065 (S7-07). Earlier uploads were
+      // recorded as PAYMENT_APPROVED; entity_type still tells them apart.
+      action: 'PAYMENT_PROOF_SUBMITTED',
       entityType: 'payment_proof',
       entityId: proof.id,
       after: {

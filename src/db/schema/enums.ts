@@ -73,4 +73,9 @@ export const auditActionEnum = pgEnum('audit_action', [
   // a statement withdrawn by the owner — added by migration 0062 (S5-08);
   // until then a cancellation was recorded as SETTLEMENT_GENERATED
   'SETTLEMENT_CANCELLED',
+  // the manual payment flow — added by migration 0065 (Stage 7). A receipt
+  // upload was recorded as PAYMENT_APPROVED until then (S7-07).
+  'PAYMENT_PROOF_SUBMITTED',
+  'ORDER_CANCELLED',
+  'PAYMENT_CANCELLED',
 ]);

@@ -11,7 +11,7 @@ import {
   payments, productContributors,
   productFiles, productPrices, products, users,
 } from '@/db/schema';
-import { completeFreeOrder, createOrder, placeOrder } from './orders';
+import { cancelOrder, completeFreeOrder, createOrder, placeOrder } from './orders';
 import { myPurchases } from './queries';
 import { changeProductPrice } from '@/catalog/products';
 import { deliverProductFile } from '@/media/deliver';
@@ -228,14 +228,26 @@ describe('2. what is not free is not given away', () => {
     expect(granted).toHaveLength(0);
   });
 
-  it('refuses a free order whose product has since been given a price', async () => {
+  /*
+   * Stage 7, owner decision D7 (option A): an order keeps the terms it was
+   * made on. A free order made while the product was free completes free even
+   * after the product is given a price — this test asserted the opposite
+   * under F1 and was changed with that decision. What stays closed is the next
+   * order: it is priced from today's price, and the free path refuses it.
+   */
+  it('completes a free order made while the product was free, even after it is given a price; a new order is paid', async () => {
     const order = await createOrder(late, { productSlugs: [FREE_SLUG] });
     expect(order.totalMinor).toBe(0n);
     await changeProductPrice(owner, { productId: ids.free, newAmountMinor: 500n, currency: 'USD', reason: 'F1 test' });
     try {
-      await expect(completeFreeOrder(late, { orderId: order.orderId })).rejects.toThrow(RuleViolationError);
+      await completeFreeOrder(late, { orderId: order.orderId });
       const granted = await asOwner((tx) => tx.select().from(entitlements).where(eq(entitlements.customerId, ids.late)));
-      expect(granted).toHaveLength(0);
+      expect(granted).toHaveLength(1);
+
+      const next = await createOrder(unpub, { productSlugs: [FREE_SLUG] });
+      expect(next.totalMinor).toBe(500n);
+      await expect(completeFreeOrder(unpub, { orderId: next.orderId })).rejects.toThrow(RuleViolationError);
+      await cancelOrder(unpub, { orderId: next.orderId });
     } finally {
       await changeProductPrice(owner, { productId: ids.free, newAmountMinor: 0n, currency: 'USD', reason: 'F1 test restore' });
     }

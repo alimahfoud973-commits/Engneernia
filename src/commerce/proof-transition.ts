@@ -1,5 +1,5 @@
 import 'server-only';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { orderEvents, orders } from '@/db/schema';
 import type { Transaction } from '@/db/actor-context';
 import type { Actor } from '@/authz/actor';
@@ -24,7 +24,8 @@ export async function moveOrderForProof(
   const updated = await tx
     .update(orders)
     .set({ status: 'PROOF_SUBMITTED', updatedAt: new Date() })
-    .where(eq(orders.id, order.id))
+    // Only from the status the caller saw (Stage 7, S7-04).
+    .where(and(eq(orders.id, order.id), eq(orders.status, order.status)))
     .returning({ id: orders.id });
 
   if (updated.length === 0) {

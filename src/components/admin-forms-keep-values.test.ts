@@ -45,6 +45,7 @@ const EXEMPT_COMPONENTS: Record<string, string> = {
   BuyButton: 'buyer form, not admin',
   FreeOrderForm: 'buyer form, not admin',
   PaymentMethodPicker: 'buyer form, not admin',
+  CancelOrderForm: 'buyer form, not admin',
 };
 
 /** Actions whose refusal need not echo, for the reason named. */

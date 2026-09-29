@@ -134,10 +134,19 @@ function Fields({ type, values, typed }: { type: string; values?: PaymentMethodF
           <span className="text-xs text-[var(--color-ink-faint)]">الأصغر يظهر أولاً.</span>
         </label>
       </div>
-      <label className="flex items-center gap-2 text-sm">
-        <input type="checkbox" name="requiresProof" defaultChecked={typed ? 'requiresProof' in typed : (values?.requiresProof ?? true)} />
-        يطلب من المشتري رفع إيصال الدفع
-      </label>
+      {type === 'MANUAL' ? (
+        // A manual transfer always asks for its receipt (Stage 7, D3): the
+        // server refuses the opposite, so the choice is not offered.
+        <p className="text-sm">
+          <input type="hidden" name="requiresProof" value="on" />
+          إيصال الدفع مطلوب دائماً للطرق اليدوية.
+        </p>
+      ) : (
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" name="requiresProof" defaultChecked={typed ? 'requiresProof' in typed : (values?.requiresProof ?? true)} />
+          يطلب من المشتري رفع إيصال الدفع
+        </label>
+      )}
     </>
   );
 }

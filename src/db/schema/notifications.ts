@@ -34,6 +34,8 @@ export const notificationTypeEnum = pgEnum('notification_type', [
   'PRODUCT_SOLD',
   /** An owner correction moved this engineer's balance (OPEN-21). */
   'BALANCE_ADJUSTED',
+  /** The owner cancelled the buyer's order (Stage 7, D6) — migration 0065. */
+  'ORDER_CANCELLED',
 ]);
 
 /**

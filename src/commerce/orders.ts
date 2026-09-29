@@ -1,14 +1,16 @@
 import 'server-only';
-import { and, eq, inArray, isNotNull, isNull, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNotNull, isNull, lte, ne, or, sql } from 'drizzle-orm';
 import {
   entitlements, orderEvents, orderItemContributors, orderItems, orders,
-  payments, productPrices, products, users,
+  paymentProofs, payments, productPrices, products, users,
 } from '@/db/schema';
 import { withActor, type Transaction } from '@/db/actor-context';
 import { recordAudit } from '@/audit/log';
 import { notifyContributor, notifyUser } from '@/notifications/notify';
 import { isOwner, type Actor } from '@/authz/actor';
-import { ConflictError, NotFoundError, RuleViolationError, UnauthenticatedError } from '@/lib/errors';
+import {
+  ConflictError, NotFoundError, RuleViolationError, UnauthenticatedError, ValidationError,
+} from '@/lib/errors';
 import { resolveTermsForSale } from '@/finance/commission-resolver';
 import { readTaxPolicy } from '@/finance/tax-policy';
 import { issueInvoice } from '@/finance/invoices';
@@ -19,6 +21,10 @@ import { resolveMethod } from '@/payments/registry';
 import type { InitiationResult, PaymentContext } from '@/payments/port';
 import { isProviderRefTaken, normalizeProviderRef } from './provider-ref';
 import { readUpgradeDiscountBp } from './version-policy';
+import { lockOrder } from './order-lock';
+import {
+  OPEN_PAYMENT_STATUSES, assertPaymentTransition, isOpenPayment, payableFrom, type PaymentStatus,
+} from './payment-status';
 import { money, percentOf } from '@/lib/money/money';
 
 /**
@@ -54,11 +60,13 @@ async function moveOrder(
   const updated = await tx
     .update(orders)
     .set(patch)
-    .where(eq(orders.id, order.id))
+    // Only from the status the caller saw (Stage 7, S7-04): a decision made on
+    // a stale read moves nothing instead of overwriting the one that won.
+    .where(and(eq(orders.id, order.id), eq(orders.status, order.status)))
     .returning({ id: orders.id });
 
   // RLS refuses a write by returning zero rows, not by raising. Without this
-  // check an unauthorised transition would look like a success.
+  // check an unauthorised — or stale — transition would look like a success.
   if (updated.length === 0) {
     throw new RuleViolationError('لم يُطبَّق تغيير حالة الطلب', { orderId: order.id, to });
   }
@@ -73,6 +81,32 @@ async function moveOrder(
     actorUserId: actor.kind === 'USER' ? actor.userId : null,
     note: note ?? null,
   });
+}
+
+/**
+ * The price row an order line was priced from, for a line written before
+ * Stage 7 recorded it: the row with the same amount and currency that was in
+ * force when the order was made. Null if none matches — the line's own price
+ * still stands (K3); only the pointer to its catalogue row is missing.
+ */
+async function priceRowAt(
+  tx: Transaction,
+  line: { productId: string; unitPriceMinor: bigint; currency: string },
+  madeAt: Date,
+): Promise<string | null> {
+  const [row] = await tx
+    .select({ id: productPrices.id })
+    .from(productPrices)
+    .where(and(
+      eq(productPrices.productId, line.productId),
+      eq(productPrices.amountMinor, line.unitPriceMinor),
+      eq(productPrices.currency, line.currency),
+      lte(productPrices.effectiveFrom, madeAt),
+      or(isNull(productPrices.effectiveTo), gt(productPrices.effectiveTo, madeAt)),
+    ))
+    .orderBy(desc(productPrices.effectiveFrom))
+    .limit(1);
+  return row?.id ?? null;
 }
 
 /**
@@ -210,6 +244,7 @@ export async function createOrder(
         currentVersionId: products.currentVersionId,
         priceMinor: productPrices.amountMinor,
         priceCurrency: productPrices.currency,
+        priceRowId: productPrices.id,
       })
       .from(products)
       .leftJoin(
@@ -307,6 +342,9 @@ export async function createOrder(
         // THIS file even if another is released before the payment clears.
         versionId: row.currentVersionId,
         isUpgrade,
+        // The price row this line was priced from (Stage 7, K3): the price the
+        // buyer agreed to, which approval books whatever the product costs by then.
+        priceRowId: row.priceRowId,
       })));
 
     await tx.insert(orderEvents).values({
@@ -360,7 +398,25 @@ export function isInactiveCreditRefusal(error: unknown): boolean {
 /** The order states from which the customer may choose how to pay (W14). */
 const PAYMENT_CAN_START: readonly OrderStatus[] = ['DRAFT', 'AWAITING_PAYMENT', 'PAYMENT_ISSUE'];
 
-/** Choose how to pay, and get the instructions or the handoff (§24). */
+/**
+ * Choose how to pay, and get the instructions or the handoff (§24).
+ *
+ * EVERY ATTEMPT IS ITS OWN PAYMENT ROW (Stage 7 — K1, K2, D2).
+ *
+ *   - At most one payment is OPEN at a time (INITIATED, AWAITING_PROOF,
+ *     PROOF_SUBMITTED); the index `payments_one_open_per_order` (0066)
+ *     refuses a second one however it is written.
+ *   - The same method again (a double-click, a refresh, WhatsApp twice) opens
+ *     nothing new: the open attempt's instructions or chat link come back.
+ *   - Another method before a receipt — WhatsApp included — closes the open
+ *     attempt as CANCELLED and opens a new one. After a receipt the order is
+ *     PROOF_SUBMITTED and no method can be chosen at all.
+ *   - After a rejection there is no open attempt: the next choice, with the
+ *     same method or another, is a new row. The rejected one is history.
+ *
+ * The idempotency key names the attempt (`<order>:attempt:<n>`), counted
+ * while the order row is locked, so two requests cannot both be attempt n.
+ */
 export async function placeOrder(
   actor: Actor,
   input: { orderId: string; paymentMethodId: string },
@@ -368,13 +424,13 @@ export async function placeOrder(
   const customerId = requireUser(actor);
 
   return withActor(actor, async (tx) => {
-    const [order] = await tx
+    const [seen] = await tx
       .select()
       .from(orders)
       .where(eq(orders.id, input.orderId))
       .limit(1);
 
-    if (!order) throw new NotFoundError('الطلب غير موجود');
+    if (!seen) throw new NotFoundError('الطلب غير موجود');
 
     /*
      * THE CHECKOUT IS THE CUSTOMER'S OWN STEP (Stage 3, W14). Named here, not
@@ -384,21 +440,27 @@ export async function placeOrder(
      * order and move it to AWAITING_PAYMENT. Reading stays; acting as the
      * customer does not. Both checks run before anything is written.
      */
-    if (order.customerId !== customerId) {
-      throw new RuleViolationError('إتمام الدفع خطوة صاحب الطلب وحده', { orderId: order.id });
+    if (seen.customerId !== customerId) {
+      throw new RuleViolationError('إتمام الدفع خطوة صاحب الطلب وحده', { orderId: seen.id });
     }
-    // A payment starts only where the order still waits for one. The insert
-    // below used to run for any status, so a completed order could gain a
-    // fresh payment row.
-    if (!PAYMENT_CAN_START.includes(order.status)) {
-      throw new RuleViolationError('لا يمكن بدء الدفع لطلب في هذه الحالة', { orderId: order.id, status: order.status });
+    // A payment starts only where the order still waits for one — never
+    // after a receipt, so the method cannot change once one is uploaded (D2).
+    if (!PAYMENT_CAN_START.includes(seen.status)) {
+      throw new RuleViolationError('لا يمكن بدء الدفع لطلب في هذه الحالة', { orderId: seen.id, status: seen.status });
     }
 
     // A free order is taken, never paid for: `completeFreeOrder` below. A
     // payment of zero is refused by the database (payments_amount_positive),
     // and this says why in a sentence before it gets that far.
-    if (order.totalMinor === 0n) {
+    if (seen.totalMinor === 0n) {
       throw new RuleViolationError('هذا الطلب مجاني ولا يحتاج إلى دفع');
+    }
+
+    // Under the lock, from here on (S7-04). The status is read again: an
+    // upload or a cancellation may have landed since the read above.
+    const order = await lockOrder(tx, seen.id);
+    if (!order || !PAYMENT_CAN_START.includes(order.status)) {
+      throw new RuleViolationError('لا يمكن بدء الدفع لطلب في هذه الحالة', { orderId: seen.id });
     }
 
     const items = await tx
@@ -422,6 +484,27 @@ export async function placeOrder(
       throw new RuleViolationError('طريقة الدفع غير متاحة لهذا الطلب');
     }
 
+    const attempts = await tx
+      .select({ id: payments.id, status: payments.status, paymentMethodId: payments.paymentMethodId })
+      .from(payments)
+      .where(eq(payments.orderId, order.id));
+    const open = attempts.find((attempt) => isOpenPayment(attempt.status));
+
+    if (open && open.paymentMethodId === resolved.config.id) {
+      // The same choice again: the open attempt stands, and its handoff is
+      // given again — nothing is written.
+      return resolved.provider.initiate(resolved.config, context);
+    }
+
+    if (open) {
+      // A receipt is under review: the owner decides it, the buyer does not
+      // replace it (D2). The order's own status normally refuses this first.
+      if (open.status === 'PROOF_SUBMITTED') {
+        throw new RuleViolationError('لا يمكن تغيير طريقة الدفع بعد رفع الإيصال', { orderId: order.id });
+      }
+      await closeOpenPayments(tx, actor, order, 'تغيير طريقة الدفع');
+    }
+
     const initiation = await resolved.provider.initiate(resolved.config, context);
 
     await tx
@@ -432,16 +515,15 @@ export async function placeOrder(
         status: resolved.config.requiresProof ? 'AWAITING_PROOF' : 'INITIATED',
         amountMinor: order.totalMinor,
         currency: order.currency,
-        // One payment per order attempt; a double-click cannot create two.
-        idempotencyKey: `${order.id}:${resolved.config.id}`,
+        // One key per attempt, counted under the order lock (K1).
+        idempotencyKey: `${order.id}:attempt:${attempts.length + 1}`,
         // What this customer is told to do, kept with their payment: the
         // owner changing or disabling the method later does not rewrite it.
         methodNameSnapshot: resolved.config.displayNameAr,
         instructionsSnapshot: resolved.config.instructionsAr,
         accountDetailsSnapshot: resolved.config.accountDetailsAr,
         requiresProofSnapshot: resolved.config.requiresProof,
-      })
-      .onConflictDoNothing({ target: payments.idempotencyKey });
+      });
 
     if (order.status === 'DRAFT' || order.status === 'PAYMENT_ISSUE') {
       await moveOrder(tx, actor, order, 'AWAITING_PAYMENT', `طريقة الدفع: ${resolved.config.code}`);
@@ -449,6 +531,51 @@ export async function placeOrder(
 
     return initiation;
   });
+}
+
+/**
+ * Close every open payment of an order as CANCELLED — a changed method or a
+ * cancelled order — and audit each one (Stage 7).
+ *
+ * The owner writes them directly (`payments_update` is theirs). A buyer
+ * cannot, and must not be able to write a payment row at all, so theirs go
+ * through `app_cancel_open_payments` (0066): only their own order, only while
+ * it waits for payment, and only INITIATED or AWAITING_PROOF payments.
+ * Rejected and approved payments are never touched.
+ */
+async function closeOpenPayments(
+  tx: Transaction,
+  actor: Actor,
+  order: { id: string; orderNumber: string },
+  why: string,
+): Promise<string[]> {
+  let closed: string[];
+  if (isOwner(actor)) {
+    const rows = await tx
+      .update(payments)
+      .set({ status: 'CANCELLED', updatedAt: new Date() })
+      .where(and(
+        eq(payments.orderId, order.id),
+        inArray(payments.status, [...OPEN_PAYMENT_STATUSES] as PaymentStatus[]),
+      ))
+      .returning({ id: payments.id });
+    closed = rows.map((row) => row.id);
+  } else {
+    const rows = (await tx.execute(
+      sql`SELECT payment_id FROM app_cancel_open_payments(${order.id}::uuid)`,
+    )) as unknown as Array<{ payment_id: string }>;
+    closed = rows.map((row) => row.payment_id);
+  }
+
+  for (const paymentId of closed) {
+    await recordAudit(tx, actor, {
+      action: 'PAYMENT_CANCELLED',
+      entityType: 'payment',
+      entityId: paymentId,
+      after: { orderId: order.id, orderNumber: order.orderNumber, status: 'CANCELLED', why },
+    });
+  }
+  return closed;
 }
 
 /**
@@ -529,24 +656,15 @@ export async function approvePayment(
   const providerRef = normalizeProviderRef(input.providerRef);
 
   return withActor(actor, async (tx) => {
-    const [payment] = await tx
-      .select()
-      .from(payments)
-      .where(eq(payments.id, input.paymentId))
-      .limit(1);
+    const { payment, order } = await lockPaymentAndOrder(tx, input.paymentId);
 
-    if (!payment) throw new NotFoundError('الدفعة غير موجودة');
     if (payment.status === 'APPROVED') {
       // Idempotent: approving twice must not settle twice.
       throw new RuleViolationError('هذه الدفعة معتمدة مسبقاً', { paymentId: payment.id });
     }
-
-    const [order] = await tx
-      .select()
-      .from(orders)
-      .where(eq(orders.id, payment.orderId))
-      .limit(1);
-    if (!order) throw new NotFoundError('الطلب غير موجود');
+    // Only an open payment is decided (S7-06): a rejected or cancelled one is
+    // history, whatever state its order has moved on to since.
+    assertPaymentTransition(payment.status, 'APPROVED');
 
     const items = await tx
       .select()
@@ -596,29 +714,22 @@ export async function approvePayment(
       const terms = await resolveTermsForSale(
         tx,
         item.productId,
+        /*
+         * THE PRICE THE BUYER AGREED TO (Stage 7, K3): the line's own price,
+         * never the product's price today. A price changed while the order was
+         * open is the next order's price; this one is booked as it was made.
+         */
+        {
+          amountMinor: item.unitPriceMinor,
+          currency: item.currency,
+          priceRowId: item.priceRowId ?? await priceRowAt(tx, item, order.createdAt),
+        },
         taxPolicy.rateBp,
         // The discount frozen on the LINE when the order was built, never one
         // recomputed now. A promotion that ended between placing the order and
         // approving the payment must not retroactively raise the bill.
         item.discountMinor,
       );
-
-      // Compared on the LIST price: that is the number the customer saw and
-      // agreed to. Neither the tax split nor the discount happens outside it,
-      // so neither can make an unchanged price look changed.
-      if (terms.grossMinor !== item.unitPriceMinor) {
-        // The price moved between placing the order and approving payment.
-        // The customer agreed to the price they saw, so that price stands and
-        // the owner is told rather than the difference being absorbed silently.
-        throw new RuleViolationError(
-          'تغيّر سعر المنتج بعد إنشاء الطلب — راجع الطلب قبل الاعتماد',
-          {
-            itemId: item.id,
-            orderedPriceMinor: item.unitPriceMinor.toString(),
-            currentPriceMinor: terms.grossMinor.toString(),
-          },
-        );
-      }
 
       await tx
         .update(orderItems)
@@ -882,7 +993,7 @@ export async function approvePayment(
     });
 
     try {
-      await tx
+      const decided = await tx
         .update(payments)
         .set({
           status: 'APPROVED',
@@ -891,7 +1002,12 @@ export async function approvePayment(
           approvedAt: new Date(),
           updatedAt: new Date(),
         })
-        .where(eq(payments.id, payment.id));
+        // From the status read under the lock, and only from an open one.
+        .where(and(eq(payments.id, payment.id), eq(payments.status, payment.status)))
+        .returning({ id: payments.id });
+      if (decided.length === 0) {
+        throw new RuleViolationError('لم يُطبَّق اعتماد الدفعة', { paymentId: payment.id });
+      }
     } catch (error) {
       // The unique index stays the guard against one receipt settling two
       // orders; this only names its refusal. Throwing rolls back the whole
@@ -901,6 +1017,8 @@ export async function approvePayment(
       }
       throw error;
     }
+
+    await writeProofDecision(tx, actor, payment.id, 'APPROVED', null);
 
     await moveOrder(
       tx, actor,
@@ -938,7 +1056,66 @@ export async function approvePayment(
   });
 }
 
-/** Owner rejects a proof; the customer may try again (§24). */
+/**
+ * The payment and its order, both locked — the order first (S7-04).
+ *
+ * The payment is looked up once without a lock only to learn its order; both
+ * are then read again under their locks, so what is decided below is what is
+ * committed now, not what a concurrent decision has since replaced.
+ */
+async function lockPaymentAndOrder(tx: Transaction, paymentId: string) {
+  const [seen] = await tx
+    .select({ orderId: payments.orderId })
+    .from(payments)
+    .where(eq(payments.id, paymentId))
+    .limit(1);
+  if (!seen) throw new NotFoundError('الدفعة غير موجودة');
+
+  const order = await lockOrder(tx, seen.orderId);
+  if (!order) throw new NotFoundError('الطلب غير موجود');
+
+  const [payment] = await tx
+    .select()
+    .from(payments)
+    .where(eq(payments.id, paymentId))
+    .for('update');
+  if (!payment) throw new NotFoundError('الدفعة غير موجودة');
+
+  return { payment, order };
+}
+
+/**
+ * The owner's decision, written onto the receipt it was made on (Stage 7,
+ * S7-08): who reviewed it, when, and — for a rejection — why. The payment row
+ * and the audit log carry the decision too; the receipt used to be left
+ * blank, so nothing on it said it had ever been looked at.
+ */
+async function writeProofDecision(
+  tx: Transaction,
+  actor: Actor,
+  paymentId: string,
+  decision: 'APPROVED' | 'REJECTED',
+  reason: string | null,
+): Promise<void> {
+  await tx
+    .update(paymentProofs)
+    .set({
+      decision,
+      reviewedBy: actor.kind === 'USER' ? actor.userId : null,
+      reviewedAt: new Date(),
+      rejectionReason: decision === 'REJECTED' ? reason : null,
+    })
+    .where(and(eq(paymentProofs.paymentId, paymentId), eq(paymentProofs.decision, 'PENDING')));
+}
+
+/**
+ * Owner rejects a proof; the customer may try again (§24).
+ *
+ * The rejected payment is final (K1): the buyer's next choice of method opens
+ * a new payment row. Only an open payment can be rejected (S7-06) — never an
+ * approved or cancelled one — and the decision is taken under the order lock,
+ * so it cannot land on top of an approval that won the race (S7-04).
+ */
 export async function rejectPayment(
   actor: Actor,
   input: { paymentId: string; reason: string },
@@ -948,20 +1125,19 @@ export async function rejectPayment(
   }
 
   await withActor(actor, async (tx) => {
-    const [payment] = await tx
-      .select()
-      .from(payments)
-      .where(eq(payments.id, input.paymentId))
-      .limit(1);
-    if (!payment) throw new NotFoundError('الدفعة غير موجودة');
+    const { payment, order } = await lockPaymentAndOrder(tx, input.paymentId);
+    assertPaymentTransition(payment.status, 'REJECTED');
 
-    const [order] = await tx.select().from(orders).where(eq(orders.id, payment.orderId)).limit(1);
-    if (!order) throw new NotFoundError('الطلب غير موجود');
-
-    await tx
+    const decided = await tx
       .update(payments)
       .set({ status: 'REJECTED', rejectedReason: input.reason, updatedAt: new Date() })
-      .where(eq(payments.id, payment.id));
+      .where(and(eq(payments.id, payment.id), inArray(payments.status, [...payableFrom('REJECTED')])))
+      .returning({ id: payments.id });
+    if (decided.length === 0) {
+      throw new RuleViolationError('لم يُطبَّق رفض الدفعة', { paymentId: payment.id });
+    }
+
+    await writeProofDecision(tx, actor, payment.id, 'REJECTED', input.reason);
 
     await moveOrder(tx, actor, order, 'PAYMENT_ISSUE', input.reason);
 
@@ -977,5 +1153,80 @@ export async function rejectPayment(
       entityId: payment.id,
       after: { orderId: order.id, reason: input.reason },
     });
+  });
+}
+
+/**
+ * ===========================================================================
+ * CANCELLING AN ORDER (Stage 7 — owner decisions K3-A, D4, D5, D6)
+ * ===========================================================================
+ * The state table always allowed it; nothing performed it, so an order that
+ * could not be approved blocked its product for that buyer for good.
+ *
+ *   buyer:  DRAFT, AWAITING_PAYMENT, PAYMENT_ISSUE — their own order only
+ *   owner:  the same, PROOF_SUBMITTED and PENDING_VERIFICATION, WITH a reason
+ *   nobody: PAID, COMPLETED, CANCELLED, REFUNDED
+ *
+ * Every open payment closes as CANCELLED with the order; a rejected payment
+ * stays exactly as it was. NOTHING FINANCIAL MOVES (D5): the platform has no
+ * refund, writes no ledger line and claims to have returned no money — an
+ * order that is not PAID has no sale to reverse. Whatever passed between the
+ * owner and the buyer outside the platform stays outside it.
+ *
+ * The owner's cancellation is audited (rule 12) and the buyer is told, with
+ * the reason and the order number and nothing else (D6). A cancelled order
+ * no longer counts as "in the middle of buying" (OPEN-11), so the product can
+ * be bought again at today's price.
+ * ===========================================================================
+ */
+export async function cancelOrder(
+  actor: Actor,
+  input: { orderId: string; reason?: string | null },
+): Promise<void> {
+  if (actor.kind !== 'USER') throw new UnauthenticatedError();
+  const byOwner = isOwner(actor);
+
+  const reason = input.reason?.trim() || null;
+  if (byOwner && !reason) {
+    throw new ValidationError('يرجى كتابة سبب إلغاء الطلب');
+  }
+  if (reason && reason.length > 400) {
+    throw new ValidationError('سبب الإلغاء أطول من المسموح (400 حرف)');
+  }
+
+  await withActor(actor, async (tx) => {
+    const [seen] = await tx.select().from(orders).where(eq(orders.id, input.orderId)).limit(1);
+    // RLS hides another buyer's order; the explicit comparison is the same
+    // answer for anyone who is not the owner.
+    if (!seen || (!byOwner && seen.customerId !== actor.userId)) {
+      throw new NotFoundError('الطلب غير موجود');
+    }
+    assertOrderTransition(seen.status, 'CANCELLED', orderActorOf(actor));
+
+    const order = await lockOrder(tx, seen.id);
+    if (!order) {
+      throw new RuleViolationError('تغيّرت حالة الطلب؛ لا يمكن إلغاؤه الآن', { orderId: seen.id });
+    }
+    assertOrderTransition(order.status, 'CANCELLED', orderActorOf(actor));
+
+    const closed = await closeOpenPayments(tx, actor, order, 'إلغاء الطلب');
+
+    await moveOrder(tx, actor, order, 'CANCELLED', reason ?? 'ألغاه المشتري');
+
+    if (byOwner) {
+      await recordAudit(tx, actor, {
+        action: 'ORDER_CANCELLED',
+        entityType: 'order',
+        entityId: order.id,
+        before: { status: order.status },
+        after: { status: 'CANCELLED', orderNumber: order.orderNumber, reason, paymentsClosed: closed },
+      });
+      // No amount: the buyer learns which order and why, nothing more (D6).
+      await notifyUser(tx, {
+        userId: order.customerId,
+        type: 'ORDER_CANCELLED',
+        payload: { orderNumber: order.orderNumber, reason },
+      });
+    }
   });
 }

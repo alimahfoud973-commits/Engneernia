@@ -1,7 +1,7 @@
 import { setRequestLocale } from 'next-intl/server';
 import { SiteHeader, SiteFooter } from '@/components/site-chrome';
 import { AdminNav } from '../admin-nav';
-import { PaymentDecisionForms } from '@/components/commerce-forms';
+import { OwnerCancelOrderForm, PaymentDecisionForms } from '@/components/commerce-forms';
 import { formatPrice } from '@/components/product-card';
 import { requireOwner } from '@/auth/current';
 import { verificationQueue } from '@/commerce/queries';
@@ -100,6 +100,7 @@ export default async function AdminPaymentsPage({
                   ) : null}
 
                   <PaymentDecisionForms paymentId={row.paymentId} />
+                  <OwnerCancelOrderForm orderId={row.orderId} />
                 </li>
               ))}
             </ul>
@@ -118,6 +119,7 @@ export default async function AdminPaymentsPage({
                     <th className="p-3 text-start font-medium">رقم الطلب</th>
                     <th className="p-3 text-start font-medium">الطريقة</th>
                     <th className="p-3 text-start font-medium">المبلغ</th>
+                    <th className="p-3 text-start font-medium">إجراء</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -127,6 +129,9 @@ export default async function AdminPaymentsPage({
                       <td className="p-3">{row.methodName ?? '—'}</td>
                       <td className="technical-term p-3">
                         {formatPrice(String(row.amountMinor), row.currency, false)}
+                      </td>
+                      <td className="p-3 align-top">
+                        <OwnerCancelOrderForm orderId={row.orderId} />
                       </td>
                     </tr>
                   ))}

@@ -456,6 +456,20 @@
       "when": 1790400000000,
       "tag": "0064_stage6_authentication",
       "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "7",
+      "when": 1790500000000,
+      "tag": "0065_stage7_enum_values",
+      "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "7",
+      "when": 1790600000000,
+      "tag": "0066_stage7_payment_attempts",
+      "breakpoints": true
     }
   ]
 }

@@ -28,12 +28,8 @@ import { distributeEngineerAmount, type ContributorShare } from '@/lib/money/dis
 
 export interface ResolvedTerms {
   /**
-   * The catalogue price as displayed, tax included and BEFORE any discount.
-   *
-   * This is the number compared against the price frozen on the order line, so
-   * that a price moved between placing an order and approving its payment is
-   * caught. A discount must not look like a price change, which is why the
-   * comparison uses this and not `payableMinor`.
+   * The price the order line was made at, tax included and BEFORE any
+   * discount — the agreed price (Stage 7, K3), not today's catalogue price.
    */
   readonly grossMinor: bigint;
   /** Taken off the displayed price. Zero unless the order line carries one. */
@@ -50,7 +46,8 @@ export interface ResolvedTerms {
    * what changed hands, not of a price nobody paid.
    */
   readonly tax: TaxBreakdown;
-  readonly priceRowId: string;
+  /** The price row the agreed price came from; null only for an order older than Stage 7 whose row cannot be found. */
+  readonly priceRowId: string | null;
   /**
    * The LINE's totals, summed from the per-contributor splits below.
    *
@@ -486,6 +483,21 @@ export async function resolveTermsForSale(
   tx: Transaction,
   productId: string,
   /**
+   * THE PRICE THE BUYER AGREED TO (Stage 7 — owner decision on K3).
+   *
+   * The line's own price, written when the order was made, and the price row
+   * it came from. REQUIRED, and never read from the product here: approval
+   * used to take the product's price in force and refuse the sale when it had
+   * moved, so a price change during an open order locked that order for good.
+   * An order keeps the price it was made at; what the product costs today is
+   * a question for the next order.
+   */
+  agreed: {
+    readonly amountMinor: bigint;
+    readonly currency: string;
+    readonly priceRowId: string | null;
+  },
+  /**
    * The rate in force, read from settings by the caller (owner decision on
    * OPEN-9). REQUIRED, not defaulted: a sale path that forgets tax would
    * silently split the state's portion between the platform and the engineer,
@@ -503,16 +515,11 @@ export async function resolveTermsForSale(
    */
   discountMinor: bigint,
 ): Promise<ResolvedTerms> {
-  // 1. The price in force: the single open row.
-  const [priceRow] = await tx
-    .select()
-    .from(productPrices)
-    .where(and(eq(productPrices.productId, productId), isNull(productPrices.effectiveTo)))
-    .limit(1);
-
-  if (!priceRow) {
-    throw new RuleViolationError('لا يوجد سعر حالي لهذا المنتج', { productId });
+  // 1. The price the order was made at (Stage 7, K3) — not today's.
+  if (agreed.amountMinor < 0n) {
+    throw new RuleViolationError('سعر البند لا يمكن أن يكون سالباً', { productId });
   }
+  const priceRow = { id: agreed.priceRowId, amountMinor: agreed.amountMinor, currency: agreed.currency };
 
   // 2. Who is credited, and with what split.
   const credits = await tx
