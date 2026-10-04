@@ -200,6 +200,107 @@ http://192.168.1.12:3000
 
 ```bash
 npm run verify              # أنواع + lint + اختبارات + بناء
-npm run test:integration    # اختبارات على قاعدة حقيقية
+npm run test:integration    # اختبارات على قاعدة حقيقية — تكتب فيها بيانات اختبار؛ للعزل انظر §١٠
 npm run db:prove-rls        # إثبات عزل الصلاحيات
 ```
+
+---
+
+## ٩. Windows — ما يختلف
+
+ما يلي مُلاحَظ على لابتوب Windows (2026-10-04): Node 24، وnpm 11، وDocker Desktop.
+
+### `npm.cmd` بدل `npm` في PowerShell
+
+سياسة تنفيذ السكربتات في PowerShell قد تمنع `npm.ps1`، فيفشل `npm` قبل أن يبدأ.
+`npm.cmd` هو البرنامج نفسه بلا ذلك الغلاف:
+
+```powershell
+npm.cmd ci
+npm.cmd run dev -- --webpack
+```
+
+### `next dev` يفشل بـ`failed to create junction point`
+
+**العرض:** `npm.cmd run dev` (Turbopack، الافتراضي في Next 16) يفشل وهو ينشئ رابطاً داخل
+`.next\dev\node_modules`.
+
+**السبب المرجّح:** في التطوير ينشئ Turbopack روابط (junctions) للحِزم المعلنة في
+`serverExternalPackages` — هنا `@napi-rs/canvas` و`mupdf`. إنشاء هذه الروابط يفشل عادةً حين
+يكون المشروع داخل مجلد يزامنه OneDrive (سطح المكتب والمستندات كثيراً ما يكونان كذلك)، أو على
+قرص ليس NTFS. للتحقق، قراءة فقط:
+
+```powershell
+(Get-Location).Path                        # هل المسار تحت مجلد OneDrive؟
+$env:OneDrive                              # مسار OneDrive إن كان مفعّلاً
+(Get-Volume -DriveLetter C).FileSystemType # المتوقع: NTFS
+```
+
+**الحل البديل الذي يعمل:**
+
+```powershell
+npm.cmd run dev -- --webpack
+```
+
+الصفحات والنماذج تعمل به كما هي؛ الفرق محصور في محرّك التطوير.
+
+**ليست مشكلة إنتاج:** `npm run build` (Turbopack أيضاً) نجح على الجهاز نفسه، والإنتاج يعمل
+على Linux داخل الحاوية. لا يُعدَّل `next.config.ts` لأجلها.
+
+**إن كان المشروع تحت OneDrive:** انقله إلى مسار غير مُزامَن مثل `C:\dev\Enginora`. المزامنة
+تعمل على آلاف الملفات في `node_modules` و`.next` أثناء البناء، وهي سبب معروف لأقفال ملفات
+وأخطاء متقطعة غير هذه أيضاً.
+
+### `npm run dev` يعدّل `CLAUDE.md`
+
+Next 16.3 يضيف عند تشغيل `next dev` كتلة تبدأ بـ`<!-- BEGIN:nextjs-agent-rules -->` إلى آخر
+`CLAUDE.md` (المصدر: `node_modules/next/dist/server/lib/generate-agent-files.js`). إن ظهر
+`M CLAUDE.md` في `git status` بعد التشغيل فهذا مصدره. **لا تلتزمه** — `CLAUDE.md` يُعدَّل
+بقرار المالك وحده؛ احذف الكتلة يدوياً قبل أي commit.
+
+---
+
+## ١٠. اختبارات التكامل محلياً — دون لمس قاعدة التطوير
+
+`npm run test:integration` يكتب بيانات اختبار في القاعدة التي يشير إليها `DATABASE_URL`. فلا
+تشغّله على `engineering_marketplace` التي تعمل عليها. الطريقة أدناه تحاكي CI: **خادم PostgreSQL
+منفصل** في حاوية مؤقتة على المنفذ `5433` — لا قاعدة ثانية على الخادم نفسه، لأن
+`docker/postgres/init/01-roles.sql` يسمّي `engineering_marketplace` حرفياً — والتخزين في مجلد
+مؤقت، فلا تُلمس RustFS ولا الـbuckets.
+
+المتغيّرات المضبوطة في الجلسة **تغلب** `.env.local` (يُقرأ بـ`process.loadEnvFile` الذي لا يكتب
+فوق متغيّر موجود)، والمفاتيح السرّية تبقى من `.env.local`.
+
+```powershell
+# 1. خادم معزول؛ يُنشئ الأدوار من 01-roles.sql كما في docker-compose
+docker run -d --name em_pg_itest -p 5433:5432 `
+  -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=engineering_marketplace `
+  -v "$($PWD.Path)\docker\postgres\init:/docker-entrypoint-initdb.d:ro" postgres:16-alpine
+do { Start-Sleep 2 } until ((docker logs em_pg_itest 2>&1 | Out-String) -match 'init process complete')
+Start-Sleep 3
+
+# 2. إثبات أساس RLS — قبل الترحيلات، كما في CI
+docker cp src\db\security\rls-foundation.test.sql em_pg_itest:/tmp/rls-foundation.sql
+docker exec em_pg_itest psql -U postgres -d engineering_marketplace -v ON_ERROR_STOP=1 -f /tmp/rls-foundation.sql
+
+# 3. متغيّرات هذه النافذة وحدها
+$env:DATABASE_URL           = "postgresql://app_user:app_password@localhost:5433/engineering_marketplace"
+$env:DATABASE_MIGRATION_URL = "postgresql://migrator:migrator_password@localhost:5433/engineering_marketplace"
+$env:DATABASE_SUPERUSER_URL = "postgresql://postgres:postgres@localhost:5433/engineering_marketplace"
+$env:STORAGE_ENDPOINT       = "file:///" + (Join-Path $env:TEMP 'enginora-itest').Replace('\', '/')
+$env:LOG_LEVEL              = "info"
+
+# 4. الترحيلات والبذور الثلاث والاختبارات — بترتيب CI
+npm.cmd run db:migrate
+npm.cmd run seed:catalog; npm.cmd run seed:demo; npm.cmd run seed:scale
+npm.cmd run test:integration
+
+# 5. التنظيف: الحاوية المؤقتة وحدها، ثم أغلق النافذة لتزول المتغيّرات
+docker rm -f -v em_pg_itest
+```
+
+المتوقع: 67 ترحيلاً، و`Test Files 41 passed`، و`Tests 723 passed`. الإجراء نفسه بمكافئه على Linux
+أعطى ذلك في 2026-10-04.
+
+لا تُشغّل الخطوة 5 على اسم غير `em_pg_itest`: `em_postgres` و`em_storage` هما قاعدة التطوير
+وتخزينه.

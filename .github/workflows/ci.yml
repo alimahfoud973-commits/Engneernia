@@ -166,8 +166,17 @@ jobs:
       - name: Production build
         run: npm run build
 
-      # Fails only on HIGH/CRITICAL. The remaining moderate advisories are
-      # confined to drizzle-kit's bundled esbuild, a build-time CLI that never
-      # runs in production — documented in docs/DECISIONS.md.
-      - name: Dependency audit
-        run: npm audit --audit-level=high
+      # Two gates, both on HIGH/CRITICAL only. The remaining moderate
+      # advisories are confined to drizzle-kit's bundled esbuild, a build-time
+      # CLI that never runs in production — docs/DECISIONS.md TD-07.
+      #
+      # Production dependencies: no exceptions, ever.
+      - name: Dependency audit (production)
+        run: npm audit --omit=dev --audit-level=high
+
+      # Everything, dev tools included, except an advisory reviewed and listed
+      # in scripts/audit-gate.mjs — which fails again when its exception
+      # expires, goes stale, or the package is reached by another path.
+      # docs/DECISIONS.md TD-50.
+      - name: Dependency audit (all, reviewed exceptions only)
+        run: node scripts/audit-gate.mjs
