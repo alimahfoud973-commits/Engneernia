@@ -58,7 +58,7 @@ describe('D4 — the 404 title comes from not-found.tsx', () => {
   const raising = pages.filter((file) => /notFound\(\)/.test(read(file)));
 
   it('the pages that raise notFound() are the ones D4 covered', () => {
-    expect(raising.map((f) => f.replace('src/app/[locale]/', ''))).toEqual([
+    expect(raising.map((f) => f.replaceAll('\\', '/').replace('src/app/[locale]/', ''))).toEqual([
       '[discipline]/page.tsx',
       'admin/engineers/[contributorId]/page.tsx',
       'admin/products/[productId]/page.tsx',
