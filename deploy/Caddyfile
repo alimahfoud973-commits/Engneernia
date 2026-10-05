@@ -1,7 +1,14 @@
 # =============================================================================
 # TLS TERMINATION FOR THE SINGLE-SERVER STACK
 # =============================================================================
-#   caddy run --config deploy/Caddyfile
+#   ENGINORA_HOST=<host> caddy run --config deploy/Caddyfile
+#
+# ENGINORA_HOST is the bare hostname, no scheme: the host of APP_URL, exactly.
+# A preview host first, the real domain only when it is bought. Under systemd,
+# set it with `Environment=` in the unit, then confirm what Caddy will serve:
+#   ENGINORA_HOST=<host> caddy adapt --config deploy/Caddyfile
+# Unset or empty, Caddy refuses to start with "unrecognized global option:
+# encode": the site block loses its address and is read as global options.
 #
 # docker-compose.prod.yml deliberately serves plain HTTP on 127.0.0.1:3000 and
 # nothing else. This file is the other half: the public listener, the
@@ -15,7 +22,7 @@
 # there and the network policy blocks fetching one, so this file has never been
 # started. Its directives are ordinary and small on purpose. Run
 # `caddy validate --config deploy/Caddyfile` on the server before relying on it,
-# and `node scripts/csp-check.mjs https://enginora.com` immediately after, which
+# and `node scripts/csp-check.mjs https://<ENGINORA_HOST>` immediately after, which
 # is what actually proves the proxy did not break the page.
 # =============================================================================
 
@@ -23,11 +30,12 @@
 # prefix, which locks it to one exact hostname: a customer who signs in on
 # www.enginora.com and then follows a link to enginora.com is signed out, with
 # no error anywhere to explain it. One origin, and APP_URL must be that origin.
-www.enginora.com {
-	redir https://enginora.com{uri} permanent
-}
+#
+# Not configured yet: a preview host has no www name, and a site block for one
+# makes Caddy request a certificate for a name that does not resolve. Add the
+# www → apex redirect only once the real domain is live.
 
-enginora.com {
+{$ENGINORA_HOST} {
 	# Automatic Let's Encrypt certificate and renewal. Requires port 80 and 443
 	# reachable from the internet and the A record already pointing here —
 	# issuance fails otherwise, and it fails at startup rather than silently.

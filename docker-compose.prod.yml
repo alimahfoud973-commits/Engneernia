@@ -15,8 +15,11 @@
 #     the host with a destination that is NOT this server. See
 #     docs/BACKUP-AND-RESTORE.md §6, which is still awaiting the owner's answer
 #     on where those copies live.
-#   - no database exposed to the internet. `postgres` has no `ports:` entry on
-#     purpose; it is reachable only from this compose network.
+#   - no database exposed to the internet. `postgres` is published on
+#     127.0.0.1 ONLY, so the host's backup cron and `npm run db:prove-rls`
+#     can reach it; nothing off this machine can. Never widen that binding.
+#   - no unscanned uploads. `clamav` sits on its own network with the app
+#     alone: it parses hostile files, so it gets no route to the database.
 # =============================================================================
 
 services:
@@ -43,6 +46,41 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+    ports:
+      # Loopback only — for the tools that run on the host and need a
+      # superuser connection: scripts/backup.sh, restore-drill.sh and
+      # prove-rls.mjs (none of them is in the app image). A bare '5432:5432'
+      # here would publish the database to the internet, and Docker writes
+      # its own firewall rules ahead of ufw, so ufw would not stop it.
+      - '127.0.0.1:5432:5432'
+
+  # Scans every upload before it is stored (src/media/scanner.ts). Fail-closed
+  # is the application's, not this service's: clamd down, slow or unreachable
+  # means FAILED, and the upload is refused. Nothing here can turn a missing
+  # scan into CLEAN.
+  clamav:
+    # The Debian variant: it is published for arm64 (Oracle Ampere A1).
+    image: clamav/clamav-debian:1.5
+    restart: unless-stopped
+    volumes:
+      # Signatures survive a restart. Re-downloading them on every start is
+      # slow, and the ClamAV mirrors rate-limit a server that does it.
+      - clamav_db:/var/lib/clamav
+      # Size limits for 1 GiB originals; each value is explained in the file.
+      - ./deploy/clamav/clamd.conf:/etc/clamav/clamd.conf:ro
+    # No `ports:`. Reachable only from `app`, on `scanner`.
+    networks: [scanner]
+    # ~1.2 GiB to hold the signatures, ~2.4 GiB while a reload holds two sets.
+    # Killed above this, it fails closed: the upload is refused, not let in.
+    mem_limit: 4g
+    healthcheck:
+      # The image's own check: PING on 3310, expects PONG.
+      test: ['CMD', 'clamdcheck.sh']
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      # The first start downloads every signature before clamd listens.
+      start_period: 10m
 
   app:
     build:
@@ -52,6 +90,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      # Without this an upload made in the first minutes after a restart is
+      # refused as FAILED — safe, but it reads as a broken site.
+      clamav:
+        condition: service_healthy
+    networks: [default, scanner]
     environment:
       NODE_ENV: production
       PORT: 3000
@@ -80,13 +123,18 @@ services:
       MAIL_FROM: ${MAIL_FROM:?set MAIL_FROM, on a domain whose SPF and DKIM you control}
       PLATFORM_TIMEZONE: ${PLATFORM_TIMEZONE:-Asia/Damascus}
       PLATFORM_BASE_CURRENCY: ${PLATFORM_BASE_CURRENCY:-USD}
-      MALWARE_SCANNER: ${MALWARE_SCANNER:-none}
-      # Only read when MALWARE_SCANNER is `clamav`. Forwarded anyway so that
-      # turning the scanner on later is one value in .env.production, not an
-      # edit to this file — which is the whole point of declaring them.
-      CLAMAV_HOST: ${CLAMAV_HOST:-127.0.0.1}
+      # Fixed, not read from .env.production: production has no `none`. An
+      # upload that cannot be scanned is refused (FAILED), and a SKIPPED file
+      # is never served in production (isServable) — this keeps it that way
+      # by never producing one here.
+      MALWARE_SCANNER: clamav
+      # `clamav` is the service above, by its name on the `scanner` network.
+      # 127.0.0.1 here would be the app container itself, where nothing listens.
+      CLAMAV_HOST: ${CLAMAV_HOST:-clamav}
       CLAMAV_PORT: ${CLAMAV_PORT:-3310}
-      LOG_LEVEL: ${LOG_LEVEL:-}
+      # `:-` also replaces an EMPTY value. The schema accepts only the level
+      # names, so `LOG_LEVEL=` in .env.production would stop the process at boot.
+      LOG_LEVEL: ${LOG_LEVEL:-info}
       # Off until the site is really live, on the real domain. See docs/SEO.md.
       SEO_INDEXABLE: ${SEO_INDEXABLE:-false}
     ports:
@@ -95,3 +143,9 @@ services:
 
 volumes:
   postgres_data:
+  clamav_db:
+
+networks:
+  # Not `internal: true`: freshclam inside the clamav container must reach the
+  # signature mirrors. What this network buys is that postgres is not on it.
+  scanner:
