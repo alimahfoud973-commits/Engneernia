@@ -36,7 +36,16 @@ import { join } from 'node:path';
  */
 
 const root = process.cwd();
-const read = (path: string) => readFileSync(join(root, path), 'utf8');
+
+/**
+ * Every line break as LF. Git for Windows checks these files out with CRLF
+ * (core.autocrlf=true), and both YAML and the Caddyfile read CR, LF and CRLF
+ * as the same break, so this is the text Compose and Caddy see on either
+ * system. Without it the mutations below, written with `\n`, found nothing to
+ * replace on the owner's laptop and failed as "did not apply".
+ */
+const lf = (text: string) => text.replace(/\r\n?/g, '\n');
+const read = (path: string) => lf(readFileSync(join(root, path), 'utf8'));
 
 const FILES = {
   compose: read('docker-compose.preview.yml'),
@@ -44,6 +53,13 @@ const FILES = {
   prod: read('docker-compose.prod.yml'),
 };
 type Files = typeof FILES;
+
+/** The same files as a Windows checkout writes them to disk. */
+const asCrlf = (files: Files): Files => ({
+  compose: lf(files.compose).replace(/\n/g, '\r\n'),
+  caddy: lf(files.caddy).replace(/\n/g, '\r\n'),
+  prod: lf(files.prod).replace(/\n/g, '\r\n'),
+});
 
 /** Every service the overlay may define, and the only keys each may set. */
 const ALLOWED_SERVICE_KEYS: Readonly<Record<string, readonly string[]>> = {
@@ -96,7 +112,9 @@ function keysOf(block: readonly string[]): string[] {
 }
 
 /** Every rule the three files must satisfy. Empty means the stack is safe. */
-function violations(files: Files): string[] {
+function violations(input: Files): string[] {
+  // Normalised here too, so no caller can hand the rules a CRLF text.
+  const files: Files = { compose: lf(input.compose), caddy: lf(input.caddy), prod: lf(input.prod) };
   const found: string[] = [];
   const fail = (rule: string) => found.push(rule);
   const compose = code(files.compose);
@@ -181,6 +199,10 @@ function violations(files: Files): string[] {
 describe('docker-compose.preview.yml keeps the scanner mandatory and the laptop closed', () => {
   it('the files in the repository satisfy every rule', () => {
     expect(violations(FILES)).toEqual([]);
+  });
+
+  it('a Windows checkout (CRLF) satisfies them the same way', () => {
+    expect(violations(asCrlf(FILES))).toEqual([]);
   });
 
   it('the line reader sees the services the overlay defines', () => {
@@ -384,5 +406,7 @@ describe('each guard fails when its defect is re-introduced', () => {
     // A mutation that changes nothing proves nothing.
     expect(mutated, 'the mutation did not apply').not.toBe(FILES[file]);
     expect(violations({ ...FILES, [file]: mutated })).toContain(rule);
+    // And caught the same way when it arrives in a CRLF checkout.
+    expect(violations(asCrlf({ ...FILES, [file]: mutated }))).toContain(rule);
   });
 });
