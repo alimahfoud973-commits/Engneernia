@@ -1,0 +1,49 @@
+# =============================================================================
+# LAPTOP PREVIEW ONLY — internal HTTP hop between cloudflared and the app
+# =============================================================================
+# Used by docker-compose.preview.yml. The production file is deploy/Caddyfile.
+#
+# TLS ends at Cloudflare, so this listens on plain HTTP inside the Docker
+# network and is published nowhere. It exists for one header.
+#
+# The application takes the FIRST X-Forwarded-For entry as the client
+# (src/auth/actions.ts), and rate-limits sign-in per IP on it. Behind Cloudflare
+# that first entry is whatever the visitor sent, so a forged header buys a new
+# allowance per request. Behind a proxy that does not set it at all, every
+# visitor is cloudflared's address, and a few wrong passwords lock the whole
+# site out. CF-Connecting-IP is written by Cloudflare's edge, one address, and
+# overwrites anything the visitor sent, so it replaces the header outright.
+#
+# A request without it did not come through the tunnel, and is refused with
+# 403 rather than counted as one shared "unknown" client.
+#
+# DO NOT ADD SECURITY HEADERS HERE. The application sends its own CSP with a
+# per-response nonce (src/proxy.ts); a policy set at this layer replaces it.
+# =============================================================================
+{
+	admin off
+	auto_https off
+}
+
+:8080 {
+	# Present AND shaped like an address: an empty value would reach the app as
+	# no IP at all, and every such request would share one rate-limit bucket.
+	@notFromTunnel not header_regexp CF-Connecting-IP ^[0-9A-Fa-f:.]+$
+	respond @notFromTunnel 403
+
+	reverse_proxy app:3000 {
+		# Host passes through unchanged, which is what Server Actions and the
+		# upload routes compare Origin against (src/lib/http/upload-request.ts).
+		# Caddy sets X-Forwarded-Host from it too, discarding the visitor's.
+		header_up X-Forwarded-For {http.request.header.CF-Connecting-IP}
+		# Caddy would say `http`, the scheme of the hop from cloudflared.
+		header_up X-Forwarded-Proto https
+
+		# The same transport limits as deploy/Caddyfile.
+		transport http {
+			response_header_timeout 120s
+			read_timeout 30m
+			write_timeout 30m
+		}
+	}
+}

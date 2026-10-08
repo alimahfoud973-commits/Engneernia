@@ -1,0 +1,130 @@
+# =============================================================================
+# LAPTOP PREVIEW — an overlay on docker-compose.prod.yml, never used alone
+# =============================================================================
+#   docker compose -f docker-compose.prod.yml -f docker-compose.preview.yml \
+#     --env-file .env.preview.local up -d
+#   docker compose -f docker-compose.prod.yml -f docker-compose.preview.yml \
+#     --env-file .env.preview.local --profile tunnel up -d cloudflared
+#
+# The same image and the same production stack, with three differences:
+#
+#   1. CLAMAV DOES NOT RUN. Its signature servers refuse Syrian connections
+#      (Cloudflare block page, 2026-10-08, two networks). The app is NOT told
+#      anything different: MALWARE_SCANNER stays `clamav`, fixed in the
+#      production file. With no clamd answering, every scan is FAILED and every
+#      upload that needs one is refused before storage (src/media/ingest.ts,
+#      src/commerce/proofs.ts). Nothing becomes SKIPPED, nothing becomes CLEAN,
+#      nothing can be published. That is the production failure mode, unchanged.
+#   2. Storage is RustFS inside this stack instead of R2.
+#   3. The public entrance is a Cloudflare Quick Tunnel to an internal Caddy,
+#      which rewrites X-Forwarded-For from CF-Connecting-IP
+#      (deploy/Caddyfile.preview explains why the app needs that).
+#
+# NOTHING HERE PUBLISHES A PORT. The production file already binds postgres
+# and app to 127.0.0.1 only; this file adds no `ports:` at all, because
+# Compose APPENDS port lists across files and an entry here would widen them.
+# src/lib/config/preview-stack.test.ts fails on any `ports:` in this file, and
+# on everything else this header promises.
+#
+# THE TUNNEL IS OFF UNLESS ASKED FOR: profile `tunnel`, and `restart: "no"`, so
+# a reboot does not quietly put the laptop back on the internet. Owner and
+# security checks run locally against http://127.0.0.1:3000; the tunnel is for
+# the checks that need an outside browser, and is stopped after them.
+#
+# .env.preview.local (git- and docker-ignored by `.env.*.local`) carries the
+# same keys as .env.production.example, with these values for this stack:
+#   STORAGE_ENDPOINT=http://storage:9000   STORAGE_REGION=us-east-1
+#   APP_URL=<the https URL cloudflared prints>, set after the tunnel starts
+#   MAIL_TRANSPORT_URL / MAIL_FROM on a `.invalid` host (nothing sends mail
+#   since Stage 6; production still needs a real transport)
+#   fresh random secrets, generated on the laptop, never `minioadmin`.
+# Validate with `config --quiet` only: plain `config` prints every secret.
+#
+# NEVER RUN AGAINST THIS STACK: seed:demo, seed:scale, seed:demo-media. The
+# first two write PUBLISHED products straight into SQL, past the publication
+# gate; the third would only be refused by the scanner anyway.
+# =============================================================================
+
+# Not optional. Without it the project name is the directory name — the same
+# project as docker-compose.yml — and `postgres_data` would be the DEVELOPMENT
+# database volume, with its development passwords and SKIPPED files.
+name: enginora-preview
+
+services:
+  clamav:
+    # Defined by the production file; not started here (see 1. above). The
+    # profile is the only thing this file may say about clamav: replacing its
+    # image or command could put a stub that answers OK behind CLAMAV_HOST.
+    profiles: ['clamav']
+
+  app:
+    # Replaces the production list, which also waits for clamav to be healthy
+    # and would therefore never start. Nothing else about `app` changes.
+    depends_on: !override
+      postgres:
+        condition: service_healthy
+      storage-init:
+        condition: service_completed_successfully
+
+  # S3-compatible private storage, reachable from the app over the default
+  # network and from nowhere else. Same server and version as docker-compose.yml.
+  storage:
+    image: rustfs/rustfs:1.0.0
+    restart: unless-stopped
+    environment:
+      RUSTFS_ACCESS_KEY: ${STORAGE_ACCESS_KEY_ID:?set STORAGE_ACCESS_KEY_ID}
+      RUSTFS_SECRET_KEY: ${STORAGE_SECRET_ACCESS_KEY:?set STORAGE_SECRET_ACCESS_KEY}
+    volumes:
+      - storage_data:/data
+    healthcheck:
+      test: ['CMD', 'curl', '-fsS', 'http://127.0.0.1:9000/health']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # One-shot: create the two buckets the app is configured with, and remove any
+  # bucket policy, so neither is public. Same steps as docker-compose.yml.
+  storage-init:
+    image: amazon/aws-cli:2.37.4
+    depends_on:
+      storage:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY_ID:?set STORAGE_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${STORAGE_SECRET_ACCESS_KEY:?set STORAGE_SECRET_ACCESS_KEY}
+      AWS_DEFAULT_REGION: us-east-1
+      BUCKET_ORIGINALS: ${STORAGE_BUCKET_ORIGINALS:-em-originals}
+      BUCKET_DERIVATIVES: ${STORAGE_BUCKET_DERIVATIVES:-em-derivatives}
+    entrypoint: >
+      /bin/sh -ec "
+      for bucket in $$BUCKET_ORIGINALS $$BUCKET_DERIVATIVES; do
+        aws --endpoint-url http://storage:9000 s3api head-bucket --bucket $$bucket 2>/dev/null ||
+          aws --endpoint-url http://storage:9000 s3api create-bucket --bucket $$bucket;
+        aws --endpoint-url http://storage:9000 s3api delete-bucket-policy --bucket $$bucket;
+      done;
+      echo 'buckets ready and private';
+      "
+
+  # Plain HTTP on the internal network only. TLS ends at Cloudflare.
+  caddy:
+    image: caddy:2.10.2
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    volumes:
+      - ./deploy/Caddyfile.preview:/etc/caddy/Caddyfile:ro
+
+  # The only way in from the internet: an outbound Quick Tunnel to Caddy. It
+  # prints its https://*.trycloudflare.com address in its log; that address
+  # changes every time it starts.
+  cloudflared:
+    image: cloudflare/cloudflared:2026.9.1
+    profiles: ['tunnel']
+    restart: 'no'
+    depends_on:
+      - caddy
+    command: ['tunnel', '--no-autoupdate', '--url', 'http://caddy:8080']
+
+volumes:
+  storage_data:
