@@ -17,8 +17,10 @@
 | **Docker Desktop** | قاعدة البيانات (الأسهل) | `docker -v` |
 | **Git** | جلب الكود | `git -v` |
 
-بديل Docker: PostgreSQL 16 مثبَّتاً مباشرةً. عندها تُنشئ أنت قاعدة البيانات
-والأدوار التي ينشئها ملف `docker/postgres/init`.
+بديل Docker: PostgreSQL 16 مثبَّتاً مباشرةً. عندها تُنشئ أنت قاعدة البيانات، ثم تشغّل
+`docker/postgres/init/01-roles.sql` (الأدوار بلا كلمة مرور) ثم
+`docker/postgres/dev/02-dev-role-passwords.sql` (كلمتا التطوير اللتان في `.env.example`)،
+كما يفعل `scripts/dev-db.sh`.
 
 ---
 
@@ -40,6 +42,12 @@ docker compose up -d postgres
 
 هذا يكفي. الحاوية تُنشئ قاعدة `engineering_marketplace` والأدوار `app_user`
 و`migrator` بالكلمات نفسها الموجودة في `.env.example`، فلا شيء لتعدّله.
+
+> **من أين تأتي كلمتا المرور (B6).** `docker/postgres/init/01-roles.sql` مشترك بين كل البيئات
+> ويُنشئ الدورين **بلا كلمة مرور**. كلمتا التطوير في ملف منفصل،
+> `docker/postgres/dev/02-dev-role-passwords.sql`، لا يركّبه إلا `docker-compose.yml`. فهما
+> تعملان على قاعدة التطوير هذه وحدها، ولا تصلان إلى قاعدة إنتاج أو معاينة. والملفان لا
+> يُنفَّذان إلا على مجلد بيانات فارغ: قاعدة تطوير قائمة تحتفظ بكلمتيها كما هما.
 
 > **خدمة التخزين ليست مطلوبة.** الملفات تُخزَّن على قرصك مباشرةً في المرحلة التجريبية
 > (انظر الخطوة التالية). `docker compose up -d` بلا اسم خدمة يشغّل أيضاً خدمة تخزين
@@ -292,11 +300,13 @@ Next 16.3 يضيف عند تشغيل `next dev` كتلة تبدأ بـ`<!-- BEGI
 فوق متغيّر موجود)، والمفاتيح السرّية تبقى من `.env.local`.
 
 ```powershell
-# 1. خادم معزول؛ يُنشئ الأدوار من 01-roles.sql كما في docker-compose.
+# 1. خادم معزول؛ يُنشئ الأدوار من 01-roles.sql ثم كلمتي التطوير، كما في docker-compose.
 #    على 127.0.0.1 وحده، كقاعدة التطوير: كلمة مرور postgres هنا ثابتة.
 docker run -d --name em_pg_itest -p 127.0.0.1:5433:5432 `
   -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=engineering_marketplace `
-  -v "$($PWD.Path)\docker\postgres\init:/docker-entrypoint-initdb.d:ro" postgres:16-alpine
+  -v "$($PWD.Path)\docker\postgres\init\01-roles.sql:/docker-entrypoint-initdb.d/01-roles.sql:ro" `
+  -v "$($PWD.Path)\docker\postgres\dev\02-dev-role-passwords.sql:/docker-entrypoint-initdb.d/02-dev-role-passwords.sql:ro" `
+  postgres:16-alpine
 do { Start-Sleep 2 } until ((docker logs em_pg_itest 2>&1 | Out-String) -match 'init process complete')
 Start-Sleep 3
 

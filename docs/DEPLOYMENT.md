@@ -58,10 +58,32 @@
 بصمت: لا رسالة خطأ، ولا اختبار فاشل — فقط منصة لم تعد سياساتها تعني شيئاً.
 
 ```bash
-psql "$ADMIN_URL" -f docker/postgres/init/01-roles.sql
+psql "$ADMIN_URL" -f docker/postgres/init/01-roles.sql   # الأدوار، بلا كلمة مرور
+psql "$ADMIN_URL"       # ثم داخله:  \password migrator   و   \password app_user
 npm run db:migrate      # بـ DATABASE_MIGRATION_URL (دور migrator)
 npm run db:prove-rls    # إثبات أن app_user مقيَّد فعلاً — لا تتخطَّ هذه
 ```
+
+**كلمتا مرور `migrator` و`app_user` تُضبطان على الخادم، ولا تأتيان من المستودع (B6).**
+`01-roles.sql` يُنشئ الدورين **بلا كلمة مرور**، فلا يدخل أيٌّ منهما عبر الشبكة حتى تُضبط كلمته.
+تطبيق يُقلع قبل ذلك يفشل بخطأ مصادقة صريح، ولا يقبل كلمة منشورة بصمت. وفي حزمة Docker يُنفَّذ
+الملف تلقائياً عند أول تشغيل لـ `postgres` على وحدة تخزين فارغة، ثم:
+
+1. ولّد كلمتين عشوائيتين على الخادم، بصيغة hex لأنها لا تحتاج ترميزاً داخل رابط الاتصال:
+   `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
+2. اضبطهما بـ `\password` في `psql`، وهي تقرأ الكلمة من الطرفية وترسل للخادم بصمتها
+   (SCRAM) لا نصّها، فلا تظهر في سجل الخادم ولا في تاريخ الأوامر:
+   `docker compose -f docker-compose.prod.yml exec postgres psql -U postgres -d postgres`،
+   ثم `\password migrator` و`\password app_user`.
+3. ضعهما في `DATABASE_MIGRATION_URL` و`DATABASE_URL` في `.env.production` (صلاحية `600`)
+   وحده. لا تطبعهما، ولا تضعهما في متغيّرات بيئة حاوية `postgres`.
+4. تحقّق قبل تشغيل التطبيق: الكلمة الجديدة مقبولة، وكلمة عشوائية مرفوضة لكل دور.
+
+**قاعدة قائمة لا يغيّرها تعديل هذا الملف.** `docker-entrypoint-initdb.d` لا يُنفَّذ إلا على مجلد
+بيانات فارغ. قاعدة أُنشئت من نسخة أقدم من `01-roles.sql`، تلك التي حملت كلمتين منشورتين، تبقى
+تقبلهما حتى تُدوَّر بـ `\password` بالطريقة نفسها. قاعدة المعاينة على اللابتوب دُوِّرت في
+Stage 8C. ونسخة احتياطية مُستعادة تأتي أدوارها بلا كلمة مرور أصلاً (`--no-role-passwords`)،
+فتحتاج الخطوتين 2 و3 بعد الاستعادة.
 
 ---
 

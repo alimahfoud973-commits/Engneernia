@@ -43,7 +43,10 @@ const files = tracked
  * Values that are deliberately in the repository and are not secrets: the
  * placeholders in `.env.example`, and the fixed credentials of the LOCAL
  * development database, which exists only inside docker-compose on a
- * developer's machine and is created by `docker/postgres/init/01-roles.sql`.
+ * developer's machine and is set by `docker/postgres/dev/02-dev-role-passwords.sql`.
+ * The shared `docker/postgres/init/01-roles.sql` sets no password (B6), so
+ * these values sign in nowhere else; src/lib/config/db-roles.test.ts keeps
+ * them out of every other place a cluster is built from.
  */
 const ALLOWED = [
   /replace-me[\w-]*/,

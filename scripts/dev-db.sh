@@ -27,5 +27,8 @@ if ! psql -h localhost -U postgres -tAc \
   psql -h localhost -U postgres -q -c "CREATE DATABASE engineering_marketplace;"
   psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -q \
     -f docker/postgres/init/01-roles.sql
+  # 01-roles.sql sets no password; these are the development values of .env.example.
+  psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -q \
+    -f docker/postgres/dev/02-dev-role-passwords.sql
   echo "Now run: npm run db:migrate && npm run seed:catalog"
 fi

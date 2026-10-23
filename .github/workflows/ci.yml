@@ -79,12 +79,46 @@ jobs:
         run: |
           psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 \
             -f docker/postgres/init/01-roles.sql
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 \
+            -f src/db/security/roles-init.test.sql
           psql -h localhost -U postgres -d engineering_marketplace -v ON_ERROR_STOP=1 \
             -f src/db/security/rls-foundation.test.sql
 
-      - name: Apply migrations
+      # B6: 01-roles.sql sets no password, so a new database accepts none until
+      # one is set. Proved here, then each run gets its own random pair: masked
+      # in the log, set over stdin, and handed to later steps through
+      # GITHUB_ENV only. Hex, so a URL never needs percent-encoding (a mask
+      # matches the literal text only).
+      - name: Per-run role passwords
         env:
-          DATABASE_MIGRATION_URL: postgresql://migrator:migrator_password@localhost:5432/engineering_marketplace
+          PGPASSWORD: postgres
+        run: |
+          set -eu
+          for role in migrator app_user; do
+            if PGPASSWORD="$(openssl rand -hex 16)" psql -h localhost -U "$role" -d engineering_marketplace -tAc 'SELECT 1' >/dev/null 2>&1; then
+              echo "$role signed in before any password was set"; exit 1
+            fi
+          done
+          echo "both roles refuse to sign in before a password is set"
+          MIGRATOR_PW="$(openssl rand -hex 24)"
+          APP_PW="$(openssl rand -hex 24)"
+          echo "::add-mask::$MIGRATOR_PW"
+          echo "::add-mask::$APP_PW"
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -q \
+            -v migrator_pw="$MIGRATOR_PW" -v app_pw="$APP_PW" <<'SQL'
+          SELECT format('ALTER ROLE migrator WITH PASSWORD %L', :'migrator_pw'),
+                 format('ALTER ROLE app_user WITH PASSWORD %L', :'app_pw') \gexec
+          SQL
+          test "$(PGPASSWORD="$MIGRATOR_PW" psql -h localhost -U migrator -d engineering_marketplace -tAc 'SELECT current_user')" = migrator
+          test "$(PGPASSWORD="$APP_PW" psql -h localhost -U app_user -d engineering_marketplace -tAc 'SELECT current_user')" = app_user
+          echo "both roles sign in with this run's password"
+          {
+            echo "DATABASE_URL=postgresql://app_user:${APP_PW}@localhost:5432/engineering_marketplace"
+            echo "DATABASE_MIGRATION_URL=postgresql://migrator:${MIGRATOR_PW}@localhost:5432/engineering_marketplace"
+          } >> "$GITHUB_ENV"
+
+      - name: Apply migrations
+        # DATABASE_MIGRATION_URL comes from GITHUB_ENV (Per-run role passwords).
         run: npm run db:migrate
 
       # Three tests in src/catalog/search.itest.ts assert properties that only
@@ -96,8 +130,6 @@ jobs:
       # locally before running the same suite.
       - name: Seed the catalogue
         env:
-          DATABASE_URL: postgresql://app_user:app_password@localhost:5432/engineering_marketplace
-          DATABASE_MIGRATION_URL: postgresql://migrator:migrator_password@localhost:5432/engineering_marketplace
           SESSION_SECRET: ci-session-secret-value-at-least-32-chars
           CONFIG_ENCRYPTION_KEY: ci-config-encryption-key-at-least-32-chars
           APP_URL: http://localhost:3000
@@ -144,8 +176,6 @@ jobs:
       # assert the database returns nothing anyway.
       - name: Integration tests (RLS enforced without the policy layer)
         env:
-          DATABASE_URL: postgresql://app_user:app_password@localhost:5432/engineering_marketplace
-          DATABASE_MIGRATION_URL: postgresql://migrator:migrator_password@localhost:5432/engineering_marketplace
           DATABASE_SUPERUSER_URL: postgresql://postgres:postgres@localhost:5432/engineering_marketplace
           SESSION_SECRET: ci-session-secret-value-at-least-32-chars
           CONFIG_ENCRYPTION_KEY: ci-config-encryption-key-at-least-32-chars

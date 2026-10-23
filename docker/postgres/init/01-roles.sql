@@ -8,11 +8,30 @@
 --               forgets a `WHERE contributor_id = ...`, the database still
 --               refuses to return another contributor's rows.
 --
--- This file runs once, on first container start.
+-- NO PASSWORDS HERE (B6). This file is shared by every environment: the
+-- production and preview compose files mount it, CI and scripts/dev-db.sh run
+-- it. A password written here was a password every new database accepted, and
+-- it was published with the repository. The roles are created WITHOUT one, so
+-- neither can sign in over the network (SCRAM refuses a role that has no
+-- verifier) until a password is set:
+--   production / preview : on the server, `\password migrator` and
+--                          `\password app_user` in psql, then the same values
+--                          in .env.production (docs/DEPLOYMENT.md §2);
+--   CI                   : a fresh random pair per run (.github/workflows/ci.yml);
+--   local development    : docker/postgres/dev/02-dev-role-passwords.sql, which
+--                          only docker-compose.yml and the local scripts load.
+-- A database that cannot be reached until someone sets its passwords fails
+-- loudly; one that quietly accepts published passwords does not.
+--
+-- The attributes are spelled out although most are PostgreSQL's defaults: they
+-- are the whole point of the two roles, and src/lib/config/db-roles.test.ts
+-- fails if one of them is weakened.
+--
+-- This file runs once, on first container start (an empty data directory).
 -- ---------------------------------------------------------------------------
 
-CREATE ROLE migrator WITH LOGIN PASSWORD 'migrator_password';
-CREATE ROLE app_user WITH LOGIN PASSWORD 'app_password' NOBYPASSRLS;
+CREATE ROLE migrator WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+CREATE ROLE app_user WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
 
 GRANT ALL PRIVILEGES ON DATABASE engineering_marketplace TO migrator;
 
