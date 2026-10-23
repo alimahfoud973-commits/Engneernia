@@ -104,12 +104,23 @@ describe('S7-06 / D11 — the payment state machine, in code and in the database
     const sql0 = superuser();
     try {
       const rows = await sql0`
-        SELECT p.id, p.status::text AS status FROM payments p JOIN orders o ON o.id = p.order_id
+        SELECT p.id, p.status::text AS status, p.order_id, p.payment_method_id
+          FROM payments p JOIN orders o ON o.id = p.order_id
          WHERE o.customer_id IN ${sql0(w.buyerIds as string[])}`;
       const approved = rows.find((r) => r.status === 'APPROVED')!.id as string;
       const rejected = rows.find((r) => r.status === 'REJECTED')!.id as string;
       const cancelled = rows.find((r) => r.status === 'CANCELLED')!.id as string;
-      const open = rows.find((r) => r.status === 'AWAITING_PROOF')!.id as string;
+      const openRow = rows.find((r) => r.status === 'AWAITING_PROOF')!;
+      const open = openRow.id as string;
+      /**
+       * A method and an order the open payment does NOT already have.
+       *
+       * The rows come back in no fixed order, and an earlier test leaves an
+       * AWAITING_PROOF payment on the wallet. Setting a value to itself is no
+       * change, so the trigger rightly lets it through, and the assertion below
+       * failed whenever that row happened to come first (main, run 76).
+       */
+      const otherMethod = openRow.payment_method_id === w.methods.wallet ? w.methods.bank : w.methods.wallet;
       const refuses = async (q: Promise<unknown>) => {
         await expect(q).rejects.toThrow(/payment/i);
       };
@@ -121,8 +132,9 @@ describe('S7-06 / D11 — the payment state machine, in code and in the database
       await refuses(sql0`UPDATE payments SET amount_minor = 1 WHERE id = ${open}::uuid`);
       await refuses(sql0`UPDATE payments SET currency = 'EUR' WHERE id = ${open}::uuid`);
       await refuses(sql0`UPDATE payments SET method_name_snapshot = 'x' WHERE id = ${open}::uuid`);
-      await refuses(sql0`UPDATE payments SET payment_method_id = ${w.methods.wallet}::uuid WHERE id = ${open}::uuid`);
-      const [someOrder] = await sql0`SELECT id FROM orders WHERE customer_id = ${w.buyerIds[1]!}::uuid LIMIT 1`;
+      await refuses(sql0`UPDATE payments SET payment_method_id = ${otherMethod}::uuid WHERE id = ${open}::uuid`);
+      const [someOrder] = await sql0`
+        SELECT id FROM orders WHERE customer_id = ${w.buyerIds[1]!}::uuid AND id <> ${openRow.order_id}::uuid LIMIT 1`;
       await refuses(sql0`UPDATE payments SET order_id = ${someOrder!.id}::uuid WHERE id = ${open}::uuid`);
     } finally {
       await sql0.end({ timeout: 5 });
