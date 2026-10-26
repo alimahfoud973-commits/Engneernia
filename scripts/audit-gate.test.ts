@@ -1,19 +1,35 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 /**
  * The audit gate is run exactly as CI runs it — a separate `node` process —
- * against audit reports shaped like real `npm audit --json` (v2) output. Each
- * case below is a way the single reviewed exception could stop being true;
- * every one of them must turn the gate red.
+ * against audit reports shaped like real `npm audit --json` (v2) output.
+ *
+ * The gate's own list is empty since TD-50 closed (GitHub withdrew the braces
+ * advisory on 2026-10-23). The exception rules still have to be proved, so
+ * these cases hand the gate the old braces exception through `--exceptions`;
+ * each is a way that exception could stop being true, and every one of them
+ * must turn the gate red.
  */
 
 const SCRIPT = join(process.cwd(), 'scripts/audit-gate.mjs');
 const BRACES = 'GHSA-vfj7-8cjw-p6xm';
 const VALID_DAY = '2026-10-04';
+
+/** The braces exception as it stood in the gate from 2026-10-04 to 2026-10-23. */
+const BRACES_EXCEPTION = {
+  advisory: BRACES,
+  package: 'braces',
+  path: ['braces', 'micromatch', 'fast-glob', '@next/eslint-plugin-next', 'eslint-config-next'],
+  devOnly: true,
+  reviewed: '2026-10-04',
+  expires: '2026-12-03',
+  reason: 'Fixture: the reviewed TD-50 exception, reached only through eslint-config-next.',
+};
 
 type Entry = Record<string, unknown>;
 
@@ -33,7 +49,7 @@ function link(name: string, via: string, effects: string[], isDirect = false): E
   return { name, severity: 'high', isDirect, via: [via], effects, range: '*', nodes: [`node_modules/${name}`] };
 }
 
-/** Today's real report: the braces chain (high) and drizzle-kit's esbuild (moderate). */
+/** The report the braces exception was written for: its chain (high) and drizzle-kit's esbuild (moderate). */
 function realisticReport(): { auditReportVersion: number; vulnerabilities: Record<string, Entry> } {
   return {
     auditReportVersion: 2,
@@ -83,14 +99,60 @@ afterAll(async () => {
 });
 
 let counter = 0;
-async function gate(report: unknown, today = VALID_DAY) {
+async function gate(report: unknown, today = VALID_DAY, exceptions: unknown = [BRACES_EXCEPTION]) {
   const file = join(dir, `report-${counter++}.json`);
   await writeFile(file, typeof report === 'string' ? report : JSON.stringify(report));
-  const result = spawnSync(process.execPath, [SCRIPT, '--report', file, '--today', today], { encoding: 'utf8' });
+  const args = [SCRIPT, '--report', file, '--today', today];
+  if (exceptions !== null) {
+    const list = join(dir, `exceptions-${counter++}.json`);
+    await writeFile(list, typeof exceptions === 'string' ? exceptions : JSON.stringify(exceptions));
+    args.push('--exceptions', list);
+  }
+  const result = spawnSync(process.execPath, args, { encoding: 'utf8' });
   return { status: result.status, output: `${result.stdout}${result.stderr}` };
 }
 
-describe('audit gate — the one reviewed exception', () => {
+/** Today's real report once braces was withdrawn: drizzle-kit's esbuild (moderate) alone. */
+function reportWithoutBraces(): Report {
+  const report = realisticReport();
+  for (const name of ['braces', 'micromatch', 'fast-glob', '@next/eslint-plugin-next', 'eslint-config-next']) {
+    delete report.vulnerabilities[name];
+  }
+  return report;
+}
+
+describe('audit gate — its own list is empty (TD-50 closed)', () => {
+  it('passes today’s report with no exceptions', async () => {
+    const { status, output } = await gate(reportWithoutBraces(), VALID_DAY, null);
+    expect(status).toBe(0);
+    expect(output).not.toContain('excepted until');
+  });
+
+  it('fails if the braces advisory comes back: nothing excepts it any more', async () => {
+    const { status, output } = await gate(realisticReport(), VALID_DAY, null);
+    expect(status).toBe(1);
+    expect(output).toContain(`Unreviewed HIGH ${BRACES} in braces`);
+  });
+
+  it('CI runs the gate with its own list, never with --exceptions', () => {
+    const ci = readFileSync(join(process.cwd(), '.github/workflows/ci.yml'), 'utf8');
+    const runs = ci.split(/\r?\n/).filter((line) => line.includes('audit-gate.mjs'));
+    expect(runs.length).toBeGreaterThan(0);
+    for (const line of runs) expect(line).not.toContain('--exceptions');
+  });
+
+  it.each([
+    ['not JSON', '{ broken', 'Could not read --exceptions'],
+    ['not an array', { advisory: BRACES }, 'Could not read --exceptions: not a JSON array'],
+    ['an entry without a path', [{ ...BRACES_EXCEPTION, path: undefined }], 'needs an advisory, a package and a path'],
+  ])('fails closed when --exceptions is %s', async (_label, exceptions, message) => {
+    const { status, output } = await gate(realisticReport(), VALID_DAY, exceptions);
+    expect(status).toBe(1);
+    expect(output).toContain(message);
+  });
+});
+
+describe('audit gate — a reviewed exception (the braces fixture)', () => {
   it('passes today’s report: braces excepted on its reviewed path, moderates ignored', async () => {
     const { status, output } = await gate(realisticReport());
     expect(status).toBe(0);
@@ -110,11 +172,7 @@ describe('audit gate — the one reviewed exception', () => {
   });
 
   it('fails when the advisory is gone — the exception must then be deleted', async () => {
-    const report = realisticReport();
-    for (const name of ['braces', 'micromatch', 'fast-glob', '@next/eslint-plugin-next', 'eslint-config-next']) {
-      delete report.vulnerabilities[name];
-    }
-    const { status, output } = await gate(report);
+    const { status, output } = await gate(reportWithoutBraces());
     expect(status).toBe(1);
     expect(output).toContain('matches nothing in the audit any more');
   });

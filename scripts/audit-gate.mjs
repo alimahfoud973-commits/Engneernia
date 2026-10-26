@@ -4,9 +4,11 @@
  * only honoured while every one of its claims is still true.
  *
  * Why not plain `npm audit --audit-level=high`: it has no way to accept one
- * reviewed advisory, so a single unfixable dev-tool advisory (GHSA-vfj7-8cjw-
- * p6xm, `braces`, docs/DECISIONS.md TD-50) keeps CI red forever — and a CI
- * that is always red hides the next real failure.
+ * reviewed advisory, so a single unfixable dev-tool advisory keeps CI red
+ * forever — and a CI that is always red hides the next real failure. That was
+ * GHSA-vfj7-8cjw-p6xm (`braces`, docs/DECISIONS.md TD-50), excepted here from
+ * 2026-10-04 until GitHub withdrew it on 2026-10-23; the gate then failed on
+ * the stale exception, as it is meant to, and the exception was deleted.
  *
  * Why not `--omit=dev` alone: that drops every dev-tool advisory, including
  * the next one nobody has looked at. CI runs `npm audit --omit=dev
@@ -23,27 +25,18 @@
  *
  * Usage:  node scripts/audit-gate.mjs [--report audit.json] [--today YYYY-MM-DD]
  * Without --report it runs `npm audit --json` itself.
+ *
+ * `--exceptions file.json` REPLACES the list below. It exists for
+ * scripts/audit-gate.test.ts alone, which must prove every exception rule
+ * while the list is empty; that test also fails if CI ever passes it.
  */
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
-const EXCEPTIONS = [
-  {
-    advisory: 'GHSA-vfj7-8cjw-p6xm',
-    package: 'braces',
-    // From the vulnerable package up to the direct dependency, exactly as
-    // `npm audit` links them through `effects`.
-    path: ['braces', 'micromatch', 'fast-glob', '@next/eslint-plugin-next', 'eslint-config-next'],
-    devOnly: true,
-    reviewed: '2026-10-04',
-    expires: '2026-12-03',
-    reason:
-      'Every braces release is affected and none is fixed (3.0.3 is the latest). It reaches the ' +
-      'project only through eslint-config-next, a lint-time devDependency that globs the ' +
-      "project's own rootDir; nothing of it ships to production (npm audit --omit=dev = 0). " +
-      "npm's only proposal is eslint-config-next@14, two majors back. See docs/DECISIONS.md TD-50.",
-  },
-];
+// Each entry: { advisory, package, path, devOnly, reviewed, expires, reason }.
+// `path` runs from the vulnerable package up to the direct dependency, exactly
+// as `npm audit` links them through `effects`. Empty since TD-50 closed.
+const EXCEPTIONS = [];
 
 const BLOCKING = new Set(['high', 'critical']);
 const MAX_EXCEPTION_DAYS = 90;
@@ -85,6 +78,11 @@ function evaluate(report, { exceptions, today, manifest }) {
   if (!isIsoDate(today)) return { problems: [`Invalid --today: ${today}`], exempted };
 
   for (const exception of exceptions) {
+    const named = typeof exception.advisory === 'string' && typeof exception.package === 'string';
+    const routed = Array.isArray(exception.path) && exception.path.length > 0 && exception.path.every((p) => typeof p === 'string');
+    if (!named || !routed) {
+      return { problems: [`Exception ${exception.advisory}: needs an advisory, a package and a path.`], exempted };
+    }
     if (!isIsoDate(exception.reviewed) || !isIsoDate(exception.expires) || !exception.reason) {
       problems.push(`Exception ${exception.advisory}: needs a reviewed date, an expiry date and a reason.`);
       continue;
@@ -170,7 +168,19 @@ function runNpmAudit() {
 
 function main() {
   const reportPath = argument('--report');
+  const exceptionsPath = argument('--exceptions');
   const today = argument('--today') ?? new Date().toISOString().slice(0, 10);
+
+  let exceptions = EXCEPTIONS;
+  if (exceptionsPath !== undefined) {
+    try {
+      exceptions = JSON.parse(readFileSync(exceptionsPath, 'utf8'));
+      if (!Array.isArray(exceptions)) throw new Error('not a JSON array');
+    } catch (error) {
+      console.error(`✗ Could not read --exceptions: ${error instanceof Error ? error.message : error}`);
+      process.exit(1);
+    }
+  }
 
   let report;
   try {
@@ -181,7 +191,7 @@ function main() {
   }
 
   const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
-  const { problems, exempted } = evaluate(report, { exceptions: EXCEPTIONS, today, manifest });
+  const { problems, exempted } = evaluate(report, { exceptions, today, manifest });
 
   for (const line of exempted) console.log(`• ${line}`);
   if (problems.length > 0) {
