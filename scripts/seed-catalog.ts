@@ -1,7 +1,9 @@
 /**
  * Seeds the four engineering disciplines and their category trees
- * (specification §5–§8), plus a small set of demonstration products so the
- * storefront has something to render before real content arrives.
+ * (specification §5–§8). Nothing else: no products. Demonstration content is
+ * scripts/seed-demo.ts. This is production reference data — no migration and
+ * no admin screen creates a discipline — so it runs at first start, on the
+ * host (docs/DEPLOYMENT.md §٤-أ).
  *
  *   node --experimental-strip-types scripts/seed-catalog.ts
  *

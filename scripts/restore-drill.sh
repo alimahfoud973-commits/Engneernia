@@ -67,8 +67,11 @@ q() { psql "$SCRATCH_URL" -At -X -v ON_ERROR_STOP=1 -c "$1"; }
 
 # Reads one value out of the manifest. Deliberately not jq: this script must
 # run on a bare production host without extra packages installed.
+# A JSON null prints as the empty string, which is how `psql -At` prints NULL:
+# an empty ledger has no chain head, and printing Python's `None` instead made
+# the first drill on a fresh database fail a backup that was perfectly sound.
 m() { python3 -c "import json,sys;d=json.load(open(sys.argv[1]));
-exec('v=d'+''.join('[%r]'%k for k in sys.argv[2].split('.')));print(v)" \
+exec('v=d'+''.join('[%r]'%k for k in sys.argv[2].split('.')));print('' if v is None else v)" \
   "$SRC/manifest.json" "$1"; }
 
 cleanup() {

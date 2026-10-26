@@ -6,7 +6,7 @@
 
 ## المتطلبات
 
-- Node.js 22+
+- Node.js 22.6+ (host scripts use `--experimental-strip-types`)
 - PostgreSQL 16 (أو `docker compose up -d`)
 - تخزين متوافق مع S3 (RustFS محلياً عبر `docker compose`)، أو ملفات على القرص بـ `file://`
 

@@ -252,9 +252,19 @@ pg_dump: error: query would be affected by row-level security policy
 
 ## ٩. التشغيل الفعلي — الأوامر
 
+**على الخادم يعمل كل أمر في هذه الوثيقة على المضيف، عبر `bash scripts/host-run.sh`** (B7،
+`docs/DEPLOYMENT.md` §٤-ج): `scripts/` ليس في صورة التطبيق، ورابط superuser ومفاتيح `BACKUP_*` لا
+تدخل أي حاوية. الغلاف يقرأ `.env.host.local` (روابط عبر `127.0.0.1:5432`) ومفاتيح `BACKUP_*` وحدها من
+`.env.production`، ويرفض إن وُجد `.env.local`. سطر cron بلا الغلاف لا يحمل أي بيئة، فيرفض `backup.sh`
+كل ساعة بـ`DATABASE_SUPERUSER_URL must be set`.
+
+**ورابط superuser بلا كلمة مرور، والكلمة في `~/.pgpass` (`600`)** لمستخدم cron: `pg_dump` و`psql`
+يتلقّيان الرابط وسيطاً، ووسيطات أي عملية يقرؤها كل مستخدم محلي. التفصيل وسطر `.pgpass` في
+`docs/DEPLOYMENT.md` §٤-ج، والغلاف يرفض الرابط الذي يحمل كلمة.
+
 ```bash
 # كل ساعة، من cron. أمر واحد: نسخة، تشفير، شحن، تسجيل.
-0 * * * * cd /srv/enginora && npm run backup:hourly >> /var/log/enginora-backup.log 2>&1
+0 * * * * cd /srv/enginora && bash scripts/host-run.sh npm run backup:hourly >> /var/log/enginora-backup.log 2>&1
 ```
 
 `backup:hourly` يخرج بحالة غير صفرية عند أي فشل، **ليراسلك cron**. مهمّة نسخ
@@ -263,8 +273,8 @@ pg_dump: error: query would be affected by row-level security policy
 ### الاستعادة من نسخة مشحونة
 
 ```bash
-npm run backup:fetch -- 20260914T084659Z      # ينزّل ويفكّ التشفير ويطابق البصمات
-npm run restore-drill -- ./restored/20260914T084659Z
+bash scripts/host-run.sh npm run backup:fetch -- 20260914T084659Z      # ينزّل ويفكّ التشفير ويطابق البصمات
+bash scripts/host-run.sh npm run restore-drill -- ./restored/20260914T084659Z
 ```
 
 `backup:fetch` يطابق `SHA256SUMS` **المأخوذة قبل التشفير**، فتطابقها يثبت أن

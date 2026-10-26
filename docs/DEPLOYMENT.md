@@ -9,10 +9,11 @@
 
 | المكوّن | الحد الأدنى | لماذا |
 |---|---|---|
-| Node | ٢٢ | مثبت في `engines` |
+| Node | ٢٢٫٦ | مثبت في `engines` (`>=22.6.0`): سكربتات المضيف `.ts` تعمل بـ`--experimental-strip-types`، وقد أُضيف في Node 22.6.0 |
 | PostgreSQL | ١٦ | `gen_random_uuid()`، `make_interval(secs =>)`، وسياسات RLS كما كُتبت |
 | تخزين S3 | أي متوافق | **الملفات على القرص مرفوضة في الإنتاج** — الخادم يرفض الإقلاع |
 | HTTPS | إلزامي | كعكة الجلسة `Secure` و`__Host-`؛ بلا HTTPS لا تُحفظ الجلسة أصلاً |
+| عميل PostgreSQL 16 (على المضيف) | ١٦ | `psql` و`pg_dump` و`pg_restore` لأدوات المضيف (§٤-ج) |
 
 **بشأن سوريا:** لا شيء هنا يفترض مزوّداً بعينه ولا بوابة دفع دولية. المدفوعات
 يدوية بإيصال يراجعه المالك (قرار المالك §١٠)، والتخزين أي خدمة متوافقة مع S3.
@@ -141,13 +142,23 @@ node -e "console.log(require('crypto').randomBytes(36).toString('base64'))"
 
 ```bash
 cp .env.production.example .env.production      # ثم املأ كل قيمة، ومنها كلمتا الدورين (§٢ الخطوة 1)
+chmod 600 .env.production
 docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
 # §٢ الخطوتان 2 و3: \password للدورين ثم التحقق — ما بعدها يفشل بخطأ مصادقة قبلهما (B6)
-docker compose -f docker-compose.prod.yml --env-file .env.production exec app npm run db:migrate
-docker compose -f docker-compose.prod.yml --env-file .env.production exec app npm run bootstrap:owner
+docker compose -f docker-compose.prod.yml --env-file .env.production exec app npm run db:migrate   # في الحاوية
+
+# من هنا على المضيف، لا في الحاوية: `scripts/` ليس في الصورة (B7، §٤-ج)
+cp .env.host.example .env.host.local && chmod 600 .env.host.local   # ثم املأه
+(umask 077 && touch ~/.pgpass) && chmod 600 ~/.pgpass               # ثم كلمة superuser فيه بمحرّر (§٤-ج)
+bash scripts/host-run.sh npm run seed:catalog          # التخصصات الأربعة وفئاتها، ولا منتجات
+bash scripts/host-run.sh npm run seed:payment-methods  # طرق الدفع، بلا أي بيانات حساب
+bash scripts/host-run.sh npm run bootstrap:owner       # يسأل عن اسم المستخدم وكلمة المرور
+bash scripts/host-run.sh npm run db:prove-rls
+bash scripts/host-run.sh npm run backup
+bash scripts/host-run.sh npm run restore-drill
 ```
 
-**قاعدة البيانات غير معرَّضة للإنترنت** (لا `ports:` لها)، والتطبيق مربوط
+**قاعدة البيانات غير معرَّضة للإنترنت** (منشورة على `127.0.0.1:5432` وحده — B5 — لأدوات المضيف)، والتطبيق مربوط
 بـ`127.0.0.1:3000` — يصل إليه الوسيط العكسي وحده. ولا TLS في هذه الحزمة: ضع
 Caddy أو nginx أمامها. **بلا HTTPS لن يستطيع أحد تسجيل الدخول أصلاً**، لأن
 كعكة الجلسة `Secure` و`__Host-` — وهذا عمل الكعكة لا عطل يُلتَفّ عليه.
@@ -167,6 +178,73 @@ npm run db:migrate
 npm run build          # حارس prebuild يرفض NODE_ENV غير production
 npm start
 ```
+
+ثم البذور وحساب المالك والإثبات والنسخ كما في §٤-ج.
+
+### ج. أدوات العمليات على المضيف (B7)
+
+`scripts/` ليس في صورة التطبيق، **عمداً**: النسخ وتمرين الاستعادة وإثبات RLS تحتاج اتصال
+superuser و`psql` و`pg_dump`، ولا مكان لأيٍّ منها في حاوية تخدم الزوّار. فهي تعمل على المضيف،
+من نسخة المستودع التي بُنيت منها الصورة، وتصل إلى PostgreSQL عبر B5 (`127.0.0.1:5432`).
+
+| العملية | أين تعمل | لماذا |
+|---|---|---|
+| `db:migrate` | الحاوية `app` | الصورة تحمل الترحيلات و`drizzle-kit`، وبيئتها فيها `DATABASE_MIGRATION_URL` |
+| `seed:catalog` و`seed:payment-methods` و`bootstrap:owner` | المضيف | `scripts/` ليس في الصورة (`exec app` يفشل بـ`Cannot find module`) |
+| `db:prove-rls` و`backup` و`backup:hourly` و`backup:fetch` و`restore-drill` | المضيف | superuser و`psql`/`pg_dump`، ولا يدخل أيٌّ منهما حاوية |
+| `security-probe` | أي جهاز | يخاطب الموقع عبر HTTPS |
+
+**ما يحتاجه المضيف:**
+
+1. نسخة المستودع على الـcommit المنشور نفسه (هي سياق البناء أصلاً): سكربت أقدم أو أحدث من
+   الترحيلات التي طُبِّقت يسأل القاعدة عن مخطط ليس فيها.
+2. Node **22.6 أو أحدث**، مثبتاً للنظام كله لا بـnvm: cron يعمل بـ`PATH` قصير، فـNode لا يجده
+   cron لا يأخذ نسخاً.
+3. `npm ci` على المضيف نفسه: `@node-rs/argon2` مكتبة أصلية تُثبَّت لمعمارية الخادم.
+4. `postgresql-client-16` (`psql` و`pg_dump` و`pg_dumpall` و`pg_restore`) بإصدار الخادم الرئيسي نفسه.
+5. `python3`: `restore-drill` يقرأ به `manifest.json` (موجود افتراضاً في صور Ubuntu للخوادم).
+
+**البيئة:** `cp .env.host.example .env.host.local && chmod 600 .env.host.local` ثم املأه. يحمل رابطَي
+superuser و`migrator` عبر `127.0.0.1:5432` — لا `postgres:5432`، فذلك اسم لا يوجد إلا داخل شبكة
+Docker، ولهذا لا تعمل روابط `.env.production` من المضيف. `git` وDocker يتجاهلانه (`.env.*.local`)،
+ولا يقرؤه أي ملف compose.
+
+**كلمة مرور superuser لا تُكتب في الرابط، بل في `~/.pgpass`.** `backup.sh` و`restore-drill.sh`
+و`prove-rls.mjs` تمرّر الرابط إلى `pg_dump` و`pg_dumpall` و`pg_restore` و`psql` **وسيطاً في سطر الأمر**،
+وأي مستخدم محلي يقرأ وسيطات أي عملية (`ps`، `/proc/<pid>/cmdline`) — كانت الكلمة تظهر هناك كل ساعة.
+فالرابط بلا كلمة مرور، والكلمة في `~/.pgpass` للمستخدم الذي يشغّل هذه الأوامر ويملك جدول cron، يقرؤه
+libpq بنفسه فلا تظهر في وسيطة ولا في بيئة:
+
+- أنشئه دون مسح ما فيه: `(umask 077 && touch ~/.pgpass) && chmod 600 ~/.pgpass`، ثم أضف **بمحرّر**
+  (لا `echo` ولا `printf`، فتاريخ الصدفة يحفظ ما تكتبه) سطراً واحداً:
+  `127.0.0.1:5432:*:postgres:<POSTGRES_SUPERUSER_PASSWORD>`.
+- `*` في حقل القاعدة لأن `restore-drill` يُنشئ قاعدة جديدة في كل تشغيل (`restore_drill_<وقت>_<pid>`)،
+  و`.pgpass` لا يعرف بادئات. المضيف والمنفذ والمستخدم محدَّدة بدقة، وsuperuser يفتح أي قاعدة على عنقوده
+  أصلاً، فالنجمة لا تمنحه شيئاً لم يكن له.
+- مملوك لذلك المستخدم وبصلاحية `600`: libpq **يتجاهل** ملفاً يقرؤه غير مالكه، فيفشل الاتصال لاحقاً
+  برسالة أقل وضوحاً. لا تطبعه ولا تنسخه إلى سجلّ أو تذكرة أو نسخة احتياطية.
+
+رابط `migrator` يبقى بكلمته: Node وحده يقرؤه داخل عمليته، ولا يمرّره إلى برنامج آخر وسيطاً.
+
+**كل أمر من هذه عبر `bash scripts/host-run.sh npm run <سكربت>`.** الغلاف يقرأ الملفين ولا ينفّذ
+أيّاً منهما: `.env.host.local` كاملاً، ومن `.env.production` مفاتيح `BACKUP_*` وحدها (هناك تبقى بقرار
+المالك). و**يرفض** إن وُجد `.env.local` — كل سكربت يملأ منه ما ينقصه، وعلى الخادم لا يكون إلا ملف
+تطوير تسلّل — وإن كان `.env.host.local` مقروءاً لغير مالكه، وإن حمل رابط superuser كلمة مرور، وإن غاب
+`~/.pgpass` (أو `$PGPASSFILE`) أو لم يكن للمستخدم نفسه أو قرأه غيره.
+
+**النسخ المجدول** (`docs/BACKUP-AND-RESTORE.md` §٩):
+
+```bash
+0 * * * * cd /srv/enginora && bash scripts/host-run.sh npm run backup:hourly >> /var/log/enginora-backup.log 2>&1
+```
+
+> **ما جُرِّب وما لم يُجرَّب:** هذا الإجراء كاملاً — الترحيلات ثم البذور ثم المالك ثم `prove-rls` ثم
+> النسخ وتمرين الاستعادة ثم `backup:hourly` (تشفير وشحن) ثم `backup:fetch` وتمرين على المجلوب — شُغِّل
+> عبر `host-run.sh` على عنقود PostgreSQL 16 مؤقت بنمط الإنتاج (`01-roles.sql` وحده، وSCRAM عبر
+> `127.0.0.1`)، مع تخزين S3 محاكٍ (moto)، ورابط superuser بلا كلمة مرور و`~/.pgpass` بصلاحية `600`.
+> وراقبت عمليةٌ اختبارية كل `/proc/<pid>/cmdline` و`environ` أثناء كل خطوة: كلمة superuser في **صفر**
+> وسيطات وصفر بيئات، مقابل ستّ وسيطات بالطريقة القديمة. الفروق: الترحيلات هناك من المضيف لا من
+> الحاوية، ولا Docker، ولا خادم، ولا ARM64، ولا cron حقيقي، ولا R2/B2 حقيقيان.
 
 ثم **قبل توجيه أي زيارة إلى الخادم**:
 
@@ -220,18 +298,19 @@ Next يتحقق من `Origin` مقابل `Host` لكل server action. إن أن�
 
 ### يوقف الإطلاق
 
-- [ ] `DATABASE_URL` هو `app_user`، و`npm run db:prove-rls` ينجح
+- [ ] `DATABASE_URL` هو `app_user`، و`npm run db:prove-rls` ينجح (على المضيف، عبر `scripts/host-run.sh` — §٤-ج)
+- [ ] `seed:catalog` و`seed:payment-methods` شُغِّلا بعد الترحيلات (على المضيف — §٤-أ)
 - [ ] `npm run verify` و`npm run test:integration` خضراوان على الالتزام المنشور
 - [ ] `ALLOW_PROBE_SEED=yes npm run seed:probe` ثم
       `node scripts/security-probe.mjs` — **٦٠ فحصاً**، كلها PASS.
       بلا التجهيز تفشل فحوص لأن تحديد المعدّل تدخّل، لا لأن هناك عيباً.
-- [ ] `npm run backup` ثم `npm run restore-drill` على **الإنتاج**، لا على نسخة تطوير
+- [ ] `npm run backup` ثم `npm run restore-drill` على **الإنتاج**، لا على نسخة تطوير (عبر `scripts/host-run.sh`)
 - [ ] HTTPS، وشهادة صالحة، وكعكة `__Host-em_session` تصل بـ`Secure`
 - [ ] `SESSION_SECRET` و`CONFIG_ENCRYPTION_KEY` **ليسا** قيمتي `.env.example`
 - [ ] `MALWARE_SCANNER` قرار مُتَّخذ ومُسجَّل
-- [ ] حساب المالك أُنشئ بـ`npm run bootstrap:owner` باسم مستخدم وكلمة مرور قوية
+- [ ] حساب المالك أُنشئ بـ`npm run bootstrap:owner` على المضيف (عبر `scripts/host-run.sh`) باسم مستخدم وكلمة مرور قوية
       (يدخل من `/login/owner`؛ لا عامل ثانٍ بقرار المالك — `docs/DECISIONS.md` §٢٢)
-- [ ] النسخ الاحتياطي مجدول، ووجهته خارج هذا الخادم (OPEN-10)
+- [ ] النسخ الاحتياطي مجدول بسطر cron في §٤-ج، ووجهته خارج هذا الخادم (OPEN-10)
 - [ ] **سجّل حساباً حقيقياً** (اسم + هاتف + بريد) واشترِ منتجاً مجانياً، ثم اخرج وادخل
       بالهاتف والبريد. التسجيل لا يرسل بريداً منذ Stage 6.
 
