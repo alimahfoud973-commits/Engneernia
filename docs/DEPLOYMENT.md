@@ -67,23 +67,30 @@ npm run db:prove-rls    # إثبات أن app_user مقيَّد فعلاً — �
 **كلمتا مرور `migrator` و`app_user` تُضبطان على الخادم، ولا تأتيان من المستودع (B6).**
 `01-roles.sql` يُنشئ الدورين **بلا كلمة مرور**، فلا يدخل أيٌّ منهما عبر الشبكة حتى تُضبط كلمته.
 تطبيق يُقلع قبل ذلك يفشل بخطأ مصادقة صريح، ولا يقبل كلمة منشورة بصمت. وفي حزمة Docker يُنفَّذ
-الملف تلقائياً عند أول تشغيل لـ `postgres` على وحدة تخزين فارغة، ثم:
+الملف تلقائياً عند أول تشغيل لـ `postgres` على وحدة تخزين فارغة. الترتيب (وهو ما يحيل إليه §٤):
 
-1. ولّد كلمتين عشوائيتين على الخادم، بصيغة hex لأنها لا تحتاج ترميزاً داخل رابط الاتصال:
-   `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
-2. اضبطهما بـ `\password` في `psql`، وهي تقرأ الكلمة من الطرفية وترسل للخادم بصمتها
-   (SCRAM) لا نصّها، فلا تظهر في سجل الخادم ولا في تاريخ الأوامر:
-   `docker compose -f docker-compose.prod.yml exec postgres psql -U postgres -d postgres`،
+1. **قبل أول `up`**: ولّد كلمتين عشوائيتين على الخادم، بصيغة hex لأنها لا تحتاج ترميزاً داخل
+   رابط الاتصال: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`،
+   وضعهما في `DATABASE_MIGRATION_URL` و`DATABASE_URL` في `.env.production` (صلاحية `600`) وحده.
+   compose يقرأ الرابطين لحظة إنشاء حاوية `app`، فتعديلهما بعدها لا يصلها إلا بـ`up -d` جديد.
+   لا تطبعهما، ولا تضعهما في متغيّرات بيئة حاوية `postgres`.
+2. **بعد أول `up`**: اضبط القيمتين نفسيهما بـ `\password` في `psql`، وهي تقرأ الكلمة من الطرفية
+   وترسل للخادم بصمتها (SCRAM) لا نصّها، فلا تظهر في سجل الخادم ولا في تاريخ الأوامر:
+   `docker compose -f docker-compose.prod.yml --env-file .env.production exec postgres psql -U postgres -d postgres`،
    ثم `\password migrator` و`\password app_user`.
-3. ضعهما في `DATABASE_MIGRATION_URL` و`DATABASE_URL` في `.env.production` (صلاحية `600`)
-   وحده. لا تطبعهما، ولا تضعهما في متغيّرات بيئة حاوية `postgres`.
-4. تحقّق قبل تشغيل التطبيق: الكلمة الجديدة مقبولة، وكلمة عشوائية مرفوضة لكل دور.
+3. **تحقّق قبل الترحيلات، عبر عنوان الحاوية الشبكي لا عبر `localhost`.** صورة `postgres` تثق بالمقبس
+   و`127.0.0.1` داخل الحاوية (`trust`)، ولا تطلب SCRAM إلا من الاتصالات الشبكية (`host all all all`)،
+   وهي طريق التطبيق. فاختبار من داخل الحاوية عبر `localhost` **يقبل أي كلمة ولا يُثبت شيئاً**. لكل دور:
+   `docker compose -f docker-compose.prod.yml --env-file .env.production exec postgres psql -h postgres -U app_user -d engineering_marketplace -c 'SELECT current_user'`
+   ثم الأمر نفسه بـ`-U migrator`. `psql` يطلب الكلمة: الصحيحة تُعيد اسم الدور، وأي كلمة أخرى تُعيد
+   `password authentication failed`. جرّب الاثنتين لكل دور. (الفرق بين الطريقين مُثبت على عنقود
+   PostgreSQL 16 بقواعد `pg_hba` الصورة نفسها؛ الأمر بحرفه لم يُجرَّب على خادم بعد.)
 
 **قاعدة قائمة لا يغيّرها تعديل هذا الملف.** `docker-entrypoint-initdb.d` لا يُنفَّذ إلا على مجلد
 بيانات فارغ. قاعدة أُنشئت من نسخة أقدم من `01-roles.sql`، تلك التي حملت كلمتين منشورتين، تبقى
-تقبلهما حتى تُدوَّر بـ `\password` بالطريقة نفسها. قاعدة المعاينة على اللابتوب دُوِّرت في
-Stage 8C. ونسخة احتياطية مُستعادة تأتي أدوارها بلا كلمة مرور أصلاً (`--no-role-passwords`)،
-فتحتاج الخطوتين 2 و3 بعد الاستعادة.
+تقبلهما حتى تُدوَّر بـ `\password` بالطريقة نفسها، ثم يُتحقَّق منها كما في الخطوة 3. قاعدة المعاينة
+على اللابتوب دُوِّرت في Stage 8C. ونسخة احتياطية مُستعادة تأتي أدوارها بلا كلمة مرور أصلاً
+(`--no-role-passwords`)، فتحتاج الخطوتين 2 و3 بعد الاستعادة، بالقيم التي في `.env.production`.
 
 ---
 
@@ -133,10 +140,11 @@ node -e "console.log(require('crypto').randomBytes(36).toString('base64'))"
 ### أ. بحاويات — الطريق الموصى به لخادم واحد
 
 ```bash
-cp .env.production.example .env.production      # ثم املأ كل قيمة
+cp .env.production.example .env.production      # ثم املأ كل قيمة، ومنها كلمتا الدورين (§٢ الخطوة 1)
 docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
-docker compose -f docker-compose.prod.yml exec app npm run db:migrate
-docker compose -f docker-compose.prod.yml exec app npm run bootstrap:owner
+# §٢ الخطوتان 2 و3: \password للدورين ثم التحقق — ما بعدها يفشل بخطأ مصادقة قبلهما (B6)
+docker compose -f docker-compose.prod.yml --env-file .env.production exec app npm run db:migrate
+docker compose -f docker-compose.prod.yml --env-file .env.production exec app npm run bootstrap:owner
 ```
 
 **قاعدة البيانات غير معرَّضة للإنترنت** (لا `ports:` لها)، والتطبيق مربوط
