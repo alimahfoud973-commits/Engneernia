@@ -38,6 +38,8 @@ npm-debug.log*
 # Database backups are never committed: they hold real customer and
 # financial data, and a repository is the wrong place for either.
 /backups/
+# …and what `backup:fetch` decrypts lands here, in the clear.
+/restored/
 
 # production env, never committed
 .env.production

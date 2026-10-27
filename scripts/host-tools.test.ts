@@ -1,8 +1,8 @@
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, chownSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, chownSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, posix, relative, sep } from 'node:path';
 
 /**
  * THE OPERATIONS SCRIPTS RUN ON THE HOST, AND CAN (B7).
@@ -25,6 +25,11 @@ import { join } from 'node:path';
  * any local user in `ps` and /proc/<pid>/cmdline. It lives in ~/.pgpass, which
  * libpq reads itself; host-run.sh refuses a URL that carries it.
  *
+ * And the build context (B7-n1): `COPY . .` in the Dockerfile's build stage
+ * takes everything .dockerignore lets through, so a .env.production or a
+ * decrypted backup in the checkout would sit in a layer of the builder's cache.
+ * Rule 7 asks a model of Docker's matching which paths would be sent.
+ *
  * The text rules below are re-broken in memory, in LF and CRLF, like the other
  * stack guards. host-run.sh itself is run for real, on Linux, which is the only
  * place it is meant to run.
@@ -37,6 +42,7 @@ const read = (path: string) => lf(readFileSync(join(root, path), 'utf8'));
 type Files = {
   readonly dockerfile: string;
   readonly dockerignore: string;
+  readonly gitignore: string;
   readonly packageJson: string;
   readonly lock: string;
   readonly deployment: string;
@@ -66,6 +72,7 @@ const HOST_SCRIPTS = [
 const FILES: Files = {
   dockerfile: read('Dockerfile'),
   dockerignore: read('.dockerignore'),
+  gitignore: read('.gitignore'),
   packageJson: read('package.json'),
   lock: read('package-lock.json'),
   deployment: read('docs/DEPLOYMENT.md'),
@@ -93,6 +100,102 @@ function imagePaths(dockerfile: string): string[] {
   const runtime = lf(dockerfile).split(/^FROM .* AS runtime$/m)[1] ?? '';
   return [...runtime.matchAll(/^COPY\s+(?:--\S+\s+)*\S+\s+\.\/(\S*)\s*$/gm)].map((m) => m[1] ?? '');
 }
+
+/**
+ * Is `path` kept out of the build context? A model of Docker's .dockerignore
+ * rules (moby/patternmatcher), so the guard runs without Docker: each line is
+ * trimmed, blanks and `#` lines are skipped, a leading `!` re-includes, and the
+ * pattern loses a leading and trailing slash. `*` and `?` stay inside one path
+ * segment, `**` crosses them, a pattern that matches a parent directory
+ * matches everything under it, and the LAST matching line decides.
+ *
+ * It is a model, not Docker. It reproduces the examples Docker documents (see
+ * the tests below), but character classes and escapes are not modelled — a
+ * pattern using them is reported, not guessed at — and only listing a real
+ * build context can show what a given builder actually sends (B8).
+ */
+type IgnoreRule = { readonly negate: boolean; readonly regex: RegExp };
+
+function ignoreRules(dockerignore: string): IgnoreRule[] | null {
+  const rules: IgnoreRule[] = [];
+  for (const raw of lf(dockerignore).split('\n')) {
+    let line = raw.trim();
+    if (line === '' || line.startsWith('#')) continue;
+    const negate = line.startsWith('!');
+    if (negate) line = line.slice(1).trim();
+    if (/[[\]\\]/.test(line)) return null;
+    line = posix.normalize(line).replace(/^\/(?=.)/, '').replace(/(?<=.)\/$/, '');
+    let source = '';
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i] ?? '';
+      if (ch === '*' && line[i + 1] === '*') {
+        i += line[i + 2] === '/' ? 2 : 1;
+        source += i === line.length - 1 ? '.*' : '(?:.*/)?';
+      } else if (ch === '*') source += '[^/]*';
+      else if (ch === '?') source += '[^/]';
+      else source += ch.replace(/[.+^${}()|]/g, '\\$&');
+    }
+    rules.push({ negate, regex: new RegExp(`^${source}$`) });
+  }
+  return rules;
+}
+
+function ignored(rules: readonly IgnoreRule[], path: string): boolean {
+  const parts = path.split('/');
+  let result = false;
+  for (const rule of rules) {
+    const hit = rule.regex.test(path) || parts.slice(1).some((_, i) => rule.regex.test(parts.slice(0, i + 1).join('/')));
+    if (hit) result = !rule.negate;
+  }
+  return result;
+}
+
+/**
+ * What must never reach the builder. The env files are named the way an
+ * operator would name them; the backup paths are where backup.sh and
+ * backup:fetch write.
+ */
+const SECRET_PATHS = [
+  '.env',
+  '.env.production',
+  '.env.staging',
+  '.env.development',
+  '.env.local',
+  '.env.host.local',
+  'docker/.env',
+  'deploy/.env.production',
+  'backups/20260914T084659Z/database.dump',
+  'restored/x/database.dump',
+  'restored/x/roles.sql',
+  'id.pem',
+  'deploy/tls/server.key',
+  '.pgpass',
+  'scripts/.pgpass',
+  'uploads/originals/x.pdf',
+] as const;
+
+/** Everything under a directory, as context-relative paths. */
+const filesUnder = (dir: string) =>
+  readdirSync(join(root, dir), { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => posix.join(relative(root, entry.parentPath).split(sep).join('/'), entry.name));
+
+/**
+ * What the build cannot do without: the files `npm run build` reads (its
+ * prebuild guard included) and every file of the application and its assets.
+ * The paths the runtime stage copies out of the build stage are added from the
+ * Dockerfile itself in rule 7, so a new COPY is covered without editing this.
+ */
+const BUILD_INPUTS = [
+  'package.json',
+  'package-lock.json',
+  'next.config.ts',
+  'tsconfig.json',
+  'postcss.config.mjs',
+  'scripts/check-build-env.mjs',
+  ...filesUnder('src'),
+  ...filesUnder('assets'),
+];
 
 /** Names a KEY=VALUE file declares, commented-out lines excluded. */
 function declared(env: string): Set<string> {
@@ -167,7 +270,6 @@ export function violations(input: Files): string[] {
   ] as const) {
     if (/env_file|\.env\.host|DATABASE_SUPERUSER_URL|BACKUP_/.test(compose)) found.push(`compose-leaks-host-env:${label}`);
   }
-  if (!f.dockerignore.split('\n').includes('.env.*.local')) found.push('host-file-not-dockerignored');
 
   // 5. Every documented cron line goes through host-run.sh, which carries the environment.
   for (const doc of [f.deployment, f.backupDoc]) {
@@ -191,6 +293,23 @@ export function violations(input: Files): string[] {
   if (!f.readme.includes('Node.js 22.6+')) found.push('readme-node');
   if (!f.runLocally.includes('Node.js 22.6 أو أحدث')) found.push('run-locally-node');
   if (!f.deployment.includes('`>=22.6.0`')) found.push('deployment-node');
+
+  // 7. The build context (B7-n1): no secret or backup in it, every build input in it.
+  const rules = ignoreRules(f.dockerignore);
+  if (rules === null) {
+    found.push('dockerignore-unmodelled-pattern');
+  } else {
+    if (rules.some((rule) => rule.negate)) found.push('dockerignore-exception');
+    for (const path of SECRET_PATHS) {
+      if (!ignored(rules, path)) found.push(`context-includes:${path}`);
+    }
+    const copied = inImage.filter((path) => path !== '' && path !== '.next' && path !== 'node_modules');
+    for (const path of [...BUILD_INPUTS, ...copied]) {
+      if (ignored(rules, path)) found.push(`context-excludes-build-input:${path}`);
+    }
+  }
+  //    …and a decrypted backup is never one `git add -A` away from a commit.
+  if (!f.gitignore.split('\n').includes('/restored/')) found.push('restored-not-gitignored');
 
   return found;
 }
@@ -244,9 +363,79 @@ describe('host tools (B7) — each rule fails when its defect comes back', () =>
       'compose-leaks-host-env:prod',
     ],
     [
-      'the host file no longer docker-ignored',
-      (f) => ({ ...f, dockerignore: replace(f.dockerignore, '.env.*.local\n', '') }),
-      'host-file-not-dockerignored',
+      'env files with a suffix let back into the build context',
+      (f) => ({ ...f, dockerignore: replace(f.dockerignore, '**/.env.*\n', '') }),
+      'context-includes:.env.production',
+    ],
+    [
+      'the host file let back into the build context',
+      (f) => ({ ...f, dockerignore: replace(f.dockerignore, '**/.env.*\n', '') }),
+      'context-includes:.env.host.local',
+    ],
+    [
+      'a bare .env excluded at the root only',
+      (f) => ({ ...f, dockerignore: replace(f.dockerignore, '**/.env\n', '.env\n') }),
+      'context-includes:docker/.env',
+    ],
+    [
+      'decrypted backups let into the build context',
+      (f) => ({ ...f, dockerignore: replace(f.dockerignore, '\nrestored\n', '\n') }),
+      'context-includes:restored/x/database.dump',
+    ],
+    [
+      'private keys let into the build context',
+      (f) => ({ ...f, dockerignore: replace(f.dockerignore, '**/*.pem\n', '') }),
+      'context-includes:id.pem',
+    ],
+    [
+      'the password file let into the build context',
+      (f) => ({ ...f, dockerignore: replace(f.dockerignore, '**/.pgpass\n', '') }),
+      'context-includes:.pgpass',
+    ],
+    [
+      'an exception that re-includes the production env file',
+      (f) => ({ ...f, dockerignore: `${f.dockerignore}!.env.production\n` }),
+      'context-includes:.env.production',
+    ],
+    [
+      'any exception at all',
+      (f) => ({ ...f, dockerignore: `${f.dockerignore}!.env.example\n` }),
+      'dockerignore-exception',
+    ],
+    [
+      'a pattern the model cannot read',
+      (f) => ({ ...f, dockerignore: `${f.dockerignore}.env.[ps]*\n` }),
+      'dockerignore-unmodelled-pattern',
+    ],
+    [
+      'the build-env guard excluded with scripts/',
+      (f) => ({ ...f, dockerignore: `${f.dockerignore}scripts\n` }),
+      'context-excludes-build-input:scripts/check-build-env.mjs',
+    ],
+    [
+      'the application excluded',
+      (f) => ({ ...f, dockerignore: `${f.dockerignore}src\n` }),
+      'context-excludes-build-input:src/app/layout.tsx',
+    ],
+    [
+      'the fonts excluded',
+      (f) => ({ ...f, dockerignore: `${f.dockerignore}**/*.ttf\n` }),
+      'context-excludes-build-input:assets/fonts/NotoNaskhArabic-Regular.ttf',
+    ],
+    [
+      'the Next config excluded by an over-wide rule',
+      (f) => ({ ...f, dockerignore: `${f.dockerignore}*.ts\n` }),
+      'context-excludes-build-input:next.config.ts',
+    ],
+    [
+      'a file the runtime stage copies excluded',
+      (f) => ({ ...f, dockerignore: `${f.dockerignore}drizzle.config.ts\n` }),
+      'context-excludes-build-input:drizzle.config.ts',
+    ],
+    [
+      'decrypted backups no longer git-ignored',
+      (f) => ({ ...f, gitignore: replace(f.gitignore, '/restored/\n', '') }),
+      'restored-not-gitignored',
     ],
     [
       'the cron line without host-run.sh',
@@ -298,6 +487,50 @@ describe('host tools (B7) — each rule fails when its defect comes back', () =>
   it.each(cases)('%s', (_label, mutate, expected) => {
     expect(violations(mutate(FILES))).toContain(expected);
     expect(violations(asCrlf(mutate(FILES)))).toContain(expected);
+  });
+});
+
+/**
+ * The model behind rule 7, against the examples in Docker's own .dockerignore
+ * documentation, plus the shapes the file above relies on. A model that got
+ * these wrong would pass a .dockerignore Docker reads differently.
+ */
+describe('the .dockerignore model (rule 7)', () => {
+  const check = (file: string, path: string) => {
+    const rules = ignoreRules(file);
+    if (rules === null) throw new Error('unmodelled pattern');
+    return ignored(rules, path);
+  };
+
+  it.each([
+    ['*/temp*', 'somedir/temporary.txt', true],
+    ['*/temp*', 'somedir/temp', true],
+    ['*/temp*', 'temporary.txt', false],
+    ['*/*/temp*', 'somedir/subdir/temporary.txt', true],
+    ['*/*/temp*', 'somedir/temporary.txt', false],
+    ['temp?', 'tempa', true],
+    ['temp?', 'temp', false],
+    ['**/*.go', 'main.go', true],
+    ['**/*.go', 'a/b/c.go', true],
+    ['*.md\n!README.md', 'README.md', false],
+    ['*.md\n!README.md', 'CHANGES.md', true],
+    ['*.md\n!README*.md\nREADME-secret.md', 'README-secret.md', true],
+    ['*.md\n!README*.md\nREADME-secret.md', 'README-public.md', false],
+    ['restored', 'restored/x/database.dump', true],
+    ['/restored/', 'restored/x/database.dump', true],
+    ['restored', 'src/restored/x', false],
+    ['**/.env', 'docker/.env', true],
+    ['**/.env', '.env', true],
+    ['**/.env.*', '.env.production', true],
+    ['**/.env.*', '.envrc', false],
+    ['.env', 'docker/.env', false],
+    ['# .env', '.env', false],
+    ['  .env  ', '.env', true],
+    ['node_modules', 'node_modules/.bin/next', true],
+    ['*.log', 'logs/app.log', false],
+    ['secrets/**', 'secrets/a/b', true],
+  ])('%j and %s → excluded: %s', (file, path, expected) => {
+    expect(check(file, path)).toBe(expected);
   });
 });
 

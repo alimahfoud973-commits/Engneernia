@@ -1,10 +1,35 @@
-# Never inside the image: real secrets, local state, build output from the host.
-.env
-.env.local
-.env.*.local
-.git
+# Never inside the build context (B7-n1): real secrets, backups, local state,
+# build output from the host. `COPY . .` puts whatever is left into a layer of
+# the build stage, which stays in the builder's cache on the server.
+#
+# Every pattern is anchored at the context root (Docker drops a leading or
+# trailing slash), `**/` reaches every depth including the root, and a pattern
+# that names a directory excludes everything under it. There are no `!`
+# exceptions, on purpose: scripts/host-tools.test.ts fails on the first one.
+
+# Environment files of every kind, the committed examples included. The build
+# reads none of them — `next build` would LOAD a .env.production it found here
+# into its own process — and the runtime gets its values from Compose.
+**/.env
+**/.env.*
+
+# Backups: encrypted (backup.sh) and decrypted by backup:fetch.
+backups
+restored
+
+# Local state and build output from the host.
+uploads
+tmp
+coverage
+.data
 .next
 node_modules
-backups
-.data
+
+# Credentials and private keys, wherever they land.
+**/*.pem
+**/*.key
+**/.pgpass
+
+# Git metadata and logs.
+.git
 *.log
