@@ -1,21 +1,20 @@
 # =============================================================================
 # PRODUCTION IMAGE
 # =============================================================================
-# VERIFICATION STATUS — read this before trusting the file.
+# VERIFICATION STATUS (B8) — read this before trusting the file.
 #
-# This image was NOT built in the environment that wrote it: the session's
-# network policy allows container registry manifests but blocks the blob CDNs,
-# so no base image can be pulled and `docker build` cannot run. Say so plainly
-# rather than imply a test that did not happen.
+# Built from this file and RUN on every pull request and push to main by
+# .github/workflows/image.yml: on a native arm64 runner (the server is Oracle
+# Ampere A1, arm64) and on amd64. scripts/image-smoke.sh runs the image the
+# way docker-compose.prod.yml does: `npm run db:migrate` from the image, the
+# app on a throwaway PostgreSQL as app_user, /api/health and the HEALTHCHECK
+# below, pages with their CSP nonce, the native addons on that CPU, the fonts,
+# failure handling, and no generated secret in any output. First green on
+# PR #28, arm64 and amd64.
 #
-# What IS verified, on this machine, against the real database:
-#   - `npm ci && npm run build && npm start` serves every page (HTTP 200), with
-#     the CSP nonce on every script and zero policy violations in a browser;
-#   - the settlement statement needs `assets/fonts/*.ttf` present at runtime,
-#     read by path relative to the working directory;
-#   - `NODE_ENV=production` with filesystem storage exits at boot by design.
-#
-# What is NOT verified: that these layers build, and the apt/npm steps.
+# What is NOT verified here: the server itself — Ampere A1 hardware, its
+# Docker, real R2, ClamAV with signatures, SMTP. docs/DEPLOYMENT.md §4-a runs
+# the same smoke test on the server before the first `up`.
 #
 # A NOTE ON `output: 'standalone'`, WHICH THIS FILE DELIBERATELY DOES NOT USE.
 # It was tried first, because it produces a much smaller image. Under

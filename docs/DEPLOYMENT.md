@@ -192,6 +192,18 @@ bash scripts/host-run.sh npm run restore-drill
   جُرِّبت هذه الأوامر الثلاثة حرفياً (2026-10-27) على خادم Docker معزول، من نسخة
   `main` زُرع فيها ما قد يحمله مستودع الخادم: أعطت 0 مع `.dockerignore` الحالي و11
   مع القديم. هذا لا يغني عن تشغيلها على الخادم نفسه.
+- **ثم ابنِ الصورة وشغّلها اختباراً قبل أول `up`** (B8):
+  ```bash
+  docker compose -f docker-compose.prod.yml --env-file .env.production build app
+  bash scripts/image-smoke.sh "$(docker compose -f docker-compose.prod.yml --env-file .env.production config --images | grep -- '-app$')" arm64
+  ```
+  الأول يبني الصورة التي سيشغّلها `up` (`<المجلد>-app`، أو `<المشروع>-app` مع `-p`)،
+  والثاني يشغّلها على PostgreSQL مؤقت **خاص به**: ترحيلات من الصورة، إقلاع بـ`app_user`،
+  `/api/health` و`HEALTHCHECK`، صفحات بـCSP، رفض التخزين المحلي، ولا سرّ مولَّد في أي سجلّ
+  — ٣٢ فحصاً تنتهي بـ`SMOKE PASSED`. لا يقرأ `.env.production` ولا يمسّ قاعدة الإنتاج ولا
+  حجماً ولا حاوية غير ما ينشئه باسم `smoke-<عشوائي>-*`، ويزيلها بأسمائها عند الخروج؛ والتطبيق
+  فيه منشور على `127.0.0.1` بمنفذ عشوائي وحده. وCI يشغّل الاختبار نفسه على كل PR، على
+  مشغّل ARM64 أصلي وعلى amd64 (`.github/workflows/image.yml`).
 - **ذاكرة بناء من قبل B7-n1** (قبل `0a0b15b`، 2026-10-27 17:22 UTC): على أي جهاز ربما بُني
   عليه `docker-compose.prod.yml` أو `Dockerfile` المشروع — الخادم بـbash، أو جهاز Windows
   بـPowerShell 5.1 وDocker Desktop. الأوامر أدناه **قراءة فقط**: لا تبني ولا تسحب ولا تحذف ولا

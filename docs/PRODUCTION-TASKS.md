@@ -18,7 +18,8 @@
 | **جاهز** | `docker-compose.prod.yml` و`Dockerfile` و`deploy/Caddyfile` |
 | **ناقص** | خادم يُشغَّل عليه |
 | **يُوصَل بـ** | لا شيء في الكود. نسخ `.env.production.example` وملؤه |
-| **لم يُتحقَّق منه** | `docker build` — سياسة الشبكة هنا تحجب طبقات الصور. و`deploy/Caddyfile` لم يُشغَّل: لا Caddy في هذه البيئة. شغّل `caddy validate` على الخادم أولاً |
+| **مُتحقَّق منه (B8)** | `Dockerfile` يُبنى ويُشغَّل في CI على كل PR، على مشغّل **arm64 أصلي** وعلى amd64 (`.github/workflows/image.yml` و`scripts/image-smoke.sh`: ترحيلات من الصورة، إقلاع بـ`app_user`، الصحة، الصفحات، الإضافات الأصلية، رفض التخزين المحلي، لا سرّ في السجلّات) |
+| **لم يُتحقَّق منه** | الخادم نفسه (عتاد Ampere A1 وDocker عليه)، وR2 وClamAV بتواقيعه وSMTP حقيقية. و`deploy/Caddyfile` لم يُشغَّل: لا Caddy في هذه البيئة. شغّل `caddy validate` واختبار الصورة (`docs/DEPLOYMENT.md` §٤-أ) على الخادم أولاً |
 
 ## ٢. تخزين الكائنات (S3)
 
