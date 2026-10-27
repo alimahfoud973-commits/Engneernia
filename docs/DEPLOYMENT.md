@@ -192,18 +192,81 @@ bash scripts/host-run.sh npm run restore-drill
   جُرِّبت هذه الأوامر الثلاثة حرفياً (2026-10-27) على خادم Docker معزول، من نسخة
   `main` زُرع فيها ما قد يحمله مستودع الخادم: أعطت 0 مع `.dockerignore` الحالي و11
   مع القديم. هذا لا يغني عن تشغيلها على الخادم نفسه.
-- **ذاكرة بناء من قبل B7-n1** (قبل `0a0b15b`): على أي جهاز ربما بُني عليه
-  `docker-compose.prod.yml` أو `Dockerfile` المشروع، افحص بأوامر قراءة فقط تطبع
-  أسماءً وتواريخ وأحجاماً لا محتوى:
-  ```bash
-  docker image ls --format '{{.Repository}}:{{.Tag}}  {{.CreatedSince}}' | grep -- '-app'  # صورة compose الإنتاج: <المجلد>-app
-  docker buildx history ls 2>/dev/null | head -20   # البناءات السابقة بأسمائها وتواريخها
-  docker buildx du | tail -3                        # حجم ذاكرة البناء
+- **ذاكرة بناء من قبل B7-n1** (قبل `0a0b15b`، 2026-10-27 17:22 UTC): على أي جهاز ربما بُني
+  عليه `docker-compose.prod.yml` أو `Dockerfile` المشروع — الخادم بـbash، أو جهاز Windows
+  بـPowerShell 5.1 وDocker Desktop. الأوامر أدناه **قراءة فقط**: لا تبني ولا تسحب ولا تحذف ولا
+  تنظّف، ولا تطبع `Config.Env` ولا محتوى أي ملف. جُرِّب سلوكها على خادم Docker معزول (29.8.2،
+  containerd image store) بصور اختبار، و`Config.Env` لصورة تحمل قيمة اختبار لم يظهر في أي ناتج.
+  صياغة PowerShell 5.1 روجعت قراءةً (لم يكن PowerShell متاحاً للتجربة): لا وسيط فيها يحمل علامة
+  اقتباس مزدوجة داخلية، لأن PowerShell 5.1 يُفسدها حين يمرّرها إلى برنامج خارجي. شغّلها وDocker
+  يعمل؛ هي لا تشغّله.
+
+  **١. البنّاؤون — إلزامي قبل الخطوة ٤.**
   ```
-  إن ظهر بناءٌ للمشروع من مستودع كان فيه `.env.production` أو `restored/`، فافترض أن
-  الذاكرة تحمل نسخة منهما. لا تنظّفها بـ`prune` عام: `docker builder prune -a` يمسح
-  ذاكرة كل مشروع على الجهاز، والتنظيف قرار المالك بخطة تسمّي ما يُزال. ملفا compose
-  التطوير والمعاينة لا يبنيان صورة (لا `build:` فيهما)، فلا يُنشئان هذه الذاكرة.
+  docker buildx ls
+  ```
+  لا يشغّل أي بنّاء. في الخطوة ٤ يُسأل **فقط** بنّاءٌ عمود DRIVER فيه `docker` (على Docker
+  Desktop عادةً `desktop-linux`، وعلى Linux `default`) أو حالته `running`. **بنّاء
+  `docker-container` حالته `inactive` لا يُسأل**: سؤاله يسحب `moby/buildkit` وينشئ حاوية
+  ويشغّلها، وهذا ما حدث فعلاً في التجربة.
+
+  **٢. صور خدمة `app` التي بناها Compose، ولأي مشروع.** القائمة (الأمر نفسه في الصدفتين):
+  ```
+  docker image ls --all --filter "label=com.docker.compose.service=app" --format "table {{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.CreatedAt}}\t{{.Size}}"
+  ```
+  ثم المشروع الذي بناها (وسم `com.docker.compose.project`، أي اسم المجلد أو `-p`):
+  ```powershell
+  docker image inspect --format '{{.ID}}  {{index .Config.Labels `com.docker.compose.project`}}  {{.Created}}  {{.RepoTags}}' (docker image ls -q --filter "label=com.docker.compose.service=app" | Sort-Object -Unique)
+  ```
+  ```bash
+  docker image inspect --format '{{.ID}}  {{index .Config.Labels `com.docker.compose.project`}}  {{.Created}}  {{.RepoTags}}' $(docker image ls -q --filter "label=com.docker.compose.service=app" | sort -u)
+  ```
+  **الاسم وحده ليس دليلاً**: كل مشروع Compose فيه خدمة اسمها `app` تظهر صورته هنا باسم
+  `<مشروع>-app` (جُرِّب بمشروع آخر). الوسم يقول أيّ مجلد بناها، والمجلد الذي تعرف أنه نسخة
+  Enginora هو ما يحسم. والعلامات بين `` ` `` نصّ حرفي في كلتا الصدفتين داخل `'…'`.
+
+  **٣. صور بُنيت بـ`docker build` يدوياً** (بلا وسوم Compose):
+  ```powershell
+  docker image inspect --format "{{.Created}}  {{.Config.User}}  {{.Config.WorkingDir}}  {{.RepoTags}}" (docker image ls -q | Sort-Object -Unique) | Select-String -SimpleMatch "  nextjs  /app  "
+  ```
+  ```bash
+  docker image inspect --format "{{.Created}}  {{.Config.User}}  {{.Config.WorkingDir}}  {{.RepoTags}}" $(docker image ls -q | sort -u) | grep -F "  nextjs  /app  "
+  ```
+  `USER nextjs` و`WORKDIR /app` بصمة صورة المشروع **ترشّح ولا تثبت**: مثال Next.js الرسمي
+  يستخدمهما. وبلا أي صورة يفشل `inspect` برسالة خطأ ولا يمسّ شيئاً.
+
+  **٤. سجلّ البناءات** — على بنّاء اجتاز الخطوة ١ وحده، باسمه كما ظهر هناك:
+  ```
+  docker buildx history ls --builder desktop-linux
+  ```
+  عمود NAME اسم المشروع أو المجلد، فليس دليلاً أيضاً (بناءٌ يدوي من مجلد Enginora ظهر باسم
+  المجلد في التجربة). لا تستعمل `history inspect`: قد يطبع build args. **إن لم يكن `history`
+  متاحاً** (`unknown command`، أو طلب تفعيل ميزة تجريبية) فسجّل «غير متاح» وانتقل؛ لا تثبّت
+  ولا تحدّث buildx ولا تفعّل أي ميزة ولا تغيّر إعداد Docker لأجله.
+
+  **٥. حجم ذاكرة البناء:**
+  ```
+  docker system df
+  ```
+  مجاميع فقط، بلا أسماء ولا محتوى. لا تستعمل `docker buildx du --verbose`: يعرض أوصاف
+  خطوات `RUN`، وقد تحمل أسراراً لمشاريع أخرى.
+
+  **٦. متى وصل `0a0b15b` إلى نسخة المستودع** (داخل مجلدها):
+  ```
+  git reflog --date=iso -n 15
+  ```
+
+  **قراءة النتيجة:**
+  - بناءٌ للمشروع — صورة أو سطر في السجلّ — أقدم من وصول `0a0b15b` إلى نسخة المستودع التي
+    بنته، وكان فيها `.env.production` أو `restored/`: افترض أن ذاكرة البناء تحمل نسخة منهما.
+  - **الغياب لا يثبت أن بناءً قديماً لم يحدث.** (أ) مع containerd image store — الافتراضي في
+    Docker Desktop الحديث — إعادة البناء بالوسم نفسه **تُزيل الصورة القديمة كلياً**، فلا تبقى
+    `<none>` حتى مع `--all`، والقائمة لا تُظهر إلا آخر بناء، بينما قد تبقى طبقات البناء القديم
+    في الذاكرة (جُرِّب). فصورة تاريخها بعد الإصلاح لا تنفي بناءً قبله. (ب) سجلّ البناءات محدود
+    العدد والمدة. (ج) حذف صورة لا يحذف ذاكرة بنائها.
+  - لا تنظّفها بـ`prune` عام: `docker builder prune -a` يمسح ذاكرة كل مشروع على الجهاز،
+    والتنظيف قرار المالك بخطة تسمّي ما يُزال. ملفا compose التطوير والمعاينة لا يبنيان صورة
+    (لا `build:` فيهما)، فلا يُنشئان هذه الذاكرة.
 
 **قاعدة البيانات غير معرَّضة للإنترنت** (منشورة على `127.0.0.1:5432` وحده — B5 — لأدوات المضيف)، والتطبيق مربوط
 بـ`127.0.0.1:3000` — يصل إليه الوسيط العكسي وحده. ولا TLS في هذه الحزمة: ضع
