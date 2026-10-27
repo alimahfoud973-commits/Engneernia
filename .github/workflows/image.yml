@@ -1,0 +1,61 @@
+name: Image
+
+# B8: the production image, built from the real Dockerfile and RUN, on the
+# CPU it will serve from. The server is Oracle Ampere A1, so arm64 runs on a
+# native ARM runner, not under emulation: an emulated build proves the
+# Dockerfile parses, not that the native addons have a binary for the CPU.
+# amd64 runs beside it, so a change that breaks either is caught here.
+#
+# scripts/image-smoke.sh is the test: migrations from the image, the app on a
+# throwaway PostgreSQL, health, pages, failure handling, and no secret in any
+# output. Nothing is pushed anywhere; the image lives and dies on the runner.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    name: Build and smoke-test the image (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The check docs/DEPLOYMENT.md §4-a asks for before a server's first
+      # build, run against what the builder really receives (B7-n1).
+      - name: Build context holds no env file, key or backup
+        run: |
+          set -eu
+          printf 'FROM scratch\nCOPY . /\n' | docker build -q -f - --output type=local,dest="$RUNNER_TEMP/ctx-check" . >/dev/null
+          found="$(find "$RUNNER_TEMP/ctx-check" \( -name '.env*' -o -name '*.pem' -o -name '*.key' -o -name '.pgpass' -o -path '*/restored/*' -o -path '*/backups/*' \) | wc -l)"
+          echo "sensitive paths in the build context: $found"
+          rm -rf "$RUNNER_TEMP/ctx-check"
+          test "$found" -eq 0
+
+      - name: Build the image
+        run: docker build --progress=plain -t enginora-app:ci .
+
+      - name: Smoke-test the image
+        run: bash scripts/image-smoke.sh enginora-app:ci ${{ matrix.arch }}
+
+      - name: Image size
+        if: always()
+        run: docker image ls enginora-app:ci --format '{{.Repository}}:{{.Tag}} {{.Size}}' || true
