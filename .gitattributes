@@ -1,0 +1,5 @@
+# clamd reads these inside a Linux container, and its option parser strips
+# spaces, tabs and LF from each value but not CR: on a Windows checkout
+# (core.autocrlf=true) `TCPSocket 3310<CR>` fails its format check and clamd
+# does not start (ClamAV 1.5.0, common/optparser.c). LF on every system.
+deploy/clamav/*.conf text eol=lf
