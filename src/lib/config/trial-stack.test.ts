@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 /**
@@ -48,7 +50,12 @@ const FILES = {
   prodClamd: read('deploy/clamav/clamd.conf'),
   prod: read('docker-compose.prod.yml'),
   docs: read('docs/TRIAL-PREVIEW.md'),
+  attributes: read('.gitattributes'),
 };
+
+/** The one line-ending rule the repository carries, and what it is for. */
+const LF_RULE = 'deploy/clamav/*.conf text eol=lf';
+const LF_FILES = ['deploy/clamav/clamd.conf', 'deploy/clamav/clamd.trial.conf'];
 type Files = typeof FILES;
 
 const asCrlf = (files: Files): Files =>
@@ -305,6 +312,11 @@ function violations(input: Files): string[] {
       fail(`network-name:${name}`);
     }
   }
+
+  // --- Line endings: clamd rejects a value ending in CR ---------------------
+  // Exactly one rule, so it cannot widen to files nobody meant to convert.
+  const rules = files.attributes.split('\n').map((line) => line.trim()).filter((l) => l && !l.startsWith('#'));
+  if (JSON.stringify(rules) !== JSON.stringify([LF_RULE])) fail('gitattributes-rule');
 
   // --- The production file the overlay leans on ------------------------------
   const prod = code(files.prod);
@@ -712,6 +724,35 @@ describe('each guard fails when its defect is re-introduced', () => {
       to: 'minioadmin',
       rule: 'no-default-credentials',
     },
+    // line endings
+    {
+      defect: 'the LF rule removed',
+      file: 'attributes',
+      from: `${LF_RULE}\n`,
+      to: '',
+      rule: 'gitattributes-rule',
+    },
+    {
+      defect: 'the LF rule without eol (CRLF again on Windows)',
+      file: 'attributes',
+      from: LF_RULE,
+      to: 'deploy/clamav/*.conf text',
+      rule: 'gitattributes-rule',
+    },
+    {
+      defect: 'the LF rule widened to every .conf file',
+      file: 'attributes',
+      from: LF_RULE,
+      to: '*.conf text eol=lf',
+      rule: 'gitattributes-rule',
+    },
+    {
+      defect: 'a second, repository-wide rule',
+      file: 'attributes',
+      from: `${LF_RULE}\n`,
+      to: `${LF_RULE}\n* text=auto eol=lf\n`,
+      rule: 'gitattributes-rule',
+    },
     // production
     {
       defect: 'production told `none`',
@@ -785,5 +826,254 @@ describe('each guard fails when its defect is re-introduced', () => {
     expect(mutated, 'the mutation did not apply').not.toBe(FILES[file]);
     expect(violations({ ...FILES, [file]: mutated })).toContain(rule);
     expect(violations(asCrlf({ ...FILES, [file]: mutated }))).toContain(rule);
+  });
+});
+
+/**
+ * WHAT THE TEXT READER CANNOT SEE: BYTES, ATTRIBUTES, AND COMPOSE ITSELF.
+ *
+ * The rules above read normalised text. Three facts live below that:
+ *
+ *   - the bytes clamd reads. Its option parser strips spaces, tabs and LF from
+ *     each value but not CR, so `TCPSocket 3310<CR>` fails its format check
+ *     and clamd does not start (ClamAV 1.5.0, common/optparser.c);
+ *   - what Git actually applies `.gitattributes` to, which `git check-attr`
+ *     answers for every tracked file;
+ *   - how Compose merges the two files. `!reset`, `!override`, list appending
+ *     and project-name precedence are Compose's semantics, not this test's, so
+ *     they are asked of `docker compose config` — parsing only: no daemon
+ *     call, no image, no container. It runs in CI (`CI=true`, required there)
+ *     or with TRIAL_COMPOSE_CHECK=1, never by surprise on a laptop.
+ */
+const strict = process.env.CI === 'true';
+
+describe('clamd reads its configs with LF line endings', () => {
+  const crIn = (bytes: string) => bytes.includes('\r');
+
+  // The trial's file only. clamd.conf gets the same attribute (checked below),
+  // but a checkout made before .gitattributes keeps its CRLF copy until Git
+  // next writes that file, and nothing on the laptop mounts it.
+  const TRIAL_CONF = 'deploy/clamav/clamd.trial.conf';
+
+  it(`${TRIAL_CONF} holds no CR in the checkout`, () => {
+    expect(crIn(readFileSync(join(root, TRIAL_CONF), 'latin1')), `${TRIAL_CONF} has CR bytes`).toBe(false);
+  });
+
+  it('the check sees a CRLF copy (as Git for Windows wrote it before .gitattributes)', () => {
+    const raw = readFileSync(join(root, TRIAL_CONF), 'latin1');
+    expect(crIn(raw.replace(/\n/g, '\r\n'))).toBe(true);
+  });
+});
+
+const inGit = spawnSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: root, encoding: 'utf8' })
+  .stdout?.trim() === 'true';
+
+describe.runIf(inGit || strict)('.gitattributes applies eol=lf to the clamd configs and nothing else', () => {
+  it('git check-attr over every tracked file', () => {
+    const tracked = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' });
+    const report = execFileSync('git', ['check-attr', '--stdin', '-z', 'eol', 'text'], {
+      cwd: root,
+      input: tracked,
+      encoding: 'utf8',
+    }).split('\0');
+    const set = new Map<string, string[]>();
+    for (let i = 0; i + 2 < report.length; i += 3) {
+      const [path, attr, value] = [report[i] ?? '', report[i + 1] ?? '', report[i + 2] ?? ''];
+      if (value !== 'unspecified') set.set(path, [...(set.get(path) ?? []), `${attr}=${value}`]);
+    }
+    expect(Object.fromEntries(set)).toEqual(
+      Object.fromEntries(LF_FILES.map((path) => [path, ['eol=lf', 'text=set']])),
+    );
+  });
+});
+
+// --- Compose itself ------------------------------------------------------------
+
+const composeEnabled = strict || process.env.TRIAL_COMPOSE_CHECK === '1';
+const composeVersion = (() => {
+  if (!composeEnabled) return null;
+  const probe = spawnSync('docker', ['compose', 'version', '--short'], { encoding: 'utf8' });
+  return probe.status === 0 ? probe.stdout.trim() : null;
+})();
+
+/**
+ * Values an owner might leave in the env file by mistake. Each must lose to the
+ * overlay. Passwords are the words the secret scanner treats as placeholders.
+ */
+const HOSTILE_ENV = [
+  'APP_URL=https://enginora.com',
+  'POSTGRES_SUPERUSER_PASSWORD=test',
+  'DATABASE_URL=postgresql://app_user:test@postgres:5432/engineering_marketplace',
+  'DATABASE_MIGRATION_URL=postgresql://migrator:test@postgres:5432/engineering_marketplace',
+  'SESSION_SECRET=test',
+  'CONFIG_ENCRYPTION_KEY=test',
+  'STORAGE_ENDPOINT=https://account.r2.cloudflarestorage.com',
+  'STORAGE_REGION=auto',
+  'STORAGE_ACCESS_KEY_ID=test',
+  'STORAGE_SECRET_ACCESS_KEY=test',
+  'MAIL_TRANSPORT_URL=smtps://user:pass@smtp.example.test:465',
+  'MAIL_FROM=owner@example.test',
+  'SEO_INDEXABLE=true',
+].join('\n');
+
+type Port = { host_ip?: string; published?: string; target?: number };
+type Service = {
+  restart?: string;
+  ports?: Port[];
+  environment?: Record<string, string>;
+  volumes?: { source?: string; target?: string }[];
+  profiles?: string[];
+};
+type Config = {
+  name: string;
+  services: Record<string, Service>;
+  volumes: Record<string, { name: string }>;
+  networks: Record<string, { name: string }>;
+};
+
+describe.runIf(composeEnabled)(`docker compose ${composeVersion ?? '(missing)'} merges the trial as designed`, () => {
+  // Created only when the suite runs: vitest evaluates a skipped describe's body too.
+  let dir = '';
+  let envFile = '';
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), 'trial-stack-'));
+    envFile = join(dir, 'trial.env');
+    writeFileSync(envFile, `${HOSTILE_ENV}\n`);
+  });
+  afterAll(() => {
+    if (dir) rmSync(dir, { recursive: true, force: true });
+  });
+
+  /**
+   * The process environment WINS over --env-file in Compose interpolation, so
+   * every name these files interpolate, and every COMPOSE_* setting, is
+   * removed first: what is merged is the hostile file above, and nothing a
+   * CI runner or a developer shell happens to carry.
+   */
+  const baseEnv = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) =>
+      !/^(COMPOSE_|APP_URL$|DATABASE_|POSTGRES_|SESSION_|CONFIG_|STORAGE_|MAIL_|SEO_|LOG_LEVEL$|PLATFORM_|CLAMAV_|MALWARE_)/.test(key)),
+  );
+
+  function config(overlay: string, opts: { project?: string; env?: Record<string, string> } = {}): Config {
+    const args = [
+      'compose',
+      ...(opts.project ? ['-p', opts.project] : []),
+      '-f', join(root, 'docker-compose.prod.yml'),
+      '-f', overlay,
+      '--env-file', envFile,
+      '--profile', 'tools',
+      'config', '--format', 'json',
+    ];
+    const out = execFileSync('docker', args, {
+      cwd: root,
+      // A filtered copy of the environment; Next's typing requires NODE_ENV on ProcessEnv.
+      env: { ...baseEnv, ...opts.env } as NodeJS.ProcessEnv,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    return JSON.parse(out) as Config;
+  }
+
+  const overlay = join(root, 'docker-compose.trial.yml');
+  const mutated = (from: string, to: string) => {
+    const text = readFileSync(overlay, 'utf8');
+    expect(text.includes(from), `mutation source not found: ${from}`).toBe(true);
+    const path = join(dir, `mutated-${Math.random().toString(36).slice(2)}.yml`);
+    writeFileSync(path, text.replace(from, to));
+    return path;
+  };
+  const published = (cfg: Config) =>
+    Object.entries(cfg.services).flatMap(([name, s]) =>
+      (s.ports ?? []).map((p) => `${name} ${p.host_ip ?? ''}:${p.published ?? ''}->${p.target ?? ''}`)).sort();
+
+  it('Compose is available', () => {
+    expect(composeVersion, 'docker compose is required where this check is enabled').not.toBeNull();
+  });
+
+  it('one project, one port, nothing restarts, trial-named data', () => {
+    const cfg = config(overlay, { project: 'enginora-trial' });
+    expect(cfg.name).toBe('enginora-trial');
+    expect(published(cfg)).toEqual(['app 127.0.0.1:3100->3000']);
+    expect(Object.keys(cfg.services).sort()).toEqual(
+      ['app', 'clamav', 'postgres', 'storage', 'storage-init', 'tools'],
+    );
+    for (const [name, service] of Object.entries(cfg.services)) {
+      expect(service.restart, `${name} restart`).toBe('no');
+    }
+    expect(Object.values(cfg.volumes).map((v) => v.name).sort()).toEqual(
+      ['enginora-trial_clamav_db', 'enginora-trial_postgres_data', 'enginora-trial_storage_data'],
+    );
+    expect(Object.values(cfg.networks).map((n) => n.name).sort()).toEqual(
+      ['enginora-trial_default', 'enginora-trial_scanner'],
+    );
+    expect(cfg.services.tools?.profiles).toEqual(['tools']);
+    expect(cfg.services.clamav?.volumes?.map((v) => `${(v.source ?? '').split(/[\\/]/).pop()}:${v.target}`))
+      // The source is the volume KEY; its pinned name is asserted above.
+      .toEqual(['clamav_db:/var/lib/clamav', 'clamd.trial.conf:/etc/clamav/clamd.conf']);
+  });
+
+  it('the overlay beats every hostile value in the env file', () => {
+    const app = config(overlay, { project: 'enginora-trial' }).services.app?.environment ?? {};
+    expect({
+      APP_URL: app.APP_URL,
+      STORAGE_ENDPOINT: app.STORAGE_ENDPOINT,
+      STORAGE_REGION: app.STORAGE_REGION,
+      MAIL_TRANSPORT_URL: app.MAIL_TRANSPORT_URL,
+      MAIL_FROM: app.MAIL_FROM,
+      SEO_INDEXABLE: app.SEO_INDEXABLE,
+      MALWARE_SCANNER: app.MALWARE_SCANNER,
+      CLAMAV_HOST: app.CLAMAV_HOST,
+      NODE_ENV: app.NODE_ENV,
+    }).toEqual({
+      APP_URL: 'http://127.0.0.1:3100',
+      STORAGE_ENDPOINT: 'http://storage:9000',
+      STORAGE_REGION: 'us-east-1',
+      MAIL_TRANSPORT_URL: 'smtp://mail.invalid:25',
+      MAIL_FROM: 'noreply@enginora.invalid',
+      SEO_INDEXABLE: 'false',
+      MALWARE_SCANNER: 'clamav',
+      CLAMAV_HOST: 'clamav',
+      NODE_ENV: 'production',
+    });
+  });
+
+  it('`-p enginora-trial` wins over COMPOSE_PROJECT_NAME=enginora-live', () => {
+    const cfg = config(overlay, { project: 'enginora-trial', env: { COMPOSE_PROJECT_NAME: 'enginora-live' } });
+    expect(cfg.name).toBe('enginora-trial');
+  });
+
+  it('without -p, COMPOSE_PROJECT_NAME beats `name:` — and the pinned names still hold the data', () => {
+    // Why the runbook passes -p on every command and its preflight refuses a
+    // shell with COMPOSE_PROJECT_NAME set: `name:` alone does not decide.
+    const cfg = config(overlay, { env: { COMPOSE_PROJECT_NAME: 'enginora-live' } });
+    expect(cfg.name).toBe('enginora-live');
+    expect(Object.values(cfg.volumes).every((v) => v.name.startsWith('enginora-trial_'))).toBe(true);
+    expect(Object.values(cfg.networks).every((n) => n.name.startsWith('enginora-trial_'))).toBe(true);
+  });
+
+  it('a plain `ports: []` keeps production’s 127.0.0.1:5432 (what `!reset` is for)', () => {
+    const cfg = config(mutated('    ports: !reset []\n', '    ports: []\n'), { project: 'enginora-trial' });
+    expect(published(cfg)).toContain('postgres 127.0.0.1:5432->5432');
+  });
+
+  it('a plain app list is appended to production’s 3000 (what `!override` is for)', () => {
+    const cfg = config(
+      mutated("    ports: !override\n      - '127.0.0.1:3100:3000'\n", "    ports:\n      - '127.0.0.1:3100:3000'\n"),
+      { project: 'enginora-trial' },
+    );
+    expect(published(cfg)).toEqual(['app 127.0.0.1:3000->3000', 'app 127.0.0.1:3100->3000']);
+  });
+
+  it('dropping restart on the app inherits production’s unless-stopped', () => {
+    const cfg = config(mutated("  app:\n    restart: 'no'\n", '  app:\n'), { project: 'enginora-trial' });
+    expect(cfg.services.app?.restart).toBe('unless-stopped');
+  });
+
+  it('an unpinned volume follows the project name', () => {
+    const cfg = config(mutated('    name: enginora-trial_postgres_data\n', ''), {
+      env: { COMPOSE_PROJECT_NAME: 'enginora-live' },
+    });
+    expect(cfg.volumes.postgres_data?.name).toBe('enginora-live_postgres_data');
   });
 });

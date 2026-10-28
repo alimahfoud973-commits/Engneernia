@@ -6,10 +6,11 @@
 
 | البند | الحالة |
 |---|---|
-| الملفات (`docker-compose.trial.yml`، `deploy/clamav/clamd.trial.conf`، هذا الملف) | مكتوبة في P1 ويحرسها `src/lib/config/trial-stack.test.ts` |
-| دمج Compose (اسم المشروع، المنافذ، `restart`، أسماء وحدات التخزين والشبكات) | **مُثبت في بيئة عزل بـCompose 5.6.0 وحدها.** على الحاسوب (Compose 5.5.1) **لم يُثبت**، ويُثبته `Assert-TrialSafe` في P2 قبل أي تشغيل |
+| الملفات: `docker-compose.trial.yml`، `deploy/clamav/clamd.trial.conf`، `.gitattributes`، هذا الملف | مكتوبة في P1 ويحرسها `src/lib/config/trial-stack.test.ts` (§١٠) |
+| دمج Compose: اسم المشروع، والمنفذ الوحيد، و`restart`، وأسماء وحدات التخزين والشبكات، وغلبة الطبقة على ملف البيئة | **مُختبر بـ`docker compose config` نفسه** في CI (على كل PR) وفي بيئة العزل بـCompose 5.6.0. **على الحاسوب (Compose 5.5.1) لم يُختبر**؛ يختبره `Assert-TrialSafe` في P2 قبل أي تشغيل |
+| نهايات الأسطر في إعدادَي clamd | **مُصلحة**: `.gitattributes` يُخرجهما LF على كل نظام. مُختبر بنسخة Git على Linux بـ`core.autocrlf=true`، لا بـGit for Windows نفسه؛ و`Assert-TrialSafe` يرفض نسخة فيها CR |
+| رفض clamd لقيمة تنتهي بـCR | **استنتاج** من مصدر ClamAV 1.5.0 (`common/optparser.c`) وتجربة أنماطه على regex في glibc؛ clamd نفسه لم يُشغَّل |
 | قواعد توقيع ClamAV في الصورة | **غير مؤكَّدة**. تُفحص في P2 |
-| نهايات الأسطر في `clamd.trial.conf` على الحاسوب | **عائق مفتوح**: Git for Windows يُخرج الملفات بـCRLF، وclamd يرفض CR في القيم (قراءة مصدر ClamAV 1.5.0، لا تشغيل). `Assert-TrialSafe` يرفض المتابعة عليه؛ الإصلاح المقترح (`.gitattributes`) ينتظر موافقة المالك |
 | ذاكرة clamd الفعلية | **غير مقيسة**. `mem_limit: 2g` مؤقت حتى قياس P3 |
 | دورة الشراء والنسخ والاستعادة | **لم تُنفَّذ** |
 
@@ -38,7 +39,9 @@
 
 1. **`-p enginora-trial` في كل أمر**، عبر الدالة `trial` وحدها (§٣). يتغلّب على
    `COMPOSE_PROJECT_NAME` وعلى `name:`.
-2. **`name: enginora-trial`** في الطبقة.
+2. **`name: enginora-trial`** في الطبقة. وحده **لا يكفي**: `COMPOSE_PROJECT_NAME`
+   في الصدفة يتغلّب عليه (مُختبر)، وكذلك في ملف `.env` المشروع بحسب وثائق Compose (لم يُختبر
+   هنا). ولذلك يرفض `Assert-TrialSafe` صدفةً ضُبط فيها، ووجودَ `.env` في المجلد.
 3. **أسماء وحدات التخزين والشبكات مثبّتة** على `enginora-trial_*`: حتى تحت اسم مشروع
    خاطئ لا تُربط بيانات مشروع آخر. (الحاويات تبقى معرّضة، ولذلك الخط الأول.)
 
@@ -418,7 +421,35 @@ docker stop enginora-trial-restore-pg
 - **رفع ملفات كبيرة**: ذاكرة الحاسوب لا تتّسع لها.
 - **عمر قواعد ClamAV**: لا يفحصه الكود؛ قاعدة قديمة تُجيب `OK` على ما لا تعرفه.
 
-## ٩. المراجع
+## ٩. P1: ما سُلِّم وكيف تحقّق منه
+
+P1 ملفات واختبارات فقط، بلا تشغيل على الحاسوب:
+
+- `docker-compose.trial.yml` و`deploy/clamav/clamd.trial.conf` و`.gitattributes` وهذا الدليل.
+- `src/lib/config/trial-stack.test.ts` بثلاث طبقات (§١٠).
+- `npm run verify` ونجاح CI على آخر commit، بما فيه بناء الصورة وفحصها على amd64 وarm64
+  (`.github/workflows/image.yml`، وهو لا يشغّل هذه الطبقة).
+
+حدود P1: لم يُشغَّل clamd ولا أي حاوية من هذه الطبقة، ولم يُختبر Compose 5.5.1 ولا Git for
+Windows ولا PowerShell 5.1؛ أوامر §٣ إلى §٧ مكتوبة لم تُنفَّذ، وتُنفَّذ مرحلةً مرحلة بموافقة.
+
+## ١٠. ما يحرسه `trial-stack.test.ts`
+
+1. **نصّ الملفات** (يعمل دائماً): كل قاعدة في رأس الملف، مع حالة تعيد كل عيب في نسخة
+   بالذاكرة وتشترط فشل قاعدته، وبنهايات LF وCRLF معاً.
+2. **البايتات وGit**: `clamd.trial.conf` بلا CR في النسخة الفعلية، و`git check-attr` على كل
+   ملف مسجَّل يُظهر `eol=lf` لإعدادَي clamd وحدهما. (`clamd.conf` في نسخة الحاسوب الحالية
+   يبقى CRLF إلى أن يكتبه Git من جديد، لأن التحديث لا يمسّه؛ لا شيء في التجربة يربطه.)
+3. **Compose نفسه**: `docker compose config --format json` على الطبقة بملف بيئة «عدائي»
+   (R2، وSMTP، و`SEO_INDEXABLE=true`)، في مجلد مؤقت يُحذف بعده؛ تحليل فقط، بلا حاوية.
+   ومعه حالات تُثبت لماذا كل وسم لازم: `ports: []` يُبقي 5432، والقائمة بلا `!override`
+   تُلحَق بـ3000، وغياب `restart` يرث `unless-stopped`، ووحدة غير مثبّتة تتبع اسم المشروع.
+   **إلزامي في CI** (`CI=true`)، ويعمل محلياً بـ`TRIAL_COMPOSE_CHECK=1`، ولا يعمل على
+   الحاسوب من تلقاء نفسه. إصدار Compose في CI هو ما يحمله مشغّل GitHub ولا يُسجَّل
+   في السجل؛ يظهر في اسم المجموعة عند الفشل. وأيّ إصدار يدمج بغير ما صُمِّم (منفذ زائد،
+   أو `restart` موروث) يُسقط الاختبار، أيّاً كان رقمه.
+
+## ١١. المراجع
 
 - `docker-compose.trial.yml` (ترويسته تشرح كل فرق عن الإنتاج)
 - `src/lib/config/trial-stack.test.ts`
