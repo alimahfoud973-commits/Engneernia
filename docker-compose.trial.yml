@@ -1,0 +1,173 @@
+# =============================================================================
+# LAPTOP TRIAL — an overlay on docker-compose.prod.yml, never used alone
+# =============================================================================
+# Every command goes through ONE shape, with the project named on the command
+# line (docs/TRIAL-PREVIEW.md defines it as the PowerShell function `trial`):
+#
+#   docker compose -p enginora-trial -f docker-compose.prod.yml \
+#     -f docker-compose.trial.yml --env-file .env.trial.local <command>
+#
+# WHY `-p` AND `name:` BOTH. The owner's checkout lives in a folder named
+# `Enginora-live`, so the folder-derived project is `enginora-live` — the
+# DEVELOPMENT project, whose `postgres_data` volume is the development
+# database. The production file has no `name:`, so the production file alone,
+# or this overlay forgotten, lands on that volume. `name:` below is overridden
+# by COMPOSE_PROJECT_NAME (environment or a project .env) and by `-p`; `-p`
+# overrides both. So `-p enginora-trial` is the only setting that cannot be
+# displaced, and the volume and network names are pinned as a second line of
+# defence: even under a wrong project name, the DATA is never another
+# project's.
+#
+# What differs from production, and nothing else:
+#
+#   1. ONE PUBLISHED PORT: the app on 127.0.0.1:3100. Compose APPENDS `ports:`
+#      across files, so a plain list here would keep the production entries
+#      (127.0.0.1:5432 — already held by enginora-preview — and 3000) beside
+#      the new one. `!reset` and `!override` replace instead of append.
+#      PostgreSQL and RustFS publish nothing; host tools reach PostgreSQL with
+#      `docker exec`, and the seeds through the `tools` service below.
+#   2. NOTHING RESTARTS BY ITSELF: `restart: "no"` on every service, so a
+#      reboot or a Docker Desktop restart does not quietly bring the trial
+#      back.
+#   3. CLAMAV RUNS FOR REAL, with no update daemon. The app keeps
+#      MALWARE_SCANNER=clamav, CLAMAV_HOST and CLAMAV_PORT from the production
+#      file; nothing here may name them. clamd.trial.conf is clamd.conf plus
+#      `ConcurrentDatabaseReload no`, so the memory peak of holding two
+#      signature sets cannot happen on a 3.77 GiB Docker VM. If the image
+#      carries no signatures, clamd does not start, every scan is FAILED and
+#      nothing is published: the production failure mode, unchanged.
+#   4. LOCAL-ONLY VALUES ARE FIXED HERE, not read from .env.trial.local: the
+#      origin, RustFS as storage (never R2), a mail transport on a `.invalid`
+#      host (nothing sends mail since Stage 6), and SEO_INDEXABLE=false. A real
+#      R2 key or SMTP URL pasted into the env file is therefore never used.
+#      The production file still demands APP_URL and MAIL_* (`:?`) before it
+#      merges, so the env file carries them too; these values win.
+#   5. NO TUNNEL, NO CADDY. Nothing here reaches the internet from outside.
+#
+# .env.trial.local (git- and docker-ignored by `.env.*.local`) is generated on
+# the laptop with fresh random values; docs/TRIAL-PREVIEW.md §3 lists its keys.
+# It is never .env.local and never .env.preview.local.
+# Validate with `config --quiet`, or `config --format json` into a variable:
+# plain `config` prints every secret.
+#
+# NEVER RUN AGAINST THIS STACK: seed:demo, seed:scale, seed:demo-media.
+#
+# src/lib/config/trial-stack.test.ts fails on any departure from the above.
+# =============================================================================
+
+name: enginora-trial
+
+services:
+  postgres:
+    restart: 'no'
+    # Replaces production's 127.0.0.1:5432, which enginora-preview holds.
+    ports: !reset []
+
+  clamav:
+    restart: 'no'
+    # The whole list, so the production clamd.conf cannot stay mounted beside
+    # the trial one on the same target.
+    volumes: !override
+      - clamav_db:/var/lib/clamav
+      - ./deploy/clamav/clamd.trial.conf:/etc/clamav/clamd.conf:ro
+    environment:
+      # The image's update daemon stays off: the signature servers refuse
+      # Syrian connections, and an update is a second set held in memory.
+      CLAMAV_NO_FRESHCLAMD: 'true'
+    # Provisional, below the 3.77 GiB VM so clamd cannot starve PostgreSQL and
+    # the app. Unmeasured: docs/TRIAL-PREVIEW.md P2 measures clamd first and
+    # this number is revised from that, not from an estimate. Killed above it,
+    # clamd fails closed — the upload is refused.
+    mem_limit: 2g
+
+  app:
+    restart: 'no'
+    ports: !override
+      - '127.0.0.1:3100:3000'
+    depends_on: !override
+      postgres:
+        condition: service_healthy
+      clamav:
+        condition: service_healthy
+      storage-init:
+        condition: service_completed_successfully
+    environment:
+      APP_URL: 'http://127.0.0.1:3100'
+      STORAGE_ENDPOINT: 'http://storage:9000'
+      STORAGE_REGION: 'us-east-1'
+      MAIL_TRANSPORT_URL: 'smtp://mail.invalid:25'
+      MAIL_FROM: 'noreply@enginora.invalid'
+      SEO_INDEXABLE: 'false'
+
+  # S3-compatible private storage, reachable from the app over the default
+  # network and from nowhere else. Same server and version as the preview.
+  storage:
+    image: rustfs/rustfs:1.0.0
+    restart: 'no'
+    environment:
+      RUSTFS_ACCESS_KEY: ${STORAGE_ACCESS_KEY_ID:?set STORAGE_ACCESS_KEY_ID}
+      RUSTFS_SECRET_KEY: ${STORAGE_SECRET_ACCESS_KEY:?set STORAGE_SECRET_ACCESS_KEY}
+    volumes:
+      - storage_data:/data
+    healthcheck:
+      test: ['CMD', 'curl', '-fsS', 'http://127.0.0.1:9000/health']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # One-shot: create the two buckets and remove any bucket policy, so neither
+  # is public. Same steps as the preview.
+  storage-init:
+    image: amazon/aws-cli:2.37.4
+    restart: 'no'
+    depends_on:
+      storage:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY_ID:?set STORAGE_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${STORAGE_SECRET_ACCESS_KEY:?set STORAGE_SECRET_ACCESS_KEY}
+      AWS_DEFAULT_REGION: us-east-1
+      BUCKET_ORIGINALS: ${STORAGE_BUCKET_ORIGINALS:-em-originals}
+      BUCKET_DERIVATIVES: ${STORAGE_BUCKET_DERIVATIVES:-em-derivatives}
+    entrypoint: >
+      /bin/sh -ec "
+      for bucket in $$BUCKET_ORIGINALS $$BUCKET_DERIVATIVES; do
+        aws --endpoint-url http://storage:9000 s3api head-bucket --bucket $$bucket 2>/dev/null ||
+          aws --endpoint-url http://storage:9000 s3api create-bucket --bucket $$bucket;
+        aws --endpoint-url http://storage:9000 s3api delete-bucket-policy --bucket $$bucket;
+      done;
+      echo 'buckets ready and private';
+      "
+
+  # The host tools the runtime image does not carry (seed:catalog,
+  # seed:payment-methods, bootstrap:owner), from the Dockerfile's `build`
+  # stage, on the default network only, so PostgreSQL stays unpublished.
+  # Started only by `run --rm tools ...`. No volume: a bind mount of the
+  # checkout would hand the scripts the laptop's .env.local, which they load.
+  tools:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: build
+    profiles: ['tools']
+    restart: 'no'
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_MIGRATION_URL: ${DATABASE_MIGRATION_URL:?set DATABASE_MIGRATION_URL (migrator)}
+
+# Pinned, not derived from the project name (see the header).
+volumes:
+  postgres_data:
+    name: enginora-trial_postgres_data
+  clamav_db:
+    name: enginora-trial_clamav_db
+  storage_data:
+    name: enginora-trial_storage_data
+
+networks:
+  default:
+    name: enginora-trial_default
+  scanner:
+    name: enginora-trial_scanner
