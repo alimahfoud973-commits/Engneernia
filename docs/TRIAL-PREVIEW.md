@@ -79,18 +79,34 @@ function trial {
   docker compose -p enginora-trial -f docker-compose.prod.yml -f docker-compose.trial.yml --env-file .env.trial.local @args
 }
 
+# A snapshot that cannot be empty: a failed docker call stops here instead of
+# returning nothing, and bridge, host and none exist on every running engine.
 function Get-DockerNames {
   $c = @(docker ps -a --format '{{.Names}} {{.ID}} {{.State}}')
+  if ($LASTEXITCODE -ne 0) { throw 'STOP: docker ps failed; is Docker Desktop running?' }
   $v = @(docker volume ls --format '{{.Name}}')
+  if ($LASTEXITCODE -ne 0) { throw 'STOP: docker volume ls failed.' }
   $n = @(docker network ls --format '{{.Name}}')
+  if ($LASTEXITCODE -ne 0) { throw 'STOP: docker network ls failed.' }
+  foreach ($k in 'bridge','host','none') { if ($n -notcontains $k) { throw "STOP: network $k is missing; Docker answered incompletely." } }
   @($c + $v + $n) | Sort-Object -Unique
 }
 
+# A PowerShell error that stops one statement does not stop the function, so
+# each failure is checked by hand: without a snapshot, or if the comparison
+# itself fails, nothing has been compared and nothing may print OK.
 function Assert-OnlyTrialChanged($Before) {
-  $diff = Compare-Object $Before (Get-DockerNames) | Where-Object { $_.InputObject -notlike 'enginora-trial*' }
-  if ($diff) { $diff | Format-Table -AutoSize; throw 'STOP: changed outside enginora-trial.' }
+  if (@($Before | Where-Object { $_ }).Count -eq 0) { throw 'STOP: no snapshot; run $before = Get-DockerNames first.' }
+  $after = Get-DockerNames
+  $diff = Compare-Object $Before $after
+  if (-not $?) { throw 'STOP: the comparison failed; nothing was compared.' }
+  $diff = @($diff | Where-Object { $_.InputObject -notlike 'enginora-trial*' })
+  if ($diff.Count -ne 0) { $diff | Format-Table -AutoSize; throw 'STOP: changed outside enginora-trial.' }
   'OK: nothing changed outside enginora-trial.'
 }
+
+# A set as one comparable string, the same whatever order Compose lists it in.
+function Join-Sorted($Items) { (@($Items) | Sort-Object) -join ',' }
 
 function Assert-TrialSafe {
   if ($env:COMPOSE_PROJECT_NAME) { throw 'STOP: COMPOSE_PROJECT_NAME is set in this shell.' }
@@ -116,6 +132,13 @@ function Assert-TrialSafe {
   Remove-Variable json
 
   if ($cfg.name -ne 'enginora-trial') { throw "STOP: project is $($cfg.name)." }
+  # Exact sets, as CI holds Compose to: a loop over none passes, and so would an extra one.
+  $svc = Join-Sorted $cfg.services.PSObject.Properties.Name
+  if ($svc -ne (Join-Sorted 'app','clamav','postgres','storage','storage-init','tools')) { throw "STOP: services are $svc." }
+  $vols = Join-Sorted ($cfg.volumes.PSObject.Properties | ForEach-Object { $_.Value.name })
+  if ($vols -ne (Join-Sorted 'enginora-trial_clamav_db','enginora-trial_postgres_data','enginora-trial_storage_data')) { throw "STOP: volumes are $vols." }
+  $nets = Join-Sorted ($cfg.networks.PSObject.Properties | ForEach-Object { $_.Value.name })
+  if ($nets -ne (Join-Sorted 'enginora-trial_default','enginora-trial_scanner')) { throw "STOP: networks are $nets." }
   foreach ($s in $cfg.services.PSObject.Properties) {
     if ($s.Value.restart -ne 'no') { throw "STOP: $($s.Name) restart is $($s.Value.restart)." }
     $ports = @($s.Value.ports | Where-Object { $_ })
@@ -125,12 +148,6 @@ function Assert-TrialSafe {
       }
     } elseif ($ports.Count -ne 0) { throw "STOP: $($s.Name) publishes a port." }
   }
-  foreach ($v in $cfg.volumes.PSObject.Properties) {
-    if ($v.Value.name -notlike 'enginora-trial_*') { throw "STOP: volume $($v.Name) is $($v.Value.name)." }
-  }
-  foreach ($n in $cfg.networks.PSObject.Properties) {
-    if ($n.Value.name -notlike 'enginora-trial_*') { throw "STOP: network $($n.Name) is $($n.Value.name)." }
-  }
   $env_ = $cfg.services.app.environment
   if ($env_.MALWARE_SCANNER -ne 'clamav' -or $env_.SEO_INDEXABLE -ne 'false' -or $env_.STORAGE_ENDPOINT -ne 'http://storage:9000') {
     throw 'STOP: app environment is not the trial one.'
@@ -139,6 +156,17 @@ function Assert-TrialSafe {
   'OK: enginora-trial, one port 127.0.0.1:3100, restart no, trial volumes and networks.'
 }
 ```
+
+**لماذا تفحص الدوال كل فشل بنفسها** (2026-11-04، على الحاسوب): كان Docker Desktop
+متوقّفاً، فأعاد `Get-DockerNames` قائمة فارغة دون خطأ، وفشل `Compare-Object` على
+الصورة الفارغة، ثم طبع `Assert-OnlyTrialChanged` **`OK`**، لأن خطأ PowerShell الذي
+يوقف عبارة واحدة لا يوقف الدالة. الآن: كل أمر Docker يُفحص `$LASTEXITCODE` بعده، والصورة
+يجب أن تحمل الشبكات `bridge` و`host` و`none` الموجودة في كل محرك يعمل، والمقارنة ترفض
+صورة فارغة وتفحص `$?` بعد `Compare-Object`. و`Assert-TrialSafe` يقارن الخدمات ووحدات
+التخزين والشبكات **مجموعاتٍ كاملة**، وهي القوائم نفسها التي يُلزَم بها Compose في CI؛
+الحلقة القديمة كانت تنجح إن لم توجد وحدة تخزين واحدة. لا PowerShell في CI، فسلوك الدوال
+يُثبت على الحاسوب: مع Docker متوقّفاً يجب أن يتوقّف `Get-DockerNames` و
+`Assert-OnlyTrialChanged` كلاهما بـ`STOP`.
 
 **قبل كل مرحلة وبعدها:**
 
@@ -448,6 +476,11 @@ Windows ولا PowerShell 5.1؛ أوامر §٣ إلى §٧ مكتوبة لم ت
    الحاسوب من تلقاء نفسه. إصدار Compose في CI هو ما يحمله مشغّل GitHub ولا يُسجَّل
    في السجل؛ يظهر في اسم المجموعة عند الفشل. وأيّ إصدار يدمج بغير ما صُمِّم (منفذ زائد،
    أو `restart` موروث) يُسقط الاختبار، أيّاً كان رقمه.
+4. **دوال PowerShell في §٣** (نصّاً، لأن CI بلا PowerShell): كل أمر Docker في
+   `Get-DockerNames` يتبعه فحص `$LASTEXITCODE`، ومعه فحص `bridge` و`host` و`none`؛
+   و`Assert-OnlyTrialChanged` يرفض الصورة الفارغة قبل `Compare-Object` ويفحص `$?` بعده؛
+   و`Assert-TrialSafe` يقارن المجموعات الكاملة نفسها التي يفحصها البند ٣ في Compose.
+   كل حالة من هذه أُعيد عيبها فسقط حارسها.
 
 ## ١١. المراجع
 

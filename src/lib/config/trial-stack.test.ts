@@ -94,6 +94,19 @@ const APP_ENVIRONMENT: Readonly<Record<string, string>> = {
 /** The Docker VM on the owner's laptop is 3.77 GiB; clamd must leave room. */
 const CLAMAV_MEM_CEILING_BYTES = 3 * 1024 ** 3;
 
+/**
+ * What `config --format json` must hold, exactly. The Compose check below asks
+ * it of Compose in CI; the runbook's Assert-TrialSafe asks it again on the
+ * laptop, from these same lists, so neither can drift from the other.
+ */
+const TRIAL_SERVICES = ['app', 'clamav', 'postgres', 'storage', 'storage-init', 'tools'] as const;
+const TRIAL_VOLUMES = [
+  'enginora-trial_clamav_db',
+  'enginora-trial_postgres_data',
+  'enginora-trial_storage_data',
+] as const;
+const TRIAL_NETWORKS = ['enginora-trial_default', 'enginora-trial_scanner'] as const;
+
 const ENGINE_ID = '32848270-4c74-4c6b-a632-88f550343be9';
 const COMPOSE_LINE =
   'docker compose -p enginora-trial -f docker-compose.prod.yml -f docker-compose.trial.yml --env-file .env.trial.local';
@@ -182,6 +195,14 @@ function bytes(value: string): number {
 /** The fenced code blocks of a Markdown file. */
 const fenced = (markdown: string) =>
   [...lf(markdown).matchAll(/^```[a-z]*\n([\s\S]*?)^```$/gm)].map((match) => match[1] ?? '');
+
+/** A PowerShell function's body from the runbook, or '' when it is not there. */
+function psFunction(commands: string, name: string): string {
+  return new RegExp(`^function ${name}\\b[^\\n]*\\{\\n([\\s\\S]*?)^\\}`, 'm').exec(commands)?.[1] ?? '';
+}
+
+/** The argument Assert-TrialSafe compares a set against: `'a','b'`. */
+const psList = (items: readonly string[]) => items.map((item) => `'${item}'`).join(',');
 
 /** Every rule the files must satisfy. Empty means the trial is isolated. */
 function violations(input: Files): string[] {
@@ -343,6 +364,48 @@ function violations(input: Files): string[] {
   if (/seed:(demo|scale)|cloudflared|--profile tunnel|\.env\.local\b|\.env\.preview\.local/.test(commands)) {
     fail('docs-forbidden');
   }
+
+  // --- The runbook's own guards cannot pass by not looking ------------------
+  // On the laptop (2026-11-04), with Docker Desktop stopped, Get-DockerNames
+  // returned nothing, Compare-Object failed on the empty snapshot, and
+  // Assert-OnlyTrialChanged printed OK: a PowerShell error that stops a
+  // statement does not stop the function.
+  const snapshot = psFunction(commands, 'Get-DockerNames').split('\n');
+  const dockerLines = snapshot.flatMap((line, i) => (/= @\(docker (ps|volume ls|network ls)\b/.test(line) ? [i] : []));
+  if (
+    dockerLines.length !== 3
+    || dockerLines.some((i) => !/^\s*if \(\$LASTEXITCODE -ne 0\) \{ throw 'STOP: /.test(snapshot[i + 1] ?? ''))
+    || !snapshot.some((line) => line.includes("foreach ($k in 'bridge','host','none')") && line.includes('throw'))
+  ) {
+    fail('docs-snapshot-unchecked');
+  }
+  const compare = psFunction(commands, 'Assert-OnlyTrialChanged').split('\n');
+  const emptyCheck = compare.findIndex((line) =>
+    /^\s*if \(@\(\$Before \| Where-Object \{ \$_ \}\)\.Count -eq 0\) \{ throw 'STOP: /.test(line));
+  const compareAt = compare.findIndex((line) => /\bCompare-Object\b/.test(line));
+  if (
+    emptyCheck < 0
+    || compareAt < emptyCheck
+    || !/^\s*if \(-not \$\?\) \{ throw 'STOP: /.test(compare[compareAt + 1] ?? '')
+  ) {
+    fail('docs-compare-unchecked');
+  }
+  // Exact sets, the ones Compose itself is held to in CI: a loop over the
+  // volumes passes when there are none, and a prefix match passes an extra one.
+  const preflight = psFunction(commands, 'Assert-TrialSafe');
+  const sets: ReadonlyArray<readonly [string, readonly string[]]> = [
+    ['$svc', TRIAL_SERVICES],
+    ['$vols', TRIAL_VOLUMES],
+    ['$nets', TRIAL_NETWORKS],
+  ];
+  if (
+    !/^function Join-Sorted\b/m.test(commands)
+    || sets.some(([name, items]) => !preflight.includes(`if (${name} -ne (Join-Sorted ${psList(items)})) { throw`))
+    || /-notlike 'enginora-trial_\*'/.test(preflight)
+  ) {
+    fail('docs-preflight-exact-sets');
+  }
+
   for (const line of commands.split('\n')) {
     if (/\bconfig\b/.test(line) && /trial\s+(\S+\s+)*config\b/.test(line)
       && !/config --quiet|config --format json/.test(line)) {
@@ -811,6 +874,70 @@ describe('each guard fails when its defect is re-introduced', () => {
       to: COMPOSE_LINE.replace('.env.trial.local', '.env.preview.local'),
       rule: 'docs-forbidden',
     },
+    // the runbook's guards (2026-11-04: an OK printed with Docker stopped)
+    {
+      defect: 'a docker call in the snapshot left unchecked',
+      file: 'docs',
+      from: "  if ($LASTEXITCODE -ne 0) { throw 'STOP: docker volume ls failed.' }\n",
+      to: '',
+      rule: 'docs-snapshot-unchecked',
+    },
+    {
+      defect: 'the snapshot no longer requires the built-in networks',
+      file: 'docs',
+      from: /^ {2}foreach \(\$k in 'bridge','host','none'\).*\n/m,
+      to: '',
+      rule: 'docs-snapshot-unchecked',
+    },
+    {
+      defect: 'the snapshot as it was: no check at all',
+      file: 'docs',
+      from: /^ {2}if \(\$LASTEXITCODE -ne 0\) \{ throw 'STOP: docker (ps|volume ls|network ls).*\n/gm,
+      to: '',
+      rule: 'docs-snapshot-unchecked',
+    },
+    {
+      defect: 'the comparison accepts an empty snapshot',
+      file: 'docs',
+      from: /^ {2}if \(@\(\$Before \| Where-Object \{ \$_ \}\)\.Count -eq 0\).*\n/m,
+      to: '',
+      rule: 'docs-compare-unchecked',
+    },
+    {
+      defect: 'a failed Compare-Object goes on to print OK',
+      file: 'docs',
+      from: /^ {2}if \(-not \$\?\) \{ throw 'STOP: the comparison failed.*\n/m,
+      to: '',
+      rule: 'docs-compare-unchecked',
+    },
+    {
+      defect: 'the empty-snapshot check moved after the comparison',
+      file: 'docs',
+      from: /^( {2}if \(@\(\$Before \| Where-Object \{ \$_ \}\)\.Count -eq 0\).*\n)( {2}\$after = Get-DockerNames\n {2}\$diff = Compare-Object \$Before \$after\n {2}if \(-not \$\?\).*\n)/m,
+      to: '$2$1',
+      rule: 'docs-compare-unchecked',
+    },
+    {
+      defect: 'the preflight forgets the storage volume',
+      file: 'docs',
+      from: ",'enginora-trial_storage_data')) { throw",
+      to: ')) { throw',
+      rule: 'docs-preflight-exact-sets',
+    },
+    {
+      defect: 'the preflight no longer checks the networks',
+      file: 'docs',
+      from: /^ {2}if \(\$nets -ne .*\n/m,
+      to: '',
+      rule: 'docs-preflight-exact-sets',
+    },
+    {
+      defect: 'the preflight back to a prefix match',
+      file: 'docs',
+      from: /^ {2}if \(\$vols -ne .*\n/m,
+      to: "  foreach ($v in $cfg.volumes.PSObject.Properties) { if ($v.Value.name -notlike 'enginora-trial_*') { throw 'STOP' } }\n",
+      rule: 'docs-preflight-exact-sets',
+    },
     {
       defect: 'plain config, which prints every secret',
       file: 'docs',
@@ -995,18 +1122,12 @@ describe.runIf(composeEnabled)(`docker compose ${composeVersion ?? '(missing)'} 
     const cfg = config(overlay, { project: 'enginora-trial' });
     expect(cfg.name).toBe('enginora-trial');
     expect(published(cfg)).toEqual(['app 127.0.0.1:3100->3000']);
-    expect(Object.keys(cfg.services).sort()).toEqual(
-      ['app', 'clamav', 'postgres', 'storage', 'storage-init', 'tools'],
-    );
+    expect(Object.keys(cfg.services).sort()).toEqual([...TRIAL_SERVICES]);
     for (const [name, service] of Object.entries(cfg.services)) {
       expect(service.restart, `${name} restart`).toBe('no');
     }
-    expect(Object.values(cfg.volumes).map((v) => v.name).sort()).toEqual(
-      ['enginora-trial_clamav_db', 'enginora-trial_postgres_data', 'enginora-trial_storage_data'],
-    );
-    expect(Object.values(cfg.networks).map((n) => n.name).sort()).toEqual(
-      ['enginora-trial_default', 'enginora-trial_scanner'],
-    );
+    expect(Object.values(cfg.volumes).map((v) => v.name).sort()).toEqual([...TRIAL_VOLUMES]);
+    expect(Object.values(cfg.networks).map((n) => n.name).sort()).toEqual([...TRIAL_NETWORKS]);
     expect(cfg.services.tools?.profiles).toEqual(['tools']);
     expect(cfg.services.clamav?.volumes?.map((v) => `${(v.source ?? '').split(/[\\/]/).pop()}:${v.target}`))
       // The source is the volume KEY; its pinned name is asserted above.
