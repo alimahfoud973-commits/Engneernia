@@ -327,11 +327,22 @@ function violations(input: Files): string[] {
     }
   }
   const networks = section(files.compose, 'networks');
+  const networkLines = (name: string) => (networks.get(name) ?? []).map((line) => line.trim());
   for (const name of new Set([...section(files.prod, 'networks').keys(), 'default'])) {
-    const lines = networks.get(name) ?? [];
-    if (JSON.stringify(lines.map((line) => line.trim())) !== JSON.stringify([`name: enginora-trial_${name}`])) {
-      fail(`network-name:${name}`);
-    }
+    // The name is pinned; `internal` is the scanner rule's, below.
+    const pinned = networkLines(name).filter((line) => line !== 'internal: true');
+    if (JSON.stringify(pinned) !== JSON.stringify([`name: enginora-trial_${name}`])) fail(`network-name:${name}`);
+  }
+  // clamav is on scanner alone, so an internal scanner leaves it no way out:
+  // the image runs freshclam once at start when it finds no database, even
+  // with CLAMAV_NO_FRESHCLAMD=true, and that attempt cannot leave the host.
+  // default stays routable: app reaches postgres and storage, and publishes
+  // 127.0.0.1:3100, through it.
+  if (
+    JSON.stringify(networkLines('scanner')) !== JSON.stringify(['name: enginora-trial_scanner', 'internal: true'])
+    || networkLines('default').some((line) => /^internal\s*:/.test(line))
+  ) {
+    fail('scanner-internal');
   }
 
   // --- Line endings: clamd rejects a value ending in CR ---------------------
@@ -404,6 +415,9 @@ function violations(input: Files): string[] {
     || /-notlike 'enginora-trial_\*'/.test(preflight)
   ) {
     fail('docs-preflight-exact-sets');
+  }
+  if (!preflight.includes("if ($cfg.networks.scanner.internal -ne $true) { throw 'STOP: ")) {
+    fail('docs-preflight-scanner-internal');
   }
 
   // The P2 signature check, as it ran on the laptop (2026-11-06): the official
@@ -511,6 +525,34 @@ describe('each guard fails when its defect is re-introduced', () => {
       from: 'name: enginora-trial_default',
       to: 'name: enginora-preview_default',
       rule: 'network-name:default',
+    },
+    {
+      defect: 'the scanner network no longer internal',
+      file: 'compose',
+      from: '    internal: true\n',
+      to: '',
+      rule: 'scanner-internal',
+    },
+    {
+      defect: 'the scanner network set to internal: false',
+      file: 'compose',
+      from: '    internal: true\n',
+      to: '    internal: false\n',
+      rule: 'scanner-internal',
+    },
+    {
+      defect: 'internal moved to the default network, cutting app off postgres, storage and its port',
+      file: 'compose',
+      from: '    name: enginora-trial_default\n',
+      to: '    name: enginora-trial_default\n    internal: true\n',
+      rule: 'scanner-internal',
+    },
+    {
+      defect: 'the preflight no longer checks that scanner is internal',
+      file: 'docs',
+      from: /^ {2}if \(\$cfg\.networks\.scanner\.internal -ne \$true\).*\n/m,
+      to: '',
+      rule: 'docs-preflight-scanner-internal',
     },
     {
       defect: 'a volume production adds, not pinned here',
@@ -1128,13 +1170,14 @@ type Service = {
   ports?: Port[];
   environment?: Record<string, string>;
   volumes?: { source?: string; target?: string }[];
+  networks?: Record<string, unknown>;
   profiles?: string[];
 };
 type Config = {
   name: string;
   services: Record<string, Service>;
   volumes: Record<string, { name: string }>;
-  networks: Record<string, { name: string }>;
+  networks: Record<string, { name: string; internal?: boolean }>;
 };
 
 describe.runIf(composeEnabled)(`docker compose ${composeVersion ?? '(missing)'} merges the trial as designed`, () => {
@@ -1161,12 +1204,12 @@ describe.runIf(composeEnabled)(`docker compose ${composeVersion ?? '(missing)'} 
       !/^(COMPOSE_|APP_URL$|DATABASE_|POSTGRES_|SESSION_|CONFIG_|STORAGE_|MAIL_|SEO_|LOG_LEVEL$|PLATFORM_|CLAMAV_|MALWARE_)/.test(key)),
   );
 
-  function config(overlay: string, opts: { project?: string; env?: Record<string, string> } = {}): Config {
+  function config(overlay: string | null, opts: { project?: string; env?: Record<string, string> } = {}): Config {
     const args = [
       'compose',
       ...(opts.project ? ['-p', opts.project] : []),
       '-f', join(root, 'docker-compose.prod.yml'),
-      '-f', overlay,
+      ...(overlay ? ['-f', overlay] : []),
       '--env-file', envFile,
       '--profile', 'tools',
       'config', '--format', 'json',
@@ -1207,6 +1250,10 @@ describe.runIf(composeEnabled)(`docker compose ${composeVersion ?? '(missing)'} 
     }
     expect(Object.values(cfg.volumes).map((v) => v.name).sort()).toEqual([...TRIAL_VOLUMES]);
     expect(Object.values(cfg.networks).map((n) => n.name).sort()).toEqual([...TRIAL_NETWORKS]);
+    expect(cfg.networks.scanner?.internal, 'scanner is internal').toBe(true);
+    expect(cfg.networks.default?.internal ?? false, 'default stays routable').toBe(false);
+    expect(cfg.services.clamav?.networks && Object.keys(cfg.services.clamav.networks)).toEqual(['scanner']);
+    expect(cfg.services.app?.networks && Object.keys(cfg.services.app.networks).sort()).toEqual(['default', 'scanner']);
     expect(cfg.services.tools?.profiles).toEqual(['tools']);
     expect(cfg.services.clamav?.volumes?.map((v) => `${(v.source ?? '').split(/[\\/]/).pop()}:${v.target}`))
       // The source is the volume KEY; its pinned name is asserted above.
@@ -1268,6 +1315,16 @@ describe.runIf(composeEnabled)(`docker compose ${composeVersion ?? '(missing)'} 
   it('dropping restart on the app inherits production’s unless-stopped', () => {
     const cfg = config(mutated("  app:\n    restart: 'no'\n", '  app:\n'), { project: 'enginora-trial' });
     expect(cfg.services.app?.restart).toBe('unless-stopped');
+  });
+
+  it('without `internal: true` the merged scanner network is routable (what the line is for)', () => {
+    const cfg = config(mutated('    internal: true\n', ''), { project: 'enginora-trial' });
+    expect(cfg.networks.scanner?.internal ?? false).toBe(false);
+  });
+
+  it('production alone keeps scanner routable: its freshclam must reach the mirrors', () => {
+    const cfg = config(null, { project: 'enginora-prod-check' });
+    expect(cfg.networks.scanner?.internal ?? false).toBe(false);
   });
 
   it('an unpinned volume follows the project name', () => {

@@ -43,6 +43,8 @@
 #      The production file still demands APP_URL and MAIL_* (`:?`) before it
 #      merges, so the env file carries them too; these values win.
 #   5. NO TUNNEL, NO CADDY. Nothing here reaches the internet from outside.
+#   6. CLAMAV CANNOT REACH OUT: the scanner network is `internal: true`
+#      (production's is not, for freshclam). See the networks section.
 #
 # .env.trial.local (git- and docker-ignored by `.env.*.local`) is generated on
 # the laptop with fresh random values; docs/TRIAL-PREVIEW.md §3 lists its keys.
@@ -171,3 +173,10 @@ networks:
     name: enginora-trial_default
   scanner:
     name: enginora-trial_scanner
+    # No way out for clamav, which is on this network alone: freshclam stays
+    # off, and the image would still run it once at start if it found no
+    # database. On an internal network that attempt cannot leave the host.
+    # app reaches clamav:3310 here as before, and postgres, storage and its
+    # published port through default. Production keeps scanner routable: its
+    # freshclam must reach the mirrors.
+    internal: true

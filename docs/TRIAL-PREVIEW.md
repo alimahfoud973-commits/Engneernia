@@ -13,6 +13,7 @@
 | دوال PowerShell في §٣ | **مُختبرة على الحاسوب** (PowerShell `5.1.19041.6456`، P2): كل طريق فشل يتوقّف بـ`STOP` — صورة فارغة، وصورة مزيّفة، وDocker لا يجيب (`DOCKER_HOST` موجَّه مؤقتاً إلى أنبوب غير موجود ثم أُعيد)، وفرق حقيقي — و`OK` حين لا شيء تغيّر |
 | `.env.trial.local` | **أُنشئ على الحاسوب** (P2): 15 مفتاحاً، بلا BOM (`41 50 50`)، بنهايات CRLF من `Set-Content`. **Compose 5.5.1 يزيل CR من القيم** (مُختبر: `LOG_LEVEL` يساوي `info` حرفياً، ولا CR في أي قيمة لـ`app` ولا في رابط migrator). طريق `\getenv` في P4 لا يمرّ بـCompose، فيُزال CR هناك |
 | قواعد توقيع ClamAV في الصورة | **مؤكَّدة** (P2، 2026-11-06): الصورة `clamav/clamav-debian:1.5` بالبصمة `sha256:c21aa18cc0a358678255a3dfb343a4555b58f71b97d7b869df8fdf7ea0a5b4b1` (بُنيت 2026-11-02)؛ `main` 63 (بُنيت 16 Dec 2025) و`daily` 28172 (02 Nov 2026) و`bytecode` 339 (11 Sep 2025)، و`Verification OK.` لكل منها؛ و`clamdcheck.sh` في `/usr/local/bin`. **التواقيع بعمر الصورة** ولا تتجدد في التجربة |
+| شبكة `scanner` | **`internal: true` في طبقة التجربة وحدها** (P3-0): الإعداد المدموج مُختبر بـ`docker compose config` في CI، والإنتاج وحده يُبقيها غير داخلية. **الحجب الفعلي لم يُختبر بعد**: يُثبت في P3-6 على الحاسوب |
 | ذاكرة clamd الفعلية | **غير مقيسة**. `mem_limit: 2g` مؤقت حتى قياس P3 |
 | دورة الشراء والنسخ والاستعادة | **لم تُنفَّذ** |
 
@@ -141,6 +142,7 @@ function Assert-TrialSafe {
   if ($vols -ne (Join-Sorted 'enginora-trial_clamav_db','enginora-trial_postgres_data','enginora-trial_storage_data')) { throw "STOP: volumes are $vols." }
   $nets = Join-Sorted ($cfg.networks.PSObject.Properties | ForEach-Object { $_.Value.name })
   if ($nets -ne (Join-Sorted 'enginora-trial_default','enginora-trial_scanner')) { throw "STOP: networks are $nets." }
+  if ($cfg.networks.scanner.internal -ne $true) { throw 'STOP: the scanner network is not internal; clamav could reach out.' }
   foreach ($s in $cfg.services.PSObject.Properties) {
     if ($s.Value.restart -ne 'no') { throw "STOP: $($s.Name) restart is $($s.Value.restart)." }
     $ports = @($s.Value.ports | Where-Object { $_ })
@@ -271,9 +273,15 @@ Assert-OnlyTrialChanged $before
 **تحذير لـP3**: وثائق الصورة (`clamav/README-debian.md` في مستودع
 `Cisco-Talos/clamav-docker`) تقول: "Even when disabling the `freshclam` daemon,
 `freshclam` will always run at least once during container startup if there is no
-virus database." — أي حتى مع `CLAMAV_NO_FRESHCLAMD=true`. وشبكة `scanner`
-ليست `internal` (الإنتاج يحتاج freshclam). فإن وصلت الحاوية إلى P3 بلا قواعد في
-الوحدة، حاولت الاتصال بخوادم التوقيع. لذلك تُفحص الوحدة قبل تشغيل clamav في P3.
+virus database." — أي حتى مع `CLAMAV_NO_FRESHCLAMD=true`. **لذلك شبكة `scanner`
+في طبقة التجربة `internal: true` (P3-0)**، و`clamav` عليها وحدها: محاولةٌ كهذه لا تجد
+طريقاً إلى خارج المضيف، فإن غابت القواعد لا يُقلع clamd، ولا يبدأ التطبيق لأنه ينتظر
+`clamav` سليماً — فشل آمن. `app` يصل إلى `clamav:3310` عليها كما كان، وإلى `postgres`
+و`storage` ومنفذه المنشور عبر `default` غير الداخلية. وفي الإنتاج تبقى `scanner`
+**غير** داخلية لأن freshclam هناك يحتاج المرايا، ويحرس ذلك `trial-stack.test.ts`.
+**ما يُثبته CI**: الإعداد المدموج (`config`)، لا الحجب الفعلي. الحجب يُثبت في P3-6:
+`docker network inspect enginora-trial_scanner --format '{{.Internal}}'` يعطي `true`، ومن
+داخل clamav يفشل حلّ اسم خارجي. وتُفحص الوحدة أيضاً قبل الاعتماد عليها.
 
 **نتيجة P2 على الحاسوب (2026-11-04 إلى 06)**: كل ما في §٣ و§٤ وهذا القسم نجح —
 `Assert-TrialSafe` أعطى `OK`، والدوال توقّفت في كل طريق فشل، والقواعد الثلاث
@@ -524,6 +532,9 @@ Windows ولا PowerShell 5.1؛ أوامر §٣ إلى §٧ مكتوبة لم ت
    و`--security-opt no-new-privileges` و`--user clamav`، بلا وحدة تخزين ولا ربط ولا
    صلاحية مضافة، ولا علامة تنصيص مزدوجة، ويطبع `RESULT: cannot read` و`databases found`
    و`clamdcheck` صراحةً.
+6. **شبكة `scanner` داخلية في التجربة وحدها**: نصّاً، `internal: true` على `scanner` لا
+   على `default`؛ وفي Compose نفسه، الدمج يحملها، وحذف السطر يعيدها قابلة للتوجيه، و
+   `docker-compose.prod.yml` وحده يُبقيها غير داخلية؛ و`Assert-TrialSafe` يفحصها على الحاسوب.
 
 ## ١١. المراجع
 
