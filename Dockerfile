@@ -31,7 +31,15 @@ WORKDIR /app
 # for this platform, so no toolchain is needed — but they are the reason the
 # image is Debian rather than Alpine: the prebuilds are glibc.
 COPY package.json package-lock.json ./
-RUN npm ci --no-audit --no-fund
+# npm's cache is a BuildKit cache mount, not a layer: an install the network cuts
+# short keeps every tarball it finished, and the next attempt starts from there.
+# The mount never reaches an image. The retry and timeout values are for a slow,
+# unstable link (the owner's laptop, 2026-11-06: ~20 KB/s, then ECONNRESET after
+# 35 minutes; `next` alone is 43.7 MB); on a good link they change nothing.
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --no-audit --no-fund --prefer-offline \
+      --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000 \
+      --fetch-timeout=3600000
 
 # -----------------------------------------------------------------------------
 FROM node:22-bookworm-slim AS build

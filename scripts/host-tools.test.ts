@@ -311,6 +311,34 @@ export function violations(input: Files): string[] {
   //    …and a decrypted backup is never one `git add -A` away from a commit.
   if (!f.gitignore.split('\n').includes('/restored/')) found.push('restored-not-gitignored');
 
+  // 8. `npm ci` survives a slow, unstable link (P3-3, 2026-11-06: ~20 KB/s on
+  //    the owner's laptop, ECONNRESET after 35 minutes, and `next` alone is
+  //    43.7 MB). Its cache is a BuildKit cache mount, so an interrupted install
+  //    keeps what it finished; the retries and the per-request timeout are
+  //    floors, because npm's defaults (2 retries, 5 minutes) cannot fetch a
+  //    43.7 MB tarball at that speed at all. The mount never reaches an image:
+  //    nothing may copy it.
+  const deps = f.dockerfile.split(/^FROM .* AS deps$/m)[1]?.split(/^FROM /m)[0] ?? '';
+  const installs = deps
+    .replace(/\s*\\\n\s*/g, ' ')
+    .split('\n')
+    .filter((line) => /^RUN\b.*\bnpm ci\b/.test(line));
+  const install = installs[0] ?? '';
+  if (installs.length !== 1 || !/^RUN --mount=type=cache,target=\/root\/\.npm npm ci /.test(install)) {
+    found.push('npm-ci-cache-mount');
+  }
+  const floor = (name: string, min: number) => Number(new RegExp(`--${name}=(\\d+)\\b`).exec(install)?.[1] ?? 0) >= min;
+  if (
+    !/ --no-audit\b/.test(install) || !/ --no-fund\b/.test(install) || !/ --prefer-offline\b/.test(install)
+    || !floor('fetch-retries', 5) || !floor('fetch-retry-mintimeout', 20_000)
+    || !floor('fetch-retry-maxtimeout', 120_000) || !floor('fetch-timeout', 3_600_000)
+  ) {
+    found.push('npm-ci-network-options');
+  }
+  if ((f.dockerfile.match(/\bnpm ci\b/g) ?? []).length !== 1 || /^COPY\b.*\/root\/\.npm/m.test(f.dockerfile)) {
+    found.push('npm-cache-reaches-image');
+  }
+
   return found;
 }
 
@@ -482,6 +510,37 @@ describe('host tools (B7) — each rule fails when its defect comes back', () =>
       (f) => ({ ...f, lock: replace(f.lock, '"node": ">=22.6.0"', '"node": ">=22"') }),
       'lock-engines-drift',
     ],
+    // rule 8, on an in-memory copy of the Dockerfile
+    ...((): Array<[string, (f: Files) => Files, string]> => {
+      const install = /^RUN --mount=type=cache,target=\/root\/\.npm \\\n(?:.*\\\n)*.*--fetch-timeout=\d+$/m;
+      const dockerfile = (f: Files, from: string | RegExp, to: string) => ({ ...f, dockerfile: replace(f.dockerfile, from, to) });
+      return [
+        ['npm ci as it was before P3-3 (no cache, no options)',
+          (f) => dockerfile(f, install, 'RUN npm ci --no-audit --no-fund'), 'npm-ci-cache-mount'],
+        ['npm ci as it was before P3-3, the options too',
+          (f) => dockerfile(f, install, 'RUN npm ci --no-audit --no-fund'), 'npm-ci-network-options'],
+        ['the cache mount dropped, the options kept',
+          (f) => dockerfile(f, 'RUN --mount=type=cache,target=/root/.npm \\\n    npm ci', 'RUN npm ci'), 'npm-ci-cache-mount'],
+        ['the cache mounted somewhere npm does not look',
+          (f) => dockerfile(f, 'target=/root/.npm', 'target=/tmp/npm'), 'npm-ci-cache-mount'],
+        ['a bind mount instead of a cache',
+          (f) => dockerfile(f, '--mount=type=cache,', '--mount=type=bind,'), 'npm-ci-cache-mount'],
+        ['the per-request timeout back to npm’s 5 minutes',
+          (f) => dockerfile(f, '--fetch-timeout=3600000', '--fetch-timeout=300000'), 'npm-ci-network-options'],
+        ['the timeout dropped',
+          (f) => dockerfile(f, ' \\\n      --fetch-timeout=3600000', ''), 'npm-ci-network-options'],
+        ['retries back to npm’s 2',
+          (f) => dockerfile(f, '--fetch-retries=5', '--fetch-retries=2'), 'npm-ci-network-options'],
+        ['retry waits shortened',
+          (f) => dockerfile(f, '--fetch-retry-maxtimeout=120000', '--fetch-retry-maxtimeout=60000'), 'npm-ci-network-options'],
+        ['--prefer-offline dropped',
+          (f) => dockerfile(f, ' --prefer-offline', ''), 'npm-ci-network-options'],
+        ['the npm cache copied into the runtime image',
+          (f) => dockerfile(f, /^USER nextjs$/m, 'COPY --from=deps /root/.npm /home/nextjs/.npm\nUSER nextjs'), 'npm-cache-reaches-image'],
+        ['a second npm ci, without the mount',
+          (f) => dockerfile(f, /^RUN npm run build$/m, 'RUN npm ci && npm run build'), 'npm-cache-reaches-image'],
+      ];
+    })(),
   ];
 
   it.each(cases)('%s', (_label, mutate, expected) => {
