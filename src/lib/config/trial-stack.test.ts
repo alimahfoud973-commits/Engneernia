@@ -406,6 +406,33 @@ function violations(input: Files): string[] {
     fail('docs-preflight-exact-sets');
   }
 
+  // The P2 signature check, as it ran on the laptop (2026-11-06): the official
+  // image only, a throwaway container that can reach nothing, write nothing and
+  // gain nothing, as the user that owns /var/lib/clamav (700, clamav): root
+  // without CAP_DAC_OVERRIDE gets `Permission denied`. A loop that prints
+  // nothing when it cannot read reads as "no databases", so it says so; and
+  // PowerShell 5.1 mangles a double quote passed to a native program.
+  const pulls = commands.split('\n').filter((line) => /^\s*docker pull\b/.test(line));
+  const clamavRuns = commands.split('\n').filter((line) => /\bdocker run\b.*\bclamav\/clamav-debian\b/.test(line));
+  if (
+    pulls.some((line) => line.trim() !== 'docker pull clamav/clamav-debian:1.5')
+    || clamavRuns.length !== 1
+    || clamavRuns.some((line) => {
+      // Docker's own options, then the script handed to `sh -c`.
+      const [options = '', script] = line.split(' clamav/clamav-debian:1.5 -c ');
+      return script === undefined
+        || !['--rm', '--network none', '--read-only', '--cap-drop ALL', '--security-opt no-new-privileges', '--user clamav']
+          .every((flag) => `${options} `.includes(` ${flag} `))
+        || /\s(-v|--volume|--mount|--tmpfs|--privileged|--cap-add|-e|--env|--env-file)(\s|=)/.test(`${options} `)
+        || line.includes('"')
+        || !['|| { echo RESULT: cannot read /var/lib/clamav; exit 3; }', 'echo databases found: $n',
+          'echo clamdcheck: $(command -v clamdcheck.sh || echo MISSING)'].every((part) => script.includes(part))
+        || /\b(freshclam|clamd)\b/.test(script);
+    })
+  ) {
+    fail('docs-clamav-check');
+  }
+
   for (const line of commands.split('\n')) {
     if (/\bconfig\b/.test(line) && /trial\s+(\S+\s+)*config\b/.test(line)
       && !/config --quiet|config --format json/.test(line)) {
@@ -937,6 +964,58 @@ describe('each guard fails when its defect is re-introduced', () => {
       from: /^ {2}if \(\$vols -ne .*\n/m,
       to: "  foreach ($v in $cfg.volumes.PSObject.Properties) { if ($v.Value.name -notlike 'enginora-trial_*') { throw 'STOP' } }\n",
       rule: 'docs-preflight-exact-sets',
+    },
+    // the P2 signature check (2026-11-06)
+    ...(
+      [
+        ['--user clamav', 'root without capabilities, which cannot read /var/lib/clamav'],
+        ['--read-only', 'a writable container filesystem'],
+        ['--cap-drop ALL', 'the default capabilities'],
+        ['--network none', 'the default network, which reaches the signature servers'],
+        ['--security-opt no-new-privileges', 'setuid escalation allowed'],
+        ['--rm', 'a container left behind'],
+      ] as const
+    ).map(([flag, what]): Mutation => ({
+      defect: `the ClamAV check without ${flag}: ${what}`,
+      file: 'docs',
+      from: ` ${flag} --`,
+      to: ' --',
+      rule: 'docs-clamav-check',
+    })),
+    {
+      defect: 'the ClamAV check mounts the trial volume',
+      file: 'docs',
+      from: '--user clamav --entrypoint',
+      to: '--user clamav -v enginora-trial_clamav_db:/var/lib/clamav --entrypoint',
+      rule: 'docs-clamav-check',
+    },
+    {
+      defect: 'the ClamAV check as it was: silent when it cannot read',
+      file: 'docs',
+      from: /ls -l \/var\/lib\/clamav \|\| \{ echo RESULT: cannot read \/var\/lib\/clamav; exit 3; \}; n=0; for f in (\S+ \S+); do \[ -e \$f \] \|\| continue; n=\$\(\(n\+1\)\); (sigtool[^;]+); done; echo databases found: \$n;/,
+      to: 'ls -l /var/lib/clamav; for f in $1; do [ -e $f ] && $2; done;',
+      rule: 'docs-clamav-check',
+    },
+    {
+      defect: 'a double quote in the ClamAV check, which PowerShell 5.1 mangles',
+      file: 'docs',
+      from: 'echo databases found: $n;',
+      to: 'echo "databases found: $n";',
+      rule: 'docs-clamav-check',
+    },
+    {
+      defect: 'the ClamAV check starts freshclam',
+      file: 'docs',
+      from: "-c 'id; ls -l /var/lib/clamav",
+      to: "-c 'freshclam; id; ls -l /var/lib/clamav",
+      rule: 'docs-clamav-check',
+    },
+    {
+      defect: 'an unofficial image pulled',
+      file: 'docs',
+      from: 'docker pull clamav/clamav-debian:1.5',
+      to: 'docker pull mirror.example/clamav-debian:1.5',
+      rule: 'docs-clamav-check',
     },
     {
       defect: 'plain config, which prints every secret',

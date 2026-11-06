@@ -7,10 +7,12 @@
 | البند | الحالة |
 |---|---|
 | الملفات: `docker-compose.trial.yml`، `deploy/clamav/clamd.trial.conf`، `.gitattributes`، هذا الملف | مكتوبة في P1 ويحرسها `src/lib/config/trial-stack.test.ts` (§١٠) |
-| دمج Compose: اسم المشروع، والمنفذ الوحيد، و`restart`، وأسماء وحدات التخزين والشبكات، وغلبة الطبقة على ملف البيئة | **مُختبر بـ`docker compose config` نفسه** في CI (على كل PR) وفي بيئة العزل بـCompose 5.6.0. **على الحاسوب (Compose 5.5.1) لم يُختبر**؛ يختبره `Assert-TrialSafe` في P2 قبل أي تشغيل |
-| نهايات الأسطر في إعدادَي clamd | **مُصلحة**: `.gitattributes` يُخرجهما LF على كل نظام. مُختبر بنسخة Git على Linux بـ`core.autocrlf=true`، لا بـGit for Windows نفسه؛ و`Assert-TrialSafe` يرفض نسخة فيها CR |
+| دمج Compose: اسم المشروع، والمنفذ الوحيد، و`restart`، وأسماء وحدات التخزين والشبكات، وغلبة الطبقة على ملف البيئة | **مُختبر بـ`docker compose config` نفسه** في CI (على كل PR) وفي بيئة العزل بـCompose 5.6.0، و**على الحاسوب بـCompose 5.5.1** (P2، 2026-11-04): `Assert-TrialSafe` أعطى `OK` على المحرك المعروف |
+| نهايات الأسطر في إعدادَي clamd | **مُصلحة ومُختبرة على الحاسوب**: بعد التقديم السريع إلى `82dd63d` أعطى `git ls-files --eol` لـ`clamd.trial.conf` `i/lf w/lf attr/text eol=lf` على Git for Windows بـ`core.autocrlf=true` (2026-11-04). `clamd.conf` القائم بقي `w/crlf` لأن Git لا يعيد كتابة ملف لم يتغيّر، ولا تربطه التجربة |
 | رفض clamd لقيمة تنتهي بـCR | **استنتاج** من مصدر ClamAV 1.5.0 (`common/optparser.c`) وتجربة أنماطه على regex في glibc؛ clamd نفسه لم يُشغَّل |
-| قواعد توقيع ClamAV في الصورة | **غير مؤكَّدة**. تُفحص في P2 |
+| دوال PowerShell في §٣ | **مُختبرة على الحاسوب** (PowerShell `5.1.19041.6456`، P2): كل طريق فشل يتوقّف بـ`STOP` — صورة فارغة، وصورة مزيّفة، وDocker لا يجيب (`DOCKER_HOST` موجَّه مؤقتاً إلى أنبوب غير موجود ثم أُعيد)، وفرق حقيقي — و`OK` حين لا شيء تغيّر |
+| `.env.trial.local` | **أُنشئ على الحاسوب** (P2): 15 مفتاحاً، بلا BOM (`41 50 50`)، بنهايات CRLF من `Set-Content`. **Compose 5.5.1 يزيل CR من القيم** (مُختبر: `LOG_LEVEL` يساوي `info` حرفياً، ولا CR في أي قيمة لـ`app` ولا في رابط migrator). طريق `\getenv` في P4 لا يمرّ بـCompose، فيُزال CR هناك |
+| قواعد توقيع ClamAV في الصورة | **مؤكَّدة** (P2، 2026-11-06): الصورة `clamav/clamav-debian:1.5` بالبصمة `sha256:c21aa18cc0a358678255a3dfb343a4555b58f71b97d7b869df8fdf7ea0a5b4b1` (بُنيت 2026-11-02)؛ `main` 63 (بُنيت 16 Dec 2025) و`daily` 28172 (02 Nov 2026) و`bytecode` 339 (11 Sep 2025)، و`Verification OK.` لكل منها؛ و`clamdcheck.sh` في `/usr/local/bin`. **التواقيع بعمر الصورة** ولا تتجدد في التجربة |
 | ذاكرة clamd الفعلية | **غير مقيسة**. `mem_limit: 2g` مؤقت حتى قياس P3 |
 | دورة الشراء والنسخ والاستعادة | **لم تُنفَّذ** |
 
@@ -231,20 +233,56 @@ trial config --quiet
 **الشرط المسبق:** الحاسوب على `main` بعد دمج P1 (المالك ينفّذ التقديم السريع بنفسه
 بموافقته؛ لا يُنفَّذ من هنا). ثم §٣ و§٤.
 
-**قواعد ClamAV** في حاوية مؤقتة **بلا شبكة**، فلا محاولة اتصال بخوادم التوقيع:
+**قواعد ClamAV** في حاوية مؤقتة **بلا شبكة**، فلا محاولة اتصال بخوادم التوقيع.
+في **النافذة نفسها** التي فيها `$before`: نافذة جديدة تفقدها، فيتوقّف
+`Assert-OnlyTrialChanged` ولا يقارن شيئاً.
 
 ```powershell
+Assert-TrialSafe
+$before = Get-DockerNames
 docker pull clamav/clamav-debian:1.5
-docker run --rm --network none --entrypoint sh clamav/clamav-debian:1.5 -c 'ls -l /var/lib/clamav; for f in /var/lib/clamav/*.cvd /var/lib/clamav/*.cld; do [ -e $f ] && sigtool --info $f | grep -E ''^(File|Build time|Version|Verification)''; done'
+docker image inspect clamav/clamav-debian:1.5 --format 'Tags={{json .RepoTags}} Digests={{json .RepoDigests}} Volumes={{json .Config.Volumes}}'
+docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --user clamav --entrypoint sh clamav/clamav-debian:1.5 -c 'id; ls -l /var/lib/clamav || { echo RESULT: cannot read /var/lib/clamav; exit 3; }; n=0; for f in /var/lib/clamav/*.cvd /var/lib/clamav/*.cld; do [ -e $f ] || continue; n=$((n+1)); sigtool --info $f | grep -E ''^(File|Build time|Version|Signatures|Verification)''; done; echo databases found: $n; echo clamdcheck: $(command -v clamdcheck.sh || echo MISSING)'
+Assert-OnlyTrialChanged $before
 ```
 
-المطلوب لكل من `main` و`daily` (و`bytecode` إن وُجد): `Verification OK`، ويُسجَّل
-تاريخ البناء كما هو. **إن لم توجد القواعد تتوقف التجربة هنا.** البدائل المشروعة
+- **`--entrypoint sh`** يحلّ محل `/init` في الصورة، فلا يبدأ clamd ولا freshclam.
+- **`--user clamav`** لازم مع `--cap-drop ALL`: `/var/lib/clamav` ملك `clamav`
+  (UID 1000) بصلاحيات `700`، وroot بلا `CAP_DAC_OVERRIDE` لا يقرؤه (`Permission denied`،
+  جُرِّب). مستخدم بلا امتياز يملك المجلد، فهو **إنقاص** للصلاحيات لا زيادة.
+- **الحلقة تقول إن فشلت**: `RESULT: cannot read` أو `databases found: 0`. الصيغة
+  القديمة (`[ -e $f ] && sigtool`) لم تطبع شيئاً حين تعذّرت القراءة، فبدا الفشل
+  كأنه «لا قواعد».
+- **بلا علامات تنصيص مزدوجة** داخل النص: PowerShell 5.1 يُفسدها حين يمرّرها إلى
+  برنامج خارجي.
+- `Volumes` يجب أن تكون `null`: صورة تعلن `VOLUME` تجعل `run` يُنشئ وحدة تخزين مجهولة.
+
+المطلوب: `uid=1000(clamav)`، و`Verification OK.` لكل من `main` و`daily` (و`bytecode`
+إن وُجد)، و`databases found` يساوي عدد الملفات، و`clamdcheck: /usr/local/bin/clamdcheck.sh`،
+وخروج `0`، ثم `OK` من `Assert-OnlyTrialChanged`. يُسجَّل تاريخ بناء كل قاعدة كما هو.
+**إن لم توجد القواعد تتوقف التجربة هنا.** البدائل المشروعة
 (جلبها من شبكة لا ترفضها سياسة المزوّد، أو عبر شخص موثوق خارج سوريا) قرار امتثال
 للمالك. لا التفاف على القيد الجغرافي، ولا تعطيل للفحص.
 
 وحدة `enginora-trial_clamav_db` الفارغة تُملأ من محتوى الصورة عند أول ربط، فإن
-وُجدت القواعد في الصورة وصلت إلى clamd.
+وُجدت القواعد في الصورة وصلت إلى clamd. (سلوك Docker الموثَّق للوحدات المسمّاة؛ لم
+يُختبر هنا بعد، ويُفحص في P3 قبل أن يُعتمد عليه.)
+
+**تحذير لـP3**: وثائق الصورة (`clamav/README-debian.md` في مستودع
+`Cisco-Talos/clamav-docker`) تقول: "Even when disabling the `freshclam` daemon,
+`freshclam` will always run at least once during container startup if there is no
+virus database." — أي حتى مع `CLAMAV_NO_FRESHCLAMD=true`. وشبكة `scanner`
+ليست `internal` (الإنتاج يحتاج freshclam). فإن وصلت الحاوية إلى P3 بلا قواعد في
+الوحدة، حاولت الاتصال بخوادم التوقيع. لذلك تُفحص الوحدة قبل تشغيل clamav في P3.
+
+**نتيجة P2 على الحاسوب (2026-11-04 إلى 06)**: كل ما في §٣ و§٤ وهذا القسم نجح —
+`Assert-TrialSafe` أعطى `OK`، والدوال توقّفت في كل طريق فشل، والقواعد الثلاث
+`Verification OK.` بالبصمة والإصدارات في جدول الحالة، و`Assert-OnlyTrialChanged`
+أعطى `OK` بعد الفحص: لا حاوية باقية، ولا وحدة تخزين ولا شبكة جديدة، والحاويات
+المحمية بمعرّفاتها وحالاتها. أُضيفت صورة واحدة فقط (`c21aa18cc0a3`، 558 MB). **تحفّظ
+على الطريقة**: فُتحت نافذة جديدة قبل الفحص ففُقدت `$before`، فأُعيد بناء الصورة من
+نصّها المسجَّل في 2026-11-04 (12 عنصراً) وقورنت الحالة بها؛ النتيجة تُثبت أن الفحص
+لم يترك شيئاً، لكنها مقارنة بحالة عمرها يومان لا بلقطة قبل السحب مباشرة.
 
 ### P3 — البناء ثم التشغيل المرحلي (يحتاج موافقة)
 
@@ -481,6 +519,11 @@ Windows ولا PowerShell 5.1؛ أوامر §٣ إلى §٧ مكتوبة لم ت
    و`Assert-OnlyTrialChanged` يرفض الصورة الفارغة قبل `Compare-Object` ويفحص `$?` بعده؛
    و`Assert-TrialSafe` يقارن المجموعات الكاملة نفسها التي يفحصها البند ٣ في Compose.
    كل حالة من هذه أُعيد عيبها فسقط حارسها.
+5. **فحص قواعد ClamAV في P2** (نصّاً): السحب للصورة الرسمية `clamav/clamav-debian:1.5`
+   وحدها، و`docker run` عليها يحمل `--rm` و`--network none` و`--read-only` و`--cap-drop ALL`
+   و`--security-opt no-new-privileges` و`--user clamav`، بلا وحدة تخزين ولا ربط ولا
+   صلاحية مضافة، ولا علامة تنصيص مزدوجة، ويطبع `RESULT: cannot read` و`databases found`
+   و`clamdcheck` صراحةً.
 
 ## ١١. المراجع
 
