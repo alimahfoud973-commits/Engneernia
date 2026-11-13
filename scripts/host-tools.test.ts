@@ -32,7 +32,9 @@ import { join, posix, relative, sep } from 'node:path';
  *
  * The text rules below are re-broken in memory, in LF and CRLF, like the other
  * stack guards. host-run.sh itself is run for real, on Linux, which is the only
- * place it is meant to run.
+ * place it is meant to run. So is the Dockerfile's install step (rule 8), whose
+ * text decides how the build answers a lost connection: reading it is not
+ * enough to know what a shell does with it.
  */
 
 const root = process.cwd();
@@ -202,6 +204,48 @@ function declared(env: string): Set<string> {
   return new Set([...lf(env).matchAll(/^([A-Z_][A-Z0-9_]*)=/gm)].map((m) => m[1] ?? ''));
 }
 
+/** The mount the image's one `npm ci` runs under (rule 8). */
+const NPM_CACHE_MOUNT = 'RUN --mount=type=cache,target=/root/.npm ';
+
+/**
+ * Every RUN of the deps stage that installs, as one line each: continuation
+ * lines joined, the way Docker hands them to `/bin/sh -c`. Docker keeps the
+ * next line's indentation where this leaves one space; the step quotes nothing
+ * across a line break, so the shell reads the two the same.
+ */
+function installSteps(dockerfile: string): string[] {
+  const deps = lf(dockerfile).split(/^FROM .* AS deps$/m)[1]?.split(/^FROM /m)[0] ?? '';
+  return deps
+    .replace(/\s*\\\n\s*/g, ' ')
+    .split('\n')
+    .filter((line) => /^RUN\b.*\bnpm ci\b/.test(line));
+}
+
+/**
+ * The install step, statement by statement (rule 8). Whatever is not one of
+ * these statements, in this order, is not the step that was measured: a
+ * dropped bound, a failure answered with `exit 0`, stdout sent to /dev/null,
+ * a code matched anywhere on a line instead of as the whole line.
+ */
+const INSTALL_SHAPE = new RegExp(
+  `^${[
+    String.raw`err=\$\(mktemp\) \|\| exit 1;`,
+    String.raw`trap 'rm -f "\$err"' EXIT;`,
+    String.raw`n=1; max=(?<max>\d+); pause=(?<pause>\d+);`,
+    String.raw`while :; do`,
+    String.raw`npm ci(?: --[a-z-]+(?:=\d+)?)+ 2>"\$err"; rc=\$\?;`,
+    String.raw`cat "\$err" >&2;`,
+    String.raw`\[ "\$rc" -eq 0 \] && exit 0;`,
+    String.raw`\[ "\$\(grep -c '\^npm error code ' "\$err"\)" = 1 \] \|\| exit "\$rc";`,
+    String.raw`grep -qxE 'npm error code \((?<codes>[A-Z0-9_|]+)\)' "\$err" \|\| exit "\$rc";`,
+    String.raw`\[ "\$n" -lt "\$max" \] \|\| exit "\$rc";`,
+    // The notice: plain words and the three counters, nothing the shell would run.
+    'echo "(?:[^"`\\\\$]|\\$(?:n|max|pause)\\b)*" >&2;',
+    String.raw`n=\$\(\(n \+ 1\)\); sleep "\$pause";`,
+    'done',
+  ].join(' ')}$`,
+);
+
 export function violations(input: Files): string[] {
   const f: Files = {
     ...(Object.fromEntries(
@@ -311,29 +355,55 @@ export function violations(input: Files): string[] {
   //    …and a decrypted backup is never one `git add -A` away from a commit.
   if (!f.gitignore.split('\n').includes('/restored/')) found.push('restored-not-gitignored');
 
-  // 8. `npm ci` survives a slow, unstable link (P3-3, 2026-11-06: ~20 KB/s on
-  //    the owner's laptop, ECONNRESET after 35 minutes, and `next` alone is
-  //    43.7 MB). Its cache is a BuildKit cache mount, so an interrupted install
-  //    keeps what it finished; the retries and the per-request timeout are
-  //    floors, because npm's defaults (2 retries, 5 minutes) cannot fetch a
-  //    43.7 MB tarball at that speed at all. The mount never reaches an image:
-  //    nothing may copy it.
-  const deps = f.dockerfile.split(/^FROM .* AS deps$/m)[1]?.split(/^FROM /m)[0] ?? '';
-  const installs = deps
-    .replace(/\s*\\\n\s*/g, ' ')
-    .split('\n')
-    .filter((line) => /^RUN\b.*\bnpm ci\b/.test(line));
+  // 8. `npm ci` survives a slow, unstable link (P3-3 on the owner's laptop:
+  //    20 to 60 KB/s, and ECONNRESET after 35 minutes on 2026-11-06 and after
+  //    21 on 2026-11-13; `next` alone is 43.7 MB).
+  //
+  //    Its cache is a BuildKit cache mount, so an interrupted install keeps
+  //    every tarball it finished (measured: 79.63 MB left by the failed run of
+  //    2026-11-13). The mount never reaches an image: nothing may copy it.
+  //
+  //    The --fetch-retry values are floors: they are what npm does about a
+  //    request that fails BEFORE its response headers. They do nothing for a
+  //    connection lost DURING a tarball: npm 10.9.9 makes one request and the
+  //    install exits (measured against a registry that cuts the body: 1
+  //    request with these values, 6 when the cut comes before the headers).
+  //    That loss is what the laptop sees, so the step repeats the install
+  //    itself, and its shape is fixed here statement by statement: a bound, a
+  //    pause, the two codes such a loss ends with, npm's own status on every
+  //    other path, stderr written back out, the temporary file removed. The
+  //    behavioural tests at the end of this file run the same text.
+  //
+  //    --fetch-timeout has a CEILING as well as a floor. It is an idle limit
+  //    (a 12 s download passes a 3 s limit), so a large value protects no slow
+  //    download and only decides how long a silent connection is waited on.
+  //    It was 3600000 here, with a floor to keep it there, on the belief that
+  //    it bounded the whole transfer.
+  const installs = installSteps(f.dockerfile);
   const install = installs[0] ?? '';
-  if (installs.length !== 1 || !/^RUN --mount=type=cache,target=\/root\/\.npm npm ci /.test(install)) {
-    found.push('npm-ci-cache-mount');
-  }
-  const floor = (name: string, min: number) => Number(new RegExp(`--${name}=(\\d+)\\b`).exec(install)?.[1] ?? 0) >= min;
+  if (installs.length !== 1 || !install.startsWith(NPM_CACHE_MOUNT)) found.push('npm-ci-cache-mount');
+  const option = (name: string) => Number(new RegExp(` --${name}=(\\d+)(?= )`).exec(install)?.[1] ?? Number.NaN);
+  const fetchTimeout = option('fetch-timeout');
   if (
     !/ --no-audit\b/.test(install) || !/ --no-fund\b/.test(install) || !/ --prefer-offline\b/.test(install)
-    || !floor('fetch-retries', 5) || !floor('fetch-retry-mintimeout', 20_000)
-    || !floor('fetch-retry-maxtimeout', 120_000) || !floor('fetch-timeout', 3_600_000)
+    || !(option('fetch-retries') >= 5) || !(option('fetch-retry-mintimeout') >= 20_000)
+    || !(option('fetch-retry-maxtimeout') >= 120_000)
+    || !(fetchTimeout >= 60_000 && fetchTimeout <= 600_000)
   ) {
     found.push('npm-ci-network-options');
+  }
+  const loop = INSTALL_SHAPE.exec(install.slice(NPM_CACHE_MOUNT.length))?.groups;
+  if (!install.startsWith(NPM_CACHE_MOUNT) || loop === undefined) {
+    found.push('npm-ci-retry-loop');
+  } else {
+    // Two runs is the least that retries at all; ten is where a link that
+    // cannot hold a connection should be reported, not waited on.
+    const max = Number(loop.max);
+    const pause = Number(loop.pause);
+    if (!(max >= 2 && max <= 10) || !(pause >= 1 && pause <= 300)) found.push('npm-ci-retry-bound');
+    // Exactly the codes npm does not retry itself. One more (ENOTFOUND, E404,
+    // EUSAGE…) repeats a failure that no second run can change.
+    if ((loop.codes ?? '').split('|').sort().join('|') !== 'ECONNRESET|EIDLETIMEOUT') found.push('npm-ci-retry-codes');
   }
   if ((f.dockerfile.match(/\bnpm ci\b/g) ?? []).length !== 1 || /^COPY\b.*\/root\/\.npm/m.test(f.dockerfile)) {
     found.push('npm-cache-reaches-image');
@@ -512,29 +582,84 @@ describe('host tools (B7) — each rule fails when its defect comes back', () =>
     ],
     // rule 8, on an in-memory copy of the Dockerfile
     ...((): Array<[string, (f: Files) => Files, string]> => {
-      const install = /^RUN --mount=type=cache,target=\/root\/\.npm \\\n(?:.*\\\n)*.*--fetch-timeout=\d+$/m;
+      const step = /^RUN --mount=type=cache,target=\/root\/\.npm \\\n(?:.*\\\n)* {4}done$/m;
       const dockerfile = (f: Files, from: string | RegExp, to: string) => ({ ...f, dockerfile: replace(f.dockerfile, from, to) });
+      const OPTIONS = '--fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000';
+      // The step as PR #35 left it: the mount and the options, one run.
+      const ONE_RUN = [
+        'RUN --mount=type=cache,target=/root/.npm \\',
+        '    npm ci --no-audit --no-fund --prefer-offline \\',
+        `      ${OPTIONS} \\`,
+        '      --fetch-timeout=300000',
+      ].join('\n');
+      const CODES = "grep -qxE 'npm error code (ECONNRESET|EIDLETIMEOUT)' \"$err\"";
       return [
         ['npm ci as it was before P3-3 (no cache, no options)',
-          (f) => dockerfile(f, install, 'RUN npm ci --no-audit --no-fund'), 'npm-ci-cache-mount'],
+          (f) => dockerfile(f, step, 'RUN npm ci --no-audit --no-fund'), 'npm-ci-cache-mount'],
         ['npm ci as it was before P3-3, the options too',
-          (f) => dockerfile(f, install, 'RUN npm ci --no-audit --no-fund'), 'npm-ci-network-options'],
-        ['the cache mount dropped, the options kept',
-          (f) => dockerfile(f, 'RUN --mount=type=cache,target=/root/.npm \\\n    npm ci', 'RUN npm ci'), 'npm-ci-cache-mount'],
+          (f) => dockerfile(f, step, 'RUN npm ci --no-audit --no-fund'), 'npm-ci-network-options'],
+        ['npm ci as it was before P3-3, with nothing repeating it',
+          (f) => dockerfile(f, step, 'RUN npm ci --no-audit --no-fund'), 'npm-ci-retry-loop'],
+        ['the repeat removed: one run under the mount, as PR #35 left it',
+          (f) => dockerfile(f, step, ONE_RUN), 'npm-ci-retry-loop'],
+        ['the cache mount dropped, the step kept',
+          (f) => dockerfile(f, 'RUN --mount=type=cache,target=/root/.npm \\\n    err=', 'RUN err='), 'npm-ci-cache-mount'],
         ['the cache mounted somewhere npm does not look',
           (f) => dockerfile(f, 'target=/root/.npm', 'target=/tmp/npm'), 'npm-ci-cache-mount'],
         ['a bind mount instead of a cache',
           (f) => dockerfile(f, '--mount=type=cache,', '--mount=type=bind,'), 'npm-ci-cache-mount'],
-        ['the per-request timeout back to npm’s 5 minutes',
-          (f) => dockerfile(f, '--fetch-timeout=3600000', '--fetch-timeout=300000'), 'npm-ci-network-options'],
+        ['the idle timeout back to an hour',
+          (f) => dockerfile(f, '--fetch-timeout=300000', '--fetch-timeout=3600000'), 'npm-ci-network-options'],
+        ['the idle timeout shorter than a slow link pauses',
+          (f) => dockerfile(f, '--fetch-timeout=300000', '--fetch-timeout=5000'), 'npm-ci-network-options'],
         ['the timeout dropped',
-          (f) => dockerfile(f, ' \\\n      --fetch-timeout=3600000', ''), 'npm-ci-network-options'],
+          (f) => dockerfile(f, '        --fetch-timeout=300000 2>', '        2>'), 'npm-ci-network-options'],
         ['retries back to npm’s 2',
           (f) => dockerfile(f, '--fetch-retries=5', '--fetch-retries=2'), 'npm-ci-network-options'],
         ['retry waits shortened',
           (f) => dockerfile(f, '--fetch-retry-maxtimeout=120000', '--fetch-retry-maxtimeout=60000'), 'npm-ci-network-options'],
         ['--prefer-offline dropped',
           (f) => dockerfile(f, ' --prefer-offline', ''), 'npm-ci-network-options'],
+        ['the bound removed: it repeats for ever',
+          (f) => dockerfile(f, '      [ "$n" -lt "$max" ] || exit "$rc"; \\\n', ''), 'npm-ci-retry-loop'],
+        ['a hundred runs',
+          (f) => dockerfile(f, 'max=6;', 'max=100;'), 'npm-ci-retry-bound'],
+        ['one run, called a retry',
+          (f) => dockerfile(f, 'max=6;', 'max=1;'), 'npm-ci-retry-bound'],
+        ['no pause between runs',
+          (f) => dockerfile(f, 'pause=30;', 'pause=0;'), 'npm-ci-retry-bound'],
+        ['the sleep removed',
+          (f) => dockerfile(f, ' sleep "$pause";', ''), 'npm-ci-retry-loop'],
+        ['every failure repeated: both checks of the code removed',
+          (f) => dockerfile(f, /^ {6}\[ "\$\(grep -c .*\\\n {6}grep -qxE .*\\\n/m, ''), 'npm-ci-retry-loop'],
+        ['a second code line no longer stops it',
+          (f) => dockerfile(f, /^ {6}\[ "\$\(grep -c .*\\\n/m, ''), 'npm-ci-retry-loop'],
+        ['the code matched anywhere on a line, not as the whole line',
+          (f) => dockerfile(f, 'grep -qxE', 'grep -qE'), 'npm-ci-retry-loop'],
+        ['a DNS failure repeated',
+          (f) => dockerfile(f, CODES, CODES.replace('EIDLETIMEOUT', 'EIDLETIMEOUT|ENOTFOUND')), 'npm-ci-retry-codes'],
+        ['a missing package repeated',
+          (f) => dockerfile(f, CODES, CODES.replace('EIDLETIMEOUT', 'EIDLETIMEOUT|E404')), 'npm-ci-retry-codes'],
+        ['a lockfile error repeated',
+          (f) => dockerfile(f, CODES, CODES.replace('ECONNRESET', 'EUSAGE|ECONNRESET')), 'npm-ci-retry-codes'],
+        ['the stalled connection no longer repeated',
+          (f) => dockerfile(f, CODES, CODES.replace('|EIDLETIMEOUT', '|ETIMEDOUT')), 'npm-ci-retry-codes'],
+        ['the last failure answered with success',
+          (f) => dockerfile(f, '[ "$n" -lt "$max" ] || exit "$rc";', '[ "$n" -lt "$max" ] || exit 0;'), 'npm-ci-retry-loop'],
+        ['a failure that leaves the loop instead of the step',
+          (f) => dockerfile(f, `${CODES} || exit "$rc";`, `${CODES} || break;`), 'npm-ci-retry-loop'],
+        ['the step forgiven after the loop',
+          (f) => dockerfile(f, /^ {4}done$/m, '    done || true'), 'npm-ci-retry-loop'],
+        ['npm’s stderr read for the code and never shown',
+          (f) => dockerfile(f, '      cat "$err" >&2; \\\n', ''), 'npm-ci-retry-loop'],
+        ['npm’s stdout thrown away',
+          (f) => dockerfile(f, '2>"$err"; rc=$?;', '>/dev/null 2>"$err"; rc=$?;'), 'npm-ci-retry-loop'],
+        ['the temporary file left behind',
+          (f) => dockerfile(f, ' trap \'rm -f "$err"\' EXIT;', ''), 'npm-ci-retry-loop'],
+        ['a fixed path instead of mktemp',
+          (f) => dockerfile(f, 'err=$(mktemp) || exit 1;', 'err=/tmp/npm-ci.err;'), 'npm-ci-retry-loop'],
+        ['the notice runs a command',
+          (f) => dockerfile(f, 'echo "install run $n of $max', 'echo "$(date) install run $n of $max'), 'npm-ci-retry-loop'],
         ['the npm cache copied into the runtime image',
           (f) => dockerfile(f, /^USER nextjs$/m, 'COPY --from=deps /root/.npm /home/nextjs/.npm\nUSER nextjs'), 'npm-cache-reaches-image'],
         ['a second npm ci, without the mount',
@@ -756,5 +881,264 @@ describe.runIf(process.platform === 'linux')('scripts/host-run.sh', () => {
     reset();
     expect(run({}, [process.execPath, '-e', 'process.exit(7)']).status).toBe(7);
     expect(run({}, []).status).toBe(2);
+  });
+});
+
+/**
+ * The install step of the Dockerfile, run for real (rule 8): the text of the
+ * RUN, handed to `sh -c` as Docker hands it, with an `npm` and a `sleep` on
+ * PATH that play a script and record what they were given. So each case reads
+ * what the step DID: how many times it ran npm, with which arguments, how long
+ * it asked to wait, what it wrote, what it left in TMPDIR and how it exited.
+ *
+ * The numbers are the owner's decision, written out and not read back from the
+ * Dockerfile: six runs in all, the first included, thirty seconds apart.
+ *
+ * Linux only: the image is Debian, whose /bin/sh is dash, as it is on the CI
+ * runners. The last cases break the step on purpose, to show that the cases
+ * before them can tell.
+ */
+describe.runIf(process.platform === 'linux')('the Dockerfile install step, run for real (rule 8)', () => {
+  type Run = { readonly rc: number; readonly stdout?: string; readonly stderr?: string };
+  let dir: string;
+  let seq = 0;
+
+  const STEP = installSteps(FILES.dockerfile)[0]?.slice(NPM_CACHE_MOUNT.length) ?? '';
+  const ARGS = [
+    'ci', '--no-audit', '--no-fund', '--prefer-offline',
+    '--fetch-retries=5', '--fetch-retry-mintimeout=20000', '--fetch-retry-maxtimeout=120000',
+    '--fetch-timeout=300000',
+  ];
+
+  // The n-th call plays the n-th run of the plan; the last run repeats.
+  const NPM_STUB = [
+    "const fs = require('node:fs');",
+    "const path = require('node:path');",
+    "const at = (name) => path.join(process.env.STUB, name);",
+    "const calls = fs.existsSync(at('calls.json')) ? JSON.parse(fs.readFileSync(at('calls.json'), 'utf8')) : [];",
+    'calls.push(process.argv.slice(2));',
+    "fs.writeFileSync(at('calls.json'), JSON.stringify(calls));",
+    "const plan = JSON.parse(fs.readFileSync(at('plan.json'), 'utf8'));",
+    'const run = plan[Math.min(calls.length, plan.length) - 1];',
+    "fs.writeSync(1, run.stdout ?? '');",
+    "fs.writeSync(2, run.stderr ?? '');",
+    'process.exit(run.rc);',
+    '',
+  ].join('\n');
+
+  /** What npm 10.9.9 writes when a connection is lost during a tarball. */
+  const lost = (code = 'ECONNRESET', rc = 1) => ({
+    rc,
+    stderr: `npm error code ${code}\nnpm error network aborted\nnpm error A complete log of this run can be found in: /root/.npm/_logs/debug-0.log\n`,
+  });
+  const failed = (code: string, rc = 1) => ({ rc, stderr: `npm error code ${code}\nnpm error this is about ${code}\n` });
+  const DONE = {
+    rc: 0,
+    stdout: 'added 2 packages in 1s\n',
+    stderr: 'npm warn deprecated left-pad@1.0.0: use String.prototype.padStart()\n',
+  } satisfies Run;
+
+  const play = (plan: readonly Run[], step: string = STEP, env: Record<string, string> = {}) => {
+    seq += 1;
+    const work = join(dir, String(seq));
+    const [bin, state, tmp] = ['bin', 'state', 'tmp'].map((name) => join(work, name)) as [string, string, string];
+    for (const made of [bin, state, tmp]) mkdirSync(made, { recursive: true });
+    writeFileSync(join(state, 'plan.json'), JSON.stringify(plan));
+    writeFileSync(join(bin, 'npm.js'), NPM_STUB);
+    writeFileSync(join(bin, 'npm'), `#!/bin/sh\nexec '${process.execPath}' '${join(bin, 'npm.js')}' "$@"\n`);
+    writeFileSync(join(bin, 'sleep'), '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$STUB/sleeps"\n');
+    chmodSync(join(bin, 'npm'), 0o755);
+    chmodSync(join(bin, 'sleep'), 0o755);
+    const result = spawnSync('sh', ['-c', step], {
+      cwd: work,
+      encoding: 'utf8',
+      env: { PATH: `${bin}:/usr/bin:/bin`, STUB: state, TMPDIR: tmp, NODE_ENV: 'test', ...env },
+    });
+    const calls = existsSync(join(state, 'calls.json'))
+      ? (JSON.parse(readFileSync(join(state, 'calls.json'), 'utf8')) as string[][])
+      : [];
+    const sleeps = existsSync(join(state, 'sleeps'))
+      ? readFileSync(join(state, 'sleeps'), 'utf8').split('\n').filter((line) => line !== '')
+      : [];
+    return { status: result.status, stdout: result.stdout, stderr: result.stderr, calls, sleeps, left: readdirSync(tmp) };
+  };
+  const count = (text: string, part: string) => text.split(part).length - 1;
+
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), 'install-step-'));
+  });
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('is the step rule 8 describes', () => {
+    expect(INSTALL_SHAPE.test(STEP)).toBe(true);
+  });
+
+  it('runs npm once when it succeeds, with the arguments rule 8 demands, and passes both streams on', () => {
+    const { status, stdout, stderr, calls, sleeps, left } = play([DONE]);
+    expect(status).toBe(0);
+    expect(calls).toEqual([ARGS]);
+    expect(sleeps).toEqual([]);
+    expect(stdout).toBe(DONE.stdout);
+    expect(stderr).toBe(DONE.stderr);
+    expect(left).toEqual([]);
+  });
+
+  it('repeats a connection lost during a tarball, and finishes when npm does', () => {
+    const { status, stdout, stderr, calls, sleeps, left } = play([lost(), lost(), DONE]);
+    expect(status).toBe(0);
+    expect(calls).toEqual([ARGS, ARGS, ARGS]);
+    expect(sleeps).toEqual(['30', '30']);
+    expect(stdout).toBe(DONE.stdout);
+    // Everything npm wrote, in the order it wrote it, each run's own text
+    // before the notice that the run is being repeated.
+    expect(stderr).toBe([
+      lost().stderr,
+      'install run 1 of 6 lost its connection; the cache keeps what finished. Next run in 30 s.\n',
+      lost().stderr,
+      'install run 2 of 6 lost its connection; the cache keeps what finished. Next run in 30 s.\n',
+      DONE.stderr,
+    ].join(''));
+    expect(left).toEqual([]);
+  });
+
+  it('repeats a connection that went silent (EIDLETIMEOUT)', () => {
+    const { status, calls, sleeps, left } = play([lost('EIDLETIMEOUT'), DONE]);
+    expect(status).toBe(0);
+    expect(calls).toHaveLength(2);
+    expect(sleeps).toEqual(['30']);
+    expect(left).toEqual([]);
+  });
+
+  it('stops after six runs in all, the first included, with npm’s own exit status', () => {
+    const { status, stdout, stderr, calls, sleeps, left } = play([lost('ECONNRESET', 7)]);
+    expect(status).toBe(7);
+    expect(calls).toEqual([ARGS, ARGS, ARGS, ARGS, ARGS, ARGS]);
+    expect(sleeps).toEqual(['30', '30', '30', '30', '30']);
+    expect(stdout).toBe('');
+    expect(count(stderr, 'npm error code ECONNRESET\n')).toBe(6);
+    expect(count(stderr, 'npm error network aborted\n')).toBe(6);
+    expect(stderr).toContain('install run 5 of 6 lost its connection');
+    // The sixth failure is the end: nothing announces a seventh run.
+    expect(stderr).not.toContain('install run 6 of 6');
+    expect(stderr.endsWith(lost().stderr)).toBe(true);
+    expect(left).toEqual([]);
+  });
+
+  it.each([
+    ['a package that is not there', 'E404'],
+    ['a tarball that is not the one the lockfile names', 'EINTEGRITY'],
+    ['a lockfile out of step with package.json', 'EUSAGE'],
+    ['a version that does not exist', 'ETARGET'],
+    ['a lockfile that is not JSON', 'EJSONPARSE'],
+    ['a name that does not resolve', 'ENOTFOUND'],
+    ['a resolver that gave up for now', 'EAI_AGAIN'],
+    ['headers that never came, after npm’s own six tries', 'FETCH_ERROR'],
+    ['a connection that never opened', 'ETIMEDOUT'],
+    ['a connection refused', 'ECONNREFUSED'],
+    ['a full disk', 'ENOSPC'],
+  ])('does not repeat %s (%s)', (_label, code) => {
+    const { status, stdout, stderr, calls, sleeps, left } = play([failed(code, 3), DONE]);
+    expect(status).toBe(3);
+    expect(calls).toEqual([ARGS]);
+    expect(sleeps).toEqual([]);
+    expect(stdout).toBe('');
+    expect(stderr).toBe(failed(code, 3).stderr);
+    expect(left).toEqual([]);
+  });
+
+  it.each([
+    ['inside a warning', 'npm warn tar TAR_ENTRY_ERROR npm error code ECONNRESET\nnpm error code E404\n'],
+    ['inside a warning, with no code line at all', 'npm warn retry will retry, npm error code ECONNRESET\n'],
+    ['with more after it on the line', 'npm error code ECONNRESET and then some\n'],
+    ['as the start of a longer code', 'npm error code ECONNRESETX\n'],
+    ['indented', '  npm error code ECONNRESET\n'],
+    ['coloured', '\u001b[31mnpm error\u001b[39m code ECONNRESET\n'],
+    ['in the wording npm used before 10', 'npm ERR! code ECONNRESET\n'],
+    ['beside a second code', 'npm error code ECONNRESET\nnpm error code EUSAGE\n'],
+    ['twice', 'npm error code ECONNRESET\nnpm error code ECONNRESET\n'],
+    ['in lower case', 'npm error code econnreset\n'],
+  ])('does not repeat when the code is only %s', (_label, text) => {
+    const { status, stderr, calls, sleeps, left } = play([{ rc: 1, stderr: text }, DONE]);
+    expect(status).toBe(1);
+    expect(calls).toEqual([ARGS]);
+    expect(sleeps).toEqual([]);
+    expect(stderr).toBe(text);
+    expect(left).toEqual([]);
+  });
+
+  it('does not repeat a failure that names no code (a killed process)', () => {
+    const { status, calls, sleeps, left } = play([{ rc: 137, stderr: 'Killed\n' }, DONE]);
+    expect(status).toBe(137);
+    expect(calls).toEqual([ARGS]);
+    expect(sleeps).toEqual([]);
+    expect(left).toEqual([]);
+  });
+
+  it('does not repeat a failure that wrote nothing', () => {
+    const { status, stderr, calls, left } = play([{ rc: 1 }, DONE]);
+    expect(status).toBe(1);
+    expect(calls).toEqual([ARGS]);
+    expect(stderr).toBe('');
+    expect(left).toEqual([]);
+  });
+
+  it('believes npm’s exit status over its words: 0 is success whatever was written', () => {
+    const { status, calls, sleeps } = play([{ rc: 0, stderr: 'npm error code ECONNRESET\n' }]);
+    expect(status).toBe(0);
+    expect(calls).toEqual([ARGS]);
+    expect(sleeps).toEqual([]);
+  });
+
+  it('fails a different way on a later run with that run’s status, not the first one’s', () => {
+    const { status, stderr, calls, sleeps, left } = play([lost('ECONNRESET', 1), failed('EINTEGRITY', 4), DONE]);
+    expect(status).toBe(4);
+    expect(calls).toEqual([ARGS, ARGS]);
+    expect(sleeps).toEqual(['30']);
+    expect(stderr.endsWith(failed('EINTEGRITY', 4).stderr)).toBe(true);
+    expect(left).toEqual([]);
+  });
+
+  it('never runs npm if it cannot make its temporary file', () => {
+    const { status, calls } = play([DONE], STEP, { TMPDIR: join(dir, 'no-such-directory') });
+    expect(status).toBe(1);
+    expect(calls).toEqual([]);
+  });
+
+  // --- the step broken on purpose: each defect is one the cases above catch ---
+
+  it('the step as PR #35 left it does NOT survive a lost connection', () => {
+    const { status, calls } = play([lost(), DONE], `npm ${ARGS.join(' ')}`);
+    expect(status).toBe(1);
+    expect(calls).toEqual([ARGS]);
+  });
+
+  it('without the two checks of the code, a lockfile error is run six times', () => {
+    const broken = replace(STEP, /\[ "\$\(grep -c .*? \|\| exit "\$rc"; grep -qxE .*? \|\| exit "\$rc"; /, '');
+    const { status, calls } = play([failed('EUSAGE')], broken);
+    expect(status).toBe(1);
+    expect(calls).toHaveLength(6);
+  });
+
+  it('matched anywhere on the line, a longer code is taken for a lost connection', () => {
+    const broken = replace(STEP, 'grep -qxE', 'grep -qE');
+    expect(play([{ rc: 1, stderr: 'npm error code ECONNRESETX\n' }], broken).calls).toHaveLength(6);
+  });
+
+  it('with `exit 0` on the last run, six failures become a success', () => {
+    const broken = replace(STEP, '[ "$n" -lt "$max" ] || exit "$rc";', '[ "$n" -lt "$max" ] || exit 0;');
+    const { status, calls } = play([lost()], broken);
+    expect(status).toBe(0);
+    expect(calls).toHaveLength(6);
+  });
+
+  it('without the trap, the temporary file outlives the step', () => {
+    const broken = replace(STEP, ' trap \'rm -f "$err"\' EXIT;', '');
+    expect(play([DONE], broken).left).toHaveLength(1);
+    expect(play([failed('E404')], broken).left).toHaveLength(1);
+  });
+
+  it('without `cat`, npm’s error never reaches the build log', () => {
+    const broken = replace(STEP, ' cat "$err" >&2;', '');
+    expect(play([failed('E404')], broken).stderr).toBe('');
   });
 });

@@ -33,13 +33,38 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 # npm's cache is a BuildKit cache mount, not a layer: an install the network cuts
 # short keeps every tarball it finished, and the next attempt starts from there.
-# The mount never reaches an image. The retry and timeout values are for a slow,
-# unstable link (the owner's laptop, 2026-11-06: ~20 KB/s, then ECONNRESET after
-# 35 minutes; `next` alone is 43.7 MB); on a good link they change nothing.
+# The mount never reaches an image.
+#
+# npm retries a request that fails BEFORE the response headers (the
+# --fetch-retry values: 6 tries, 20 s and then 120 s apart). A connection lost
+# DURING a tarball it does not retry at all: one request, and the whole install
+# exits. That is what the owner's laptop does (2026-11-06 and 2026-11-13:
+# ECONNRESET after 35 and 21 minutes, at 20 to 60 KB/s). So the install is
+# repeated here: at most `max` runs in all, `pause` seconds apart, and only for
+# the two codes npm ends such a loss with, ECONNRESET and EIDLETIMEOUT (no byte
+# for --fetch-timeout). Every other failure (E404, EINTEGRITY, EUSAGE,
+# ENOTFOUND, a killed process) leaves on its first run with npm's own exit
+# status, and nothing but a run that exits 0 makes this step succeed. npm's
+# stderr is held for the length of one run, because the code is read from it,
+# and written out whole when that run ends.
+#
+# --fetch-timeout is an IDLE limit, not a limit on a download: a slow tarball
+# that keeps arriving never reaches it. It was 3600000 here on the opposite
+# belief, and all that bought was a silent connection hanging for an hour.
 RUN --mount=type=cache,target=/root/.npm \
-    npm ci --no-audit --no-fund --prefer-offline \
-      --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000 \
-      --fetch-timeout=3600000
+    err=$(mktemp) || exit 1; trap 'rm -f "$err"' EXIT; n=1; max=6; pause=30; \
+    while :; do \
+      npm ci --no-audit --no-fund --prefer-offline \
+        --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000 \
+        --fetch-timeout=300000 2>"$err"; rc=$?; \
+      cat "$err" >&2; \
+      [ "$rc" -eq 0 ] && exit 0; \
+      [ "$(grep -c '^npm error code ' "$err")" = 1 ] || exit "$rc"; \
+      grep -qxE 'npm error code (ECONNRESET|EIDLETIMEOUT)' "$err" || exit "$rc"; \
+      [ "$n" -lt "$max" ] || exit "$rc"; \
+      echo "install run $n of $max lost its connection; the cache keeps what finished. Next run in $pause s." >&2; \
+      n=$((n + 1)); sleep "$pause"; \
+    done
 
 # -----------------------------------------------------------------------------
 FROM node:22-bookworm-slim AS build
